@@ -212,6 +212,87 @@ def capture_phone(width: int = 390, min_interval: float = 5.0):
     return data, at, False
 
 
+def editable_snapshot() -> dict:
+    """设置卡可编辑字段的当前值（供表单回填）。"""
+    try:
+        import yaml
+        cfg = yaml.safe_load((BASE / 'config.yaml').read_text('utf-8')) or {}
+    except Exception:
+        return {}
+    try:
+        from src.settings import WORK_LOCATIONS
+        locations = list(WORK_LOCATIONS)
+    except Exception:
+        locations = []
+    tasks = cfg.get('tasks') or {}
+    sched = cfg.get('schedule') or {}
+    work = cfg.get('work') or {}
+    visit = cfg.get('visit') or {}
+    pk = cfg.get('pk') or {}
+    adv = cfg.get('adventure') or {}
+    care = cfg.get('care') or {}
+    return {
+        'school_enabled': bool((tasks.get('school') or {}).get('enabled', True)),
+        'work_location': work.get('location'),
+        'work_locations': locations,
+        'work_duration': work.get('duration'),
+        'coin_threshold': sched.get('coin_threshold', 2000),
+        'daily_hour_limit': sched.get('daily_hour_limit', 8),
+        'visit_times': visit.get('times_per_day', 10),
+        'pk_times': pk.get('times_per_day', 15),
+        'adventure_times': adv.get('times_per_day', 1),
+        'care_energy': care.get('energy_threshold', 60),
+        'care_clean': care.get('clean_threshold', 60),
+        'care_method': care.get('method', '一键护理'),
+    }
+
+
+def apply_settings(updates: dict) -> dict:
+    """把设置卡改动写入 config.yaml（ruamel 往返保留注释，复用 src/settings 校验）。
+
+    调度器每轮重读配置（含 tasks.* 任务级设置），保存后下一轮调度自动生效。
+    """
+    import src.settings as S
+    mapping = {
+        'school_enabled': ('tasks.school.enabled', 'bool'),
+        'work_location': ('work.location', None),
+        'work_duration': ('work.duration', None),
+        'coin_threshold': ('schedule.coin_threshold', 'int'),
+        'daily_hour_limit': ('schedule.daily_hour_limit', 'int'),
+        'visit_times': ('visit.times_per_day', 'int'),
+        'pk_times': ('pk.times_per_day', 'int'),
+        'adventure_times': ('adventure.times_per_day', 'int'),
+        'care_energy': ('care.energy_threshold', 'int'),
+        'care_clean': ('care.clean_threshold', 'int'),
+        'care_method': ('care.method', None),
+    }
+    data = S.load_raw()
+    applied, rejected = {}, []
+    for field, value in (updates or {}).items():
+        if field not in mapping:
+            rejected.append(f'{field}: 不支持')
+            continue
+        key, kind = mapping[field]
+        if kind == 'bool':
+            if not isinstance(value, bool):
+                rejected.append(f'{field}: 需要布尔值')
+                continue
+            S.set_value(data, key, value)
+            applied[field] = value
+            continue
+        ok, fixed = S.validate_field(key, value)
+        if not ok:
+            rejected.append(f'{field}: 非法值 {value!r}')
+            continue
+        if kind == 'int':
+            fixed = int(fixed)
+        S.set_value(data, key, fixed)
+        applied[field] = fixed
+    if applied:
+        S.save_raw(data)
+    return {'ok': not rejected, 'applied': applied, 'rejected': rejected}
+
+
 def build_data() -> dict:
     log_lines = []
     p = today_log_path()
@@ -229,6 +310,7 @@ def build_data() -> dict:
         'work_eta': work_eta(log_lines),
         'today_duration': today_duration(log_lines),
         'last_line': log_lines[-1] if log_lines else '',
+        'editable': editable_snapshot(),
     }
 
 
@@ -292,6 +374,22 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 .cfg .row:first-child{border-top:0}
 .cfg .k{color:var(--sub);flex:none}
 .cfg .v{text-align:right}
+.form .frow{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-top:1px dashed var(--line)}
+.form .frow:first-child{border-top:0}
+.form .k{color:var(--sub);font-size:13.5px;flex:none}
+.form select,.form input[type=number]{border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:13px;background:#fafafa;color:var(--text);max-width:58%}
+.form input[type=number]{width:86px;text-align:right}
+.form .two{display:flex;gap:6px}
+.form .two input{width:64px}
+.sw{position:relative;width:46px;height:26px;border-radius:13px;background:#d9dce3;border:none;transition:.2s;flex:none;cursor:pointer}
+.sw.on{background:var(--accent)}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+.sw.on::after{left:23px}
+.savebtn{width:100%;margin-top:12px;border:none;border-radius:10px;background:var(--accent);color:#fff;font-size:15px;font-weight:600;padding:11px;letter-spacing:.02em}
+.savebtn:disabled{opacity:.55}
+.saveMsg{font-size:12px;text-align:center;margin-top:6px;min-height:16px;color:var(--ok)}
+.saveMsg.err{color:#b45309}
+.subh{font-size:11px;color:var(--sub);margin:14px 0 4px;letter-spacing:.03em}
 .hide{display:none!important}
 </style>
 </head>
@@ -329,7 +427,11 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
   </section>
 
   <section class="card">
-    <h2>运行配置</h2>
+    <h2>设置 <span style="font-weight:400;color:var(--sub)">保存后下一轮调度生效</span></h2>
+    <div class="form" id="setForm"></div>
+    <button class="savebtn" id="btnSave">保存设置</button>
+    <div class="saveMsg" id="saveMsg"></div>
+    <div class="subh">运行信息（只读）</div>
     <div class="cfg" id="cfgList"></div>
   </section>
 
@@ -349,7 +451,7 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 </main>
 <footer>
   <div id="footStrategy"></div>
-  <div>runs/ · runs/logs/ · 日志 3s / 数据 6s / 截图 15s 自动刷新</div>
+  <div>设置保存后下一轮生效 · 日志 3s / 数据 6s / 截图 15s</div>
 </footer>
 
 <script>
@@ -423,6 +525,7 @@ function renderData(d){
     $('#shotCard').classList.remove('hide');
     $('#shots').innerHTML=shots.map(s=>'<a href="/files/'+encodeURIComponent(s.name)+'" target="_blank"><img loading="lazy" src="/files/'+encodeURIComponent(s.name)+'"><span class="cap">'+s.mtime+'</span></a>').join('');
   }
+  if(d.editable && !setDirty) renderSettings(d.editable);
   renderCfg((d.config||{}).rows);
   // footer
   $('#footStrategy').textContent='策略：'+(cfg.strategy||'未知')+(cfg.work_duration?(' · 打工 '+cfg.work_duration+' @ '+cfg.work_location):'');
@@ -462,9 +565,57 @@ $('#btnAuto').onclick=()=>{logAuto=!logAuto;$('#btnAuto').className=logAuto?'on'
 $('#logFilter').oninput=e=>{logFilter=e.target.value.trim();refreshLogs()};
 
 function renderCfg(rows){
-  if(!rows||!rows.length){$('#cfgList').innerHTML='';return}
+  const HIDE=['调度策略','打工','金币阈值','时长上限','踩踩','PK','冒险','护理'];
+  rows=(rows||[]).filter(r=>HIDE.indexOf(r[0])<0);
+  if(!rows.length){$('#cfgList').innerHTML='';return}
   $('#cfgList').innerHTML=rows.map(r=>'<div class="row"><span class="k">'+r[0]+'</span><span class="v">'+r[1]+'</span></div>').join('');
 }
+
+let setInit=null, setDirty=false;
+function renderSettings(ed){
+  if(!ed) return;
+  setInit=Object.assign({},ed);
+  const sel=(id,opts,cur)=>'<select id="'+id+'">'+opts.map(v=>'<option value="'+v+'"'+(v===cur?' selected':'')+'>'+v+'</option>').join('')+'</select>';
+  $('#setForm').innerHTML=
+    '<div class="frow"><span class="k">只打工不学习</span><button class="sw'+(ed.school_enabled?'':' on')+'" id="swSchool" title="开=只打工；关=学习+打工"></button></div>'+
+    '<div class="frow"><span class="k">打工地点</span>'+sel('selLoc', ed.work_locations||[], ed.work_location)+'</div>'+
+    '<div class="frow"><span class="k">打工时长</span>'+sel('selDur', ['10分钟','45分钟','2小时'], ed.work_duration)+'</div>'+
+    '<div class="frow"><span class="k">金币阈值</span><input type="number" id="numCoin" min="0" step="100" value="'+(ed.coin_threshold??'')+'"></div>'+
+    '<div class="frow"><span class="k">时长上限（小时）</span><input type="number" id="numHour" min="0" step="1" value="'+(ed.daily_hour_limit??'')+'"></div>'+
+    '<div class="frow"><span class="k">踩踩次数/天</span><input type="number" id="numVisit" min="0" step="1" value="'+(ed.visit_times??'')+'"></div>'+
+    '<div class="frow"><span class="k">PK 次数/天</span><input type="number" id="numPk" min="0" step="1" value="'+(ed.pk_times??'')+'"></div>'+
+    '<div class="frow"><span class="k">冒险次数/天</span><input type="number" id="numAdv" min="0" step="1" value="'+(ed.adventure_times??'')+'"></div>'+
+    '<div class="frow"><span class="k">护理阈值（体力/清洁）</span><span class="two"><input type="number" id="numEnergy" min="0" max="100" value="'+(ed.care_energy??'')+'"><input type="number" id="numClean" min="0" max="100" value="'+(ed.care_clean??'')+'"></span></div>'+
+    '<div class="frow"><span class="k">护理方式</span>'+sel('selCare', ['一键护理','ocr检测'], ed.care_method)+'</div>';
+  $('#swSchool').onclick=()=>{ $('#swSchool').classList.toggle('on'); setDirty=true; };
+}
+
+async function saveSettings(){
+  if(!setInit) return;
+  const btn=$('#btnSave'); btn.disabled=true;
+  const msg=$('#saveMsg');
+  const updates={};
+  const schoolEnabledNew = !$('#swSchool').classList.contains('on');
+  if(!!schoolEnabledNew !== !!setInit.school_enabled) updates.school_enabled=schoolEnabledNew;
+  const getv=id=>($(id)?$(id).value.trim():'');
+  const num=(id,key)=>{const v=getv(id); if(v==='')return; const n=parseInt(v,10); if(!isNaN(n)&&n!==setInit[key]) updates[key]=n;};
+  const selc=(id,key)=>{const v=getv(id); if(v&&v!==setInit[key]) updates[key]=v;};
+  selc('#selLoc','work_location'); selc('#selDur','work_duration'); selc('#selCare','care_method');
+  num('#numCoin','coin_threshold'); num('#numHour','daily_hour_limit');
+  num('#numVisit','visit_times'); num('#numPk','pk_times'); num('#numAdv','adventure_times');
+  num('#numEnergy','care_energy'); num('#numClean','care_clean');
+  if(!Object.keys(updates).length){ msg.className='saveMsg'; msg.textContent='没有改动'; btn.disabled=false; return; }
+  try{
+    const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({updates})});
+    const d=await r.json();
+    if(d.rejected&&d.rejected.length){ msg.className='saveMsg err'; msg.textContent='部分未保存：'+d.rejected.join('；'); }
+    else { setDirty=false; msg.className='saveMsg'; msg.textContent='✅ 已保存，下一轮调度生效'; refreshData(); }
+  }catch(e){ msg.className='saveMsg err'; msg.textContent='保存失败：'+e.message; }
+  btn.disabled=false;
+}
+$('#btnSave').onclick=saveSettings;
+$('#setForm').addEventListener('input',()=>{setDirty=true});
+$('#setForm').addEventListener('click',()=>{setDirty=true});
 
 let shotUrl=null,shotBusy=false;
 async function refreshShot(force){
@@ -556,6 +707,24 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, 'image/png', f.read_bytes(), cache='public, max-age=86400')
                 else:
                     self._send(404, 'text/plain', b'not found')
+            else:
+                self._send(404, 'text/plain', b'not found')
+        except Exception as e:
+            try:
+                self._send(500, 'text/plain; charset=utf-8', str(e).encode('utf-8'))
+            except Exception:
+                pass
+
+    def do_POST(self):
+        u = urlparse(self.path)
+        try:
+            if u.path == '/api/settings':
+                length = int(self.headers.get('Content-Length') or 0)
+                payload = json.loads(self.rfile.read(length).decode('utf-8') or '{}')
+                result = apply_settings(payload.get('updates') or {})
+                body = json.dumps(result, ensure_ascii=False).encode('utf-8')
+                self._send(200 if result['ok'] else 400,
+                           'application/json; charset=utf-8', body)
             else:
                 self._send(404, 'text/plain', b'not found')
         except Exception as e:
