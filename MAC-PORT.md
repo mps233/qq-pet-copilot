@@ -32,6 +32,9 @@
   （`adb shell settings put global stay_on_while_plugged_in 7`）
 - 启动：`./run.sh`（= `.venv/bin/python scenarios/runner.py`），Ctrl+C 停止
 - 单测：`./run.sh --test coins` 等
+- 手机仪表盘：`./dashboard.sh`（纯标准库零依赖，默认端口 8787，绑定 0.0.0.0）
+  内网访问 `http://<Mac 的局域网 IP>:8787`，手机浏览器打开即用；
+  数据源为 runs/ 下的日志/进度/状态/队列文件，日志 3s、数据 6s 自动刷新
 
 ## 真机实测记录（一加 LE2120 / Android 14 / QQ 9.3.60）
 
