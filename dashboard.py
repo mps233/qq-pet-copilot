@@ -12,10 +12,12 @@
 访问:  http://<本机内网IP>:8787
 """
 
+import io
 import json
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -117,7 +119,31 @@ def config_summary() -> dict:
     adv = cfg.get('adventure') or {}
     visit = cfg.get('visit') or {}
     pk = cfg.get('pk') or {}
+    care = cfg.get('care') or {}
+    recover = cfg.get('recover') or {}
+    adb = cfg.get('adb') or {}
+    control = cfg.get('control') or {}
+    notify = cfg.get('notify') or {}
+    runner = cfg.get('runner') or {}
     school_enabled = bool((tasks.get('school') or {}).get('enabled', True))
+
+    def n_per_day(n):
+        return '不限次' if not n else f'{n} 次/天'
+
+    rows = [
+        ['调度策略', '只打工不学习' if not school_enabled else '学习 + 打工'],
+        ['调度引擎', str(runner.get('engine', 'task_queue'))],
+        ['打工', f"{work.get('location', '')} · {work.get('duration', '')} · {n_per_day(work.get('times_per_day'))}"],
+        ['金币阈值', f"{sched.get('coin_threshold', '-')}（低于优先打工）"],
+        ['时长上限', f"{sched.get('daily_hour_limit', '-')} 小时/天"],
+        ['踩踩', f"{visit.get('times_per_day', '-')} 次/天 @ {visit.get('start_time', '')}"],
+        ['PK', f"{pk.get('times_per_day', '-')} 次/天 @ {pk.get('start_time', '')}"],
+        ['冒险', f"{adv.get('times_per_day', '-')} 次/天 @ {adv.get('start_time', '')}"],
+        ['护理', f"{care.get('method', '')} · 阈值 {care.get('energy_threshold', '-')}/{care.get('clean_threshold', '-')}"],
+        ['异常恢复', str(recover.get('method', ''))],
+        ['设备', f"{adb.get('device_serial') or '自动'} · {control.get('method', '')}"],
+        ['通知', 'macOS 桌面通知' + (' + OnePush' if str(notify.get('onepush_config', '')).strip() else '')],
+    ]
     return {
         'strategy': '只打工不学习' if not school_enabled else '学习+打工',
         'school_enabled': school_enabled,
@@ -128,6 +154,7 @@ def config_summary() -> dict:
         'pk_per_day': pk.get('times_per_day'),
         'adventure_times': adv.get('times_per_day'),
         'adventure_start': adv.get('start_time'),
+        'rows': rows,
     }
 
 
@@ -147,6 +174,42 @@ def list_shots() -> list[dict]:
         out.append({'name': p.name,
                     'mtime': datetime.fromtimestamp(p.stat().st_mtime).strftime('%m-%d %H:%M')})
     return out
+
+
+_shot_cache = {'ts': 0.0, 'data': b'', 'at': ''}
+
+
+def capture_phone(width: int = 390, min_interval: float = 5.0):
+    """adb 截取手机当前画面：缩放 + JPEG（带节流缓存）。
+
+    返回 (jpeg_bytes, 拍摄时间字符串, 是否来自缓存)。
+    """
+    if _shot_cache['data'] and time.time() - _shot_cache['ts'] < min_interval:
+        return _shot_cache['data'], _shot_cache['at'], True
+    adb_path, serial = 'adb', ''
+    try:
+        import yaml
+        cfg = yaml.safe_load((BASE / 'config.yaml').read_text('utf-8')) or {}
+        adb_path = (cfg.get('adb') or {}).get('path') or 'adb'
+        serial = (cfg.get('adb') or {}).get('device_serial') or ''
+    except Exception:
+        pass
+    cmd = [adb_path] + (['-s', serial] if serial else []) + ['exec-out', 'screencap', '-p']
+    proc = subprocess.run(cmd, capture_output=True, timeout=30)
+    if proc.returncode != 0 or not proc.stdout:
+        detail = (proc.stderr or b'').decode('utf-8', 'replace').strip()[:200]
+        raise RuntimeError(detail or 'adb screencap 失败')
+    from PIL import Image
+    img = Image.open(io.BytesIO(proc.stdout))
+    w, h = img.size
+    if w > width:
+        img = img.resize((width, max(1, round(h * width / w))), Image.Resampling.LANCZOS)
+    buf = io.BytesIO()
+    img.convert('RGB').save(buf, 'JPEG', quality=82)
+    data = buf.getvalue()
+    at = datetime.now().strftime('%H:%M:%S')
+    _shot_cache.update(ts=time.time(), data=data, at=at)
+    return data, at, False
 
 
 def build_data() -> dict:
@@ -221,6 +284,14 @@ pre#logbox{height:46vh;min-height:250px;overflow:auto;background:#0f1116;color:#
 .thumbs img{width:100%;display:block}
 .thumbs .cap{position:absolute;left:0;right:0;bottom:0;background:rgba(15,17,22,.72);color:#fff;font-size:10px;padding:2px 6px;text-align:center}
 footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;line-height:1.7}
+#phoneShot{display:block;margin:0 auto;max-height:46vh;max-width:100%;border-radius:8px;border:1px solid var(--line);background:#eef0f4;min-height:48px}
+.shotctl{display:flex;justify-content:center;gap:10px;align-items:center;margin-top:8px}
+.shotctl button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 12px;font-size:12px;color:var(--sub)}
+.err{color:#b45309;font-size:12px}
+.cfg .row{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-top:1px dashed var(--line);font-size:13.5px}
+.cfg .row:first-child{border-top:0}
+.cfg .k{color:var(--sub);flex:none}
+.cfg .v{text-align:right}
 .hide{display:none!important}
 </style>
 </head>
@@ -246,9 +317,20 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
   </section>
 
   <section class="card">
+    <h2>手机当前画面 <span id="shotMeta" style="font-weight:400"></span></h2>
+    <a id="shotLink" href="/api/screenshot" target="_blank" rel="noopener"><img id="phoneShot" alt="加载中…"></a>
+    <div class="shotctl"><button id="btnShot">立即刷新</button><span id="shotErr" class="err"></span></div>
+  </section>
+
+  <section class="card">
     <h2>任务队列</h2>
     <div class="qhead"><span id="qTop">--</span><span id="qUpd"></span></div>
     <div class="tasklist" id="taskList"></div>
+  </section>
+
+  <section class="card">
+    <h2>运行配置</h2>
+    <div class="cfg" id="cfgList"></div>
   </section>
 
   <section class="card">
@@ -267,7 +349,7 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 </main>
 <footer>
   <div id="footStrategy"></div>
-  <div>runs/ · runs/logs/ · 每 3s 刷新日志 / 6s 刷新数据</div>
+  <div>runs/ · runs/logs/ · 日志 3s / 数据 6s / 截图 15s 自动刷新</div>
 </footer>
 
 <script>
@@ -341,6 +423,7 @@ function renderData(d){
     $('#shotCard').classList.remove('hide');
     $('#shots').innerHTML=shots.map(s=>'<a href="/files/'+encodeURIComponent(s.name)+'" target="_blank"><img loading="lazy" src="/files/'+encodeURIComponent(s.name)+'"><span class="cap">'+s.mtime+'</span></a>').join('');
   }
+  renderCfg((d.config||{}).rows);
   // footer
   $('#footStrategy').textContent='策略：'+(cfg.strategy||'未知')+(cfg.work_duration?(' · 打工 '+cfg.work_duration+' @ '+cfg.work_location):'');
 }
@@ -378,10 +461,32 @@ $('#btnAuto').className=logAuto?'on':'';
 $('#btnAuto').onclick=()=>{logAuto=!logAuto;$('#btnAuto').className=logAuto?'on':'';try{localStorage.setItem('qpet_logAuto',logAuto?'1':'0')}catch(e){}};
 $('#logFilter').oninput=e=>{logFilter=e.target.value.trim();refreshLogs()};
 
+function renderCfg(rows){
+  if(!rows||!rows.length){$('#cfgList').innerHTML='';return}
+  $('#cfgList').innerHTML=rows.map(r=>'<div class="row"><span class="k">'+r[0]+'</span><span class="v">'+r[1]+'</span></div>').join('');
+}
+
+let shotUrl=null,shotBusy=false;
+async function refreshShot(force){
+  if(shotBusy)return; shotBusy=true;
+  try{
+    const r=await fetch('/api/screenshot'+(force?('?t='+Date.now()):''),{cache:'no-store'});
+    if(!r.ok) throw new Error((await r.text()).slice(0,80));
+    const b=await r.blob(); const u=URL.createObjectURL(b);
+    const img=$('#phoneShot'); if(shotUrl) URL.revokeObjectURL(shotUrl);
+    shotUrl=u; img.src=u;
+    $('#shotMeta').textContent='拍摄 '+(r.headers.get('X-Shot-At')||'');
+    $('#shotErr').textContent='';
+  }catch(e){ $('#shotErr').textContent='获取失败，点“立即刷新”重试'; }
+  shotBusy=false;
+}
+$('#btnShot').onclick=()=>refreshShot(true);
+
 setInterval(()=>{if(!document.hidden)refreshLogs()},3000);
 setInterval(()=>{if(!document.hidden)refreshData()},6000);
-refreshData();refreshLogs();
-document.addEventListener('visibilitychange',()=>{if(!document.hidden){refreshData();refreshLogs()}});
+setInterval(()=>{if(!document.hidden)refreshShot(false)},15000);
+refreshData();refreshLogs();refreshShot(false);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){refreshData();refreshLogs();refreshShot(false)}});
 </script>
 </body>
 </html>
@@ -421,6 +526,29 @@ class Handler(BaseHTTPRequestHandler):
                                    'total': len(lines), 'lines': lines},
                                   ensure_ascii=False).encode('utf-8')
                 self._send(200, 'application/json; charset=utf-8', body)
+            elif path == '/api/screenshot':
+                try:
+                    data, at, cached = capture_phone()
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'image/jpeg')
+                    self.send_header('Cache-Control', 'no-store')
+                    self.send_header('X-Shot-At', at)
+                    self.send_header('Content-Length', str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                except Exception as e:
+                    if _shot_cache['data'] and time.time() - _shot_cache['ts'] < 120:
+                        data = _shot_cache['data']
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'image/jpeg')
+                        self.send_header('Cache-Control', 'no-store')
+                        self.send_header('X-Shot-At', _shot_cache['at'] + '(缓存)')
+                        self.send_header('Content-Length', str(len(data)))
+                        self.end_headers()
+                        self.wfile.write(data)
+                    else:
+                        self._send(503, 'text/plain; charset=utf-8',
+                                   f'截图失败: {e}'.encode('utf-8'))
             elif path.startswith('/files/'):
                 name = path[len('/files/'):]
                 f = RUNS / name
