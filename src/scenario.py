@@ -21,6 +21,12 @@ from .u2dev import U2Device
 CLICK_INTERVAL = 1.0       # 连续点击/重试间隔（秒）
 NAV_TIMEOUT = 10           # 单个阶段最多重试次数，超过认为卡死抛异常
 MAIN_PAGE_ATTEMPTS = 10    # 回主页面最多尝试次数（识别 main_sign / 点 back）
+# 新版 QQ（9.3.6x）兼容：3D 主页从独立 Activity（打工/学习面板等）返回时要 1~2 秒
+# 重新渲染，back 后先等再检查，避免没等到主页就连环按退把宠物模块整个退回桌面；
+# 连续 back 未回主页时改用官方 scheme 重开宠物页兜底（详见 ensure_main_page）
+BACK_SETTLE_SECONDS = 2.0      # 每次 back 后等页面渲染的秒数
+SCHEME_FALLBACK_BACKS = 3      # 连续 back 达到该次数仍未回主页 → scheme 重开
+SCHEME_REOPEN_WAIT = 20.0      # scheme 重开后等主页面渲染的超时（秒）
 BUSY_GATE_ATTEMPTS = 2     # 出门后进行中状态的检测次数（活动面板加载有几秒延迟）
 LEAVE_HOME_ATTEMPTS = 3    # 点击出门失败（点完 main_sign 仍在主页面）时的重试次数
 WAIT_LOG_INTERVAL = 300.0  # 长等待期间的心跳日志间隔（秒），避免每轮检测刷屏
@@ -197,10 +203,18 @@ class DeviceScenario:
         连续 schedule.main_page_checks 次（默认 1 = 立即点 back）识别都失败
         才允许点 back（主页面点 back 会退出游戏，需要宽限防识别抖动误退）。
         返回的 source 可直接给同一个页面上的后续 XPath 定位复用。
+
+        新版 QQ（9.3.6x）兼容：3D 主页从独立 Activity（打工/学习面板
+        QPublicFragmentActivity 等）返回时要 1~2 秒重新渲染，back 后先等
+        BACK_SETTLE_SECONDS 再检查；连续 SCHEME_FALLBACK_BACKS 次 back 仍未回
+        主页时，说明 back 可能已把宠物模块整个退回关闭（不再冒险继续按退），
+        改用官方 scheme 重新打开宠物页兜底。
         """
         checks = max(1, int(getattr(self.cfg.schedule, 'main_page_checks', 1) or 1))
         max_attempts = MAIN_PAGE_ATTEMPTS * checks
         misses = 0
+        back_count = 0
+        scheme_tries = 0
         for attempt in range(1, max_attempts + 1):
             screen, source = self.snapshot()
             hit = self.see('main_sign', screen, source)
@@ -213,15 +227,59 @@ class DeviceScenario:
                 time.sleep(CLICK_INTERVAL)
                 continue
             misses = 0
+            if back_count >= SCHEME_FALLBACK_BACKS and scheme_tries < 2:
+                # 连按返回仍没回来：改用官方 scheme 重开宠物页（打开成功会
+                # 等主页渲染并返回 True），最多兜底 2 次避免超时循环
+                scheme_tries += 1
+                if self.reopen_pet_by_scheme():
+                    back_count = 0
+                    continue
             if self.go_back(screen, source):
+                back_count += 1
                 log('未识别到主页面'
                     + (f'（连续 {checks} 次）' if checks > 1 else '')
                     + '，执行返回')
+                time.sleep(BACK_SETTLE_SECONDS)   # 等 3D 主页重新渲染，别连环按退
                 continue
             if attempt == 1 or attempt == max_attempts:
                 log(f'未识别到主页面也找不到 back，等待重试 ({attempt}/{max_attempts})')
             time.sleep(CLICK_INTERVAL)
         raise RuntimeError('无法回到主页面')
+
+    def reopen_pet_by_scheme(self) -> bool:
+        """官方 scheme 重新打开宠物主页并等渲染（“回主页面”的最可靠兜底）。
+
+        适用场景：back 未生效、或 back 已把宠物模块整个退回关闭（新版 QQ 从
+        主页按返回会直接退出宠物页的行为），继续按 back 只会一路退回系统桌面。
+        普通 shell 即可跳转（JumpActivity，无需 root），真机/macOS 同样适用。
+        返回是否已回到主页面；失败只记日志，由调用方决定下一步。
+        """
+        try:
+            from .opener import _open_pet_via_scheme
+        except Exception as e:  # 导入失败不致命，交回调用方继续走 back 逻辑
+            log(f'scheme 重开不可用（导入失败）: {e}')
+            return False
+        adb_path = getattr(self.dev.adb, 'adb', '') or find_adb(self.cfg.adb.path)
+        serial = getattr(self.dev.adb, 'serial', '') or self.cfg.adb.device_serial
+        try:
+            log('连续返回未回到主页面，改用官方 scheme 重新打开宠物页')
+            _open_pet_via_scheme(adb_path, serial)
+        except Exception as e:
+            log(f'scheme 打开宠物页失败: {e}')
+            return False
+        deadline = time.monotonic() + SCHEME_REOPEN_WAIT
+        while time.monotonic() < deadline:
+            time.sleep(1.5)
+            try:
+                screen, source = self.snapshot()
+                hit = self.see('main_sign', screen, source)
+                if hit:
+                    log(f'scheme 重开成功，已在主页面 (score={hit[2]:.2f})')
+                    return True
+            except Exception:
+                continue
+        log('scheme 重开后在超时时间内仍未识别到主页面')
+        return False
 
     def handle_low_stat_dialog(self, source=None) -> None:
         """点 *_start 开始任务时，同时检测"体力/清洁不足"弹窗（content-desc 整句）。
