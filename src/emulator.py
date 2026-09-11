@@ -35,7 +35,35 @@ import re
 import subprocess
 import sys
 import time
-import winreg
+
+try:
+    import winreg  # noqa: F401 - Windows 专用
+except ImportError:  # macOS / Linux 没有 winreg：用空实现兜底，注册表扫描安全返回空结果
+
+    class _NoWinreg:
+        """winreg 空实现（非 Windows 平台，模拟器管理自动失效）。"""
+
+        HKEY_CURRENT_USER = None
+        HKEY_LOCAL_MACHINE = None
+
+        @staticmethod
+        def OpenKey(*args, **kwargs):
+            return None
+
+        @staticmethod
+        def EnumKey(*args, **kwargs):
+            raise OSError('winreg 在非 Windows 平台不可用')
+
+        @staticmethod
+        def EnumValue(*args, **kwargs):
+            raise OSError('winreg 在非 Windows 平台不可用')
+
+        @staticmethod
+        def QueryValueEx(*args, **kwargs):
+            raise OSError('winreg 在非 Windows 平台不可用')
+
+    winreg = _NoWinreg()  # type: ignore
+
 from dataclasses import dataclass, field
 from pathlib import Path
 

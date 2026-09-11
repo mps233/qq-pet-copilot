@@ -48,7 +48,7 @@ def resource_path(rel: str | Path) -> Path:
     return local if local.exists() else RESOURCE_ROOT / rel
 
 
-# Windows 上 adb 的常见安装位置
+# adb 的常见安装位置（Windows / macOS）
 _COMMON_ADB_PATHS = [
     r"%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe",
     r"%USERPROFILE%\AppData\Local\Android\Sdk\platform-tools\adb.exe",
@@ -56,6 +56,10 @@ _COMMON_ADB_PATHS = [
     r"D:\platform-tools\adb.exe",
     r"C:\Android\platform-tools\adb.exe",
     r"C:\Program Files (x86)\Android\android-sdk\platform-tools\adb.exe",
+    # macOS：Homebrew / Android Studio 默认 SDK
+    "/opt/homebrew/bin/adb",
+    "/usr/local/bin/adb",
+    "~/Library/Android/sdk/platform-tools/adb",
 ]
 
 
@@ -330,13 +334,14 @@ def find_adb(configured_path: str = "") -> str:
     if which:
         candidates.append(which)
     for raw in _COMMON_ADB_PATHS:
-        candidates.append(os.path.expandvars(raw))
+        candidates.append(os.path.expanduser(os.path.expandvars(raw)))
 
     for path in candidates:
         if path and Path(path).is_file():
             return str(Path(path))
     raise FileNotFoundError(
-        "找不到 adb。请安装 platform-tools，并在 config.yaml 的 adb.path 中填写 adb.exe 完整路径。"
+        "找不到 adb。请安装 platform-tools，并在 config.yaml 的 adb.path 中填写 adb 完整路径"
+        "（macOS 可用 brew install android-platform-tools 安装）。"
     )
 
 

@@ -16,6 +16,7 @@ OnePush 放进 image_path 字段（是否展示取决于提供方）。
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 
 from .config import NotifyConfig, load_config
@@ -35,7 +36,11 @@ def send_alert(reason: str, image_path: str | None = None) -> bool:
     try:
         sent = False
         if cfg.win_toast:
-            sent = _send_windows_toast(reason, image_path) or sent
+            # win_toast 兼作“桌面通知”开关：Windows 用 Toast，macOS 用 osascript 通知
+            if sys.platform == 'darwin':
+                sent = _send_mac_toast(reason) or sent
+            else:
+                sent = _send_windows_toast(reason, image_path) or sent
         if str(cfg.onepush_config).strip():
             sent = _send_onepush(str(cfg.onepush_config), reason, image_path) or sent
         if not sent:
@@ -73,6 +78,27 @@ def _send_windows_toast(reason: str, image_path: str | None = None) -> bool:
         return True
     except Exception as e:
         log(f'告警通知: Windows Toast 发送失败: {e}')
+        return False
+
+
+def _send_mac_toast(reason: str) -> bool:
+    """发送 macOS 桌面通知（osascript display notification）。"""
+    if sys.platform != 'darwin':
+        return False
+    try:
+        msg = str(reason).replace('"', "'").replace(chr(10), ' ').replace(chr(13), ' ')
+        script = f'display notification "{msg}" with title "{TITLE}"'
+        proc = subprocess.run(
+            ['osascript', '-e', script],
+            capture_output=True, text=True, timeout=15,
+        )
+        if proc.returncode == 0:
+            log('告警通知: macOS 通知推送成功')
+            return True
+        log(f'告警通知: macOS 通知发送失败: {proc.stderr.strip()}')
+        return False
+    except Exception as e:
+        log(f'告警通知: macOS 通知发送失败: {e}')
         return False
 
 
