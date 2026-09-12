@@ -12,7 +12,8 @@
    力量/智力/魅力；高级学园/进修学院固定为 魅力/力量/智力，每次上课前重新判断），
    再把轮播归位到第一页，按 school.duration 选课：10分钟课直接点对应框；
    30分钟课小步扫描卡名（COURSE30_NAMES）点击，点后按详情面板"奖励<属性>+N"
-   核对（10分+2 / 30分+5），不通过归位重试一次
+   核对（10分+2 / 30分+5），不通过归位重试一次；学习科目=夏令营（萌芽夏令营，
+   30分钟、奖励随机属性+5）走 30分钟路径、课时时长固定按 30分钟结算
 5. 点击 school_start，直到页面出现 school_in 标志（进入上课）
 6. 上课中：按配置的检查间隔（schedule.check_interval）检查，直到出现 school_end 标志
 7. 点击 quit 结束，当天已学次数 +1 并持久化到 runs/school_progress.json
@@ -69,10 +70,14 @@ ADVANCED_STAGES = ('高级学园', '进修学院')
 # 课时时长（school.duration）：学园课程轮播 = 3 张 10 分钟课 + 3 张 30 分钟课
 # （个别阶段另有第 7 张），卡序：初级学园 = [10分:力量/智力/魅力] + [30分:力量/智力/魅力]
 DURATION_CHOICES = ('10分钟', '30分钟')
+# 学习科目可选值：三属性 + 夏令营（萌芽夏令营——30 分钟档、奖励随机属性+5，
+# 随机加到三属性之一，长期跑三属性逐渐拉平均；仪表盘设置页「学习科目」可选）
+ATTRIBUTE_CHOICES = ('力量', '智力', '魅力', '夏令营')
 # 30 分钟课卡名表（2026-09 初级学园实测，用于翻页后按卡名点击；未知阶段按
 # "用时:30分钟"标签位置兜底）。中级/高级/进修学院的名字待毕业后实测补充。
 COURSE30_NAMES = {
-    '初级学园': {'力量': '田径运动课', '智力': '世界地理课', '魅力': '演说表达课'},
+    '初级学园': {'力量': '田径运动课', '智力': '世界地理课', '魅力': '演说表达课',
+                '夏令营': '萌芽夏令营'},
 }
 # 面板标题识别规则（在选课页检测，页面只有一个学园标题，不需要靠编号/后缀防误判）：
 # - 初级/中级/高级学园：形如"初级学园 5年级"（年级可省略）
@@ -90,10 +95,10 @@ class SchoolScenario(DeviceScenario):
     def __init__(self, dev=None):
         super().__init__(dev)
         self.attribute = self.cfg.school.attribute
-        if self.attribute not in ATTRIBUTE_COURSES:
+        if self.attribute not in ATTRIBUTE_CHOICES:
             raise ValueError(
                 f'config.yaml 中 school.attribute 配置无效: {self.attribute!r}，'
-                f'可选: {"/".join(ATTRIBUTE_COURSES)}'
+                f'可选: {"/".join(ATTRIBUTE_CHOICES)}'
             )
         self.duration = self.cfg.school.duration
         if self.duration not in DURATION_CHOICES:
@@ -104,11 +109,14 @@ class SchoolScenario(DeviceScenario):
         # 最近一次选课前识别到的学园阶段（resolve_course_box 里更新，供 30 分钟
         # 课按阶段名字表找卡）
         self._stage: str | None = None
+        # 本次实际课时时长（select_course 里确定：夏令营固定 30分钟，其余=配置值），
+        # verify_course_selected 按它核对奖励数字
+        self._session_duration = self.duration
         self.times_per_day = self.cfg.school.times_per_day
         # 毕业处理防循环标志：关闭毕业面板后重新进学校仍出现毕业标志时抛异常，
         # 走重试链而不是无限"毕业->回主页面->再进"空转；成功看到 school_start 时重置
         self._graduated_once = False
-        log(f'属性点: {self.attribute}，课时时长: {self.duration}，每天学习次数: '
+        log(f'学习科目: {self.attribute}，课时时长: {self.duration}，每天学习次数: '
             f'{self.times_per_day if self.times_per_day else "不限"}')
 
     # ---- 各阶段 ----
@@ -179,26 +187,35 @@ class SchoolScenario(DeviceScenario):
 
     def select_course(self) -> None:
         """选课：先 OCR 上半屏识别学园阶段（决定属性对应第几张卡），把轮播归位到
-        第一页；10 分钟课直接点框，30 分钟课前拖翻页后按卡名点选。
+        第一页；10 分钟课直接点框；30 分钟课（含固定 30 分钟的"夏令营"科目）
+        小步扫描卡名（COURSE30_NAMES）点击；点后按详情面板核对，不通过归位重试一次。
 
-        选完把课时时长写入 school_progress.json 的 duration 字段：一节课结算时
+        选完把本次课时时长写入 school_progress.json 的 duration 字段：一节课结算时
         按它累计学习时长（10分钟=600s / 30分钟=1800s，见 record_study_finish）。
+        夏令营（随机属性+5）只有 30 分钟档，配置了 10 分钟也按 30 分钟上课与结算。
         """
         box = self.resolve_course_box()
+        duration = self.duration
+        if self.attribute == '夏令营' and duration != '30分钟':
+            log('夏令营只有 30 分钟档，本次按 30分钟 上课并结算学习时长')
+            duration = '30分钟'
+        self._session_duration = duration
         self.reset_select_boxes(drags=3)
-        if self.duration == '30分钟':
+        if duration == '30分钟':
             name = COURSE30_NAMES.get(self._stage or '', {}).get(self.attribute, '')
             for attempt in (1, 2):
                 clicked = bool(name) and self._click_card_by_name(name)
-                if not clicked:
+                if not clicked and box:
                     clicked = self._click_nth_30min(box)
                 if clicked and self.verify_course_selected():
-                    set_current_school_duration(self.duration)
+                    set_current_school_duration(duration)
                     return
                 log('点选未通过核对，归位重试' if attempt == 1 else '点选仍未通过核对')
                 self.reset_select_boxes(drags=3)
             raise RuntimeError(
                 f'30分钟课未定位或未选中（阶段 {self._stage!r}，{self.attribute}），本轮放弃')
+        if not box:
+            raise RuntimeError(f'未解析到课程选择框（{self.attribute}），本轮放弃')
         log(f'选择课程: {self.attribute} ({box})')
         hit = self.see(box)
         if not hit:
@@ -213,8 +230,8 @@ class SchoolScenario(DeviceScenario):
                 self.click(hit[0], hit[1])
             if not self.verify_course_selected():
                 raise RuntimeError(
-                    f'选课核对未通过（{self.duration} {self.attribute}），本轮放弃')
-        set_current_school_duration(self.duration)
+                    f'选课核对未通过（{duration} {self.attribute}），本轮放弃')
+        set_current_school_duration(duration)
 
     def _drag_card_step(self) -> None:
         """慢速小步前滑约 1 张卡（332px；慢拖惯性小、步进稳定，实测 1 步 1 张）。"""
@@ -260,12 +277,13 @@ class SchoolScenario(DeviceScenario):
         return False
 
     def verify_course_selected(self) -> bool:
-        """核对详情面板：奖励<属性>+N 与配置一致（10分钟课+2 / 30分钟课+5）。
+        """核对详情面板奖励行与所选课程一致：
+        普通科目 = 奖励<属性>+N（10分钟+2 / 30分钟+5）；夏令营 = 奖励随机属性+5。
 
         详情面板点选后即时刷新；OCR 会把末尾"+5点"读成"+50/③"等，
         所以只取奖励后的第一位数字比对；偶尔拆行，按相邻行合并后再匹配。
         """
-        want = {'10分钟': '2', '30分钟': '5'}[self.duration]
+        want = {'10分钟': '2', '30分钟': '5'}[self._session_duration]
         time.sleep(0.5)
         results = ocr_texts(self.screen())
         for t, x, y, _ in results:
@@ -273,10 +291,15 @@ class SchoolScenario(DeviceScenario):
                 continue
             band = ''.join(tt.replace(' ', '') for tt, xx, yy, _ in results
                            if abs(yy - y) <= 70)
-            m = re.search(r'奖励(力量|智力|魅力)[+＋]?(\d)', band)
-            if m and m.group(1) == self.attribute and m.group(2) == want:
+            if self.attribute == '夏令营':
+                m = re.search(r'奖励随机属性[+＋]?(\d)', band)
+                ok = bool(m) and m.group(1) == want
+            else:
+                m = re.search(r'奖励(力量|智力|魅力)[+＋]?(\d)', band)
+                ok = bool(m) and m.group(1) == self.attribute and m.group(2) == want
+            if ok:
                 return True
-            log(f'选课核对: 详情显示 {band[:60]!r}，与 {self.attribute}+{want} 不符')
+            log(f'选课核对: 详情显示 {band[:60]!r}，与预期奖励不符')
             return False
         log('选课核对: 详情面板未找到"奖励"行')
         return False
@@ -303,8 +326,8 @@ class SchoolScenario(DeviceScenario):
         return False
 
 
-    def resolve_course_box(self) -> str:
-        """OCR 上半屏识别学园阶段，返回该点哪个课程选择框。
+    def resolve_course_box(self) -> str | None:
+        """OCR 上半屏识别学园阶段，返回该点哪个课程选择框（夏令营课不用选框，返回 None）。
 
         初级/中级学园课程顺序固定 力量/智力/魅力 -> 第一/二/三框；
         高级学园固定 魅力/力量/智力；进修学院固定 力量/魅力/智力。
@@ -318,6 +341,10 @@ class SchoolScenario(DeviceScenario):
             # 学习开始时把当前学园持久化到 school_progress.json（不一致才更新；
             # 结算时长以"课时时长"（duration 字段）为准，学园仅作旧会话兜底）
             set_current_school(stage)
+        if self.attribute == '夏令营':
+            # 萌芽夏令营（随机属性+5）不按属性定位选择框，走 30 分钟卡名扫描路径
+            log(f'学园阶段: {stage or "未识别"}，科目=夏令营（萌芽夏令营，30分钟随机属性+5）')
+            return None
         if stage == '进修学院':
             box = INSTITUTE_ATTRIBUTE_COURSES[self.attribute]
             log(f'学园阶段: {stage}，课程顺序 力量/魅力/智力，{self.attribute} -> {box}')

@@ -92,7 +92,7 @@ class ControlConfig:
 
 @dataclass
 class SchoolConfig:
-    # 属性点课程：力量 / 智力 / 魅力
+    # 属性点课程：力量 / 智力 / 魅力 / 夏令营（萌芽夏令营——30分钟、奖励随机属性+5）
     attribute: str = "力量"
     # 课时时长：10分钟 / 30分钟（学园每阶段两类课都有；10分钟课单位消耗收益更高）
     duration: str = "10分钟"

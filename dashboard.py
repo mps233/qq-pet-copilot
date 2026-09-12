@@ -1136,10 +1136,10 @@ function renderSettings(ed){
   $('#setForm').innerHTML=
     FG('学习',[
     '<div class="frow"><span class="k">只打工不学习</span><button class="sw'+(ed.school_enabled?'':' on')+'" id="swSchool" title="开=只打工；关=学习+打工"></button></div>',
-    '<div class="frow"><span class="k">学习科目</span>'+sel('selSchoolAttr', ['力量','智力','魅力'], ed.school_attribute)+'</div>',
+    '<div class="frow"><span class="k">学习科目</span>'+sel('selSchoolAttr', ['力量','智力','魅力','夏令营'], ed.school_attribute)+'</div>',
     '<div class="frow"><span class="k">每天学习次数</span><input type="number" id="numSchoolTimes" min="0" step="1" title="0=不限" value="'+(ed.school_times??0)+'"></div>',
     '<div class="frow"><span class="k">课时时长</span>'+sel('selSchoolDur', ['10分钟','30分钟'], ed.school_duration)+'</div>',
-    '<div class="frow"><span class="k">课时说明</span><span style="color:var(--sub);font-size:12px">10分钟课单位消耗收益更高；30分钟课少操作</span></div>',
+    '<div class="frow"><span class="k">课时说明</span><span style="color:var(--sub);font-size:12px">10分钟课单位消耗收益更高；夏令营=随机属性+5（固定30分钟）</span></div>',
     '<div class="frow"><span class="k">金币阈值</span><input type="number" id="numCoin" min="0" step="100" title="金币 ≥ 该值优先学习，低于该值先打工" value="'+(ed.coin_threshold??'')+'"></div>',
     ])+
     FG('打工',[

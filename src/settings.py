@@ -95,7 +95,7 @@ def validate_field(key: str, value):
     if key == 'work.location':
         return (True, value) if value in WORK_LOCATIONS else (False, default)
     if key == 'school.attribute':
-        return (True, value) if value in ('力量', '智力', '魅力') else (False, default)
+        return (True, value) if value in ('力量', '智力', '魅力', '夏令营') else (False, default)
     if key == 'school.duration':
         return (True, value) if value in ('10分钟', '30分钟') else (False, default)
     if key == 'work.duration':

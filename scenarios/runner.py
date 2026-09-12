@@ -113,7 +113,7 @@ from scenarios.friend_care import FriendCareScenario, in_time_range, parse_time_
 from scenarios.gift_bag import GiftBagScenario
 from scenarios.hire_friend import FriendHireScenario
 from scenarios.pk import PKDeferred, PKScenario
-from scenarios.school import ATTRIBUTE_COURSES, SchoolScenario
+from scenarios.school import ATTRIBUTE_CHOICES, SchoolScenario
 from scenarios.visit import VisitScenario
 from scenarios.work import DURATION_BOXES, WorkScenario
 
@@ -664,7 +664,7 @@ class Runner:
         # care.interval_seconds 热加载（care_due 读 self.care.cfg.care.interval_seconds）
         self.care.cfg.care = cfg.care
         self.school.times_per_day = cfg.school.times_per_day
-        if cfg.school.attribute in ATTRIBUTE_COURSES:
+        if cfg.school.attribute in ATTRIBUTE_CHOICES:
             self.school.attribute = cfg.school.attribute
         else:
             log(f'属性点配置无效 {cfg.school.attribute!r}，沿用 {self.school.attribute}')

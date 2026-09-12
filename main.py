@@ -252,7 +252,7 @@ EMULATOR_SETTING_KEYS = {
 TASK_SETTING_FIELDS = [
     ('tasks.order', '任务执行顺序（> 分隔）', 'str'),
     ('tasks.main_order', '主任务顺序（> 分隔）', 'str'),
-    ('school.attribute', '属性点课程', ['力量', '智力', '魅力']),
+    ('school.attribute', '属性点课程', ['力量', '智力', '魅力', '夏令营']),
     ('school.duration', '课时时长', ['10分钟', '30分钟']),
     ('school.times_per_day', '每天学习次数（0 不限）', 'int'),
     ('schedule.daily_hour_limit', '学习工作时长上限（小时，0 不限）', 'int'),
