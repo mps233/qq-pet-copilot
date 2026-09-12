@@ -233,6 +233,19 @@ class GiftBagConfig:
     interval_seconds: int = 1800
 
 
+@dataclass
+class CareerConfig:
+    # 隐藏职业解锁哨兵：每节课结算后读职业树，监控目标职业线（默认三条隐藏线）
+    # 是否解锁；解锁时记录事件并（可选）自动停止学习
+    watch: bool = True
+    # 发现解锁后自动停止学习（关闭 tasks.school.enabled）
+    stop_study_on_unlock: bool = True
+    # 兜底检查间隔（分钟）：除每节课结算后检查外，每隔这么久也检查一次；0 = 只每节课后查
+    check_interval_min: int = 60
+    # 监控的目标职业线（逗号分隔）
+    careers: str = "武术家,梦境旅人,大明星"
+
+
 # 任务队列调度的任务键（tasks.order 里可配置的任务名）
 TASK_KEYS = ('care', 'adventure', 'visit', 'pk', 'hire_friend', 'friend_care',
              'gift_bag', 'school', 'work')
@@ -343,6 +356,7 @@ class Config:
     gift_bag: GiftBagConfig = field(default_factory=GiftBagConfig)
     hire_friend: HireFriendConfig = field(default_factory=HireFriendConfig)
     employed: EmployedConfig = field(default_factory=EmployedConfig)
+    career: CareerConfig = field(default_factory=CareerConfig)
     runner: RunnerConfig = field(default_factory=RunnerConfig)
     tasks: TasksConfig = field(default_factory=TasksConfig)
     recover: RecoverConfig = field(default_factory=RecoverConfig)
@@ -427,6 +441,8 @@ def load_config(config_path: str | Path | None = None) -> Config:
             **{k: v for k, v in (raw.get("hire_friend", {}) or {}).items()
                if k in HireFriendConfig.__dataclass_fields__}),
         employed=EmployedConfig(**raw.get("employed", {})),
+        career=CareerConfig(**{k: v for k, v in (raw.get("career", {}) or {}).items()
+                               if k in CareerConfig.__dataclass_fields__}),
         runner=RunnerConfig(**{k: v for k, v in (raw.get("runner", {}) or {}).items()
                                if k in RunnerConfig.__dataclass_fields__}),
         tasks=tasks,

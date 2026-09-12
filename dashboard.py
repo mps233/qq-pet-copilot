@@ -55,12 +55,9 @@ def audit(msg: str) -> None:
 
 
 def scheduler_info() -> dict:
-    try:
-        out = subprocess.run(['pgrep', '-f', 'scenarios/runner.py'],
-                             capture_output=True, text=True, timeout=5).stdout
-        pids = [int(x) for x in out.split() if x.strip().isdigit()]
-    except Exception:
-        pids = []
+    # 走 _runner_pids 的严格复核——裸 pgrep 会误配带 --test 参数的短暂进程，
+    # 曾导致 UI 误显示"运行中 PID xxxxx"（踩过坑），此函数已统一改走复核路径
+    pids = _runner_pids()
     uptime = ''
     if pids:
         try:
@@ -86,7 +83,7 @@ def _runner_pids() -> list[int]:
                                  capture_output=True, text=True, timeout=5).stdout
         except Exception:
             cmd = ''
-        if 'runner.py' in cmd and 'python' in cmd.lower():
+        if 'runner.py' in cmd and 'python' in cmd.lower() and '--test' not in cmd:
             alive.append(pid)
     return alive
 
@@ -459,6 +456,28 @@ def plan_data() -> dict:
         ('S5', '魅力补到 225（混合线初级前置）', V[2] >= 225, f'{V[2]}/225'),
         ('S6', '三维各 750 → 全 8 线初级', min(V) >= 750, f'最低 {min(V)}/750'),
     ]
+    # 隐藏职业哨兵状态（runs/career_unlock.json + config.yaml 的 career 段；展示用）
+    try:
+        import yaml as _yaml
+        _rawcfg = _yaml.safe_load((BASE / 'config.yaml').read_text('utf-8')) or {}
+        ccfg = _rawcfg.get('career') or {}
+    except Exception:
+        ccfg = {}
+    ud = read_json('career_unlock.json')
+    try:
+        alive = bool(scheduler_info().get('alive'))
+    except Exception:
+        alive = False
+    watch = {
+        'enabled': bool(ccfg.get('watch', True)),
+        'stop_study': bool(ccfg.get('stop_study_on_unlock', True)),
+        'interval': ccfg.get('check_interval_min', 60),
+        'last_check': ud.get('last_check'),
+        'alive': alive,
+        'events': [{'career': e.get('career'), 'name': e.get('name'), 'ts': e.get('ts'),
+                    'stopped': bool(e.get('stopped')), 'shot': e.get('shot')}
+                   for e in (ud.get('events') or [])[-6:]],
+    }
     total = sum(V)
     return {
         'ok': True, 'values': v, 'total': total, 'total_target': 2250,
@@ -468,6 +487,7 @@ def plan_data() -> dict:
         'steps': [[s[0], s[1], s[2], s[3]] for s in steps],
         'gates': gates,
         'updated': datetime.now().strftime('%H:%M:%S'),
+        'watch': watch,
     }
 
 
@@ -597,6 +617,7 @@ def editable_snapshot() -> dict:
     fc = cfg.get('friend_care') or {}
     emp = cfg.get('employed') or {}
     school = cfg.get('school') or {}
+    career = cfg.get('career') or {}
     return {
         'school_enabled': bool((tasks.get('school') or {}).get('enabled', True)),
         'school_attribute': str(school.get('attribute') or '力量'),
@@ -630,6 +651,9 @@ def editable_snapshot() -> dict:
         'employed_interval': emp.get('interval_seconds', 60),
         'gift_bag_enabled': bool((cfg.get('gift_bag') or {}).get('enabled', True)),
         'gift_bag_interval': (cfg.get('gift_bag') or {}).get('interval_seconds', 1800),
+        'career_watch': bool(career.get('watch', True)),
+        'career_stop_study': bool(career.get('stop_study_on_unlock', True)),
+        'career_interval': career.get('check_interval_min', 60),
     }
 
 
@@ -671,6 +695,9 @@ def apply_settings(updates: dict) -> dict:
         'employed_interval': ('employed.interval_seconds', 'int'),
         'gift_bag_enabled': ('gift_bag.enabled', 'bool'),
         'gift_bag_interval': ('gift_bag.interval_seconds', 'int'),
+        'career_watch': ('career.watch', 'bool'),
+        'career_stop_study': ('career.stop_study_on_unlock', 'bool'),
+        'career_interval': ('career.check_interval_min', 'int'),
     }
     data = S.load_raw()
     applied, rejected = {}, []
@@ -839,6 +866,10 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 .plansteps .st.done .tx{color:var(--sub)}
 .plansteps .st.done .pr{color:#9ca3af}
 .plansteps .st.cur{background:#f6f4ff;border-radius:8px;padding-left:6px;padding-right:6px}
+.watchbox .wrow{display:flex;justify-content:space-between;gap:8px;font-size:12.5px;padding:6px 0;border-top:1px dashed var(--line);align-items:baseline}
+.watchbox .wrow:first-child{border-top:0}
+.watchbox .wstate{font-size:12px;color:var(--sub);padding:2px 0 4px}
+.watchbox .wbadge{color:var(--ok);font-weight:600}
 .planlines{display:grid;grid-template-columns:1fr 1fr;gap:6px 8px}
 .planlines .ln{display:flex;justify-content:space-between;align-items:center;font-size:12.5px;padding:5px 8px;border:1px solid var(--line);border-radius:8px}
 .planlines .chipx{font-size:10.5px;padding:1px 6px;border-radius:999px;background:#f4f4f5;color:#a1a1aa;margin-left:4px}
@@ -901,6 +932,8 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
   <section class="card" id="planCard" data-page="plan">
     <h2>职业解锁计划 <span id="planMeta" style="font-weight:400;font-size:10.5px"></span></h2>
     <div class="planbars" id="planBars"></div>
+    <div class="subh">隐藏职业哨兵 <span id="watchMeta" style="font-weight:400;font-size:10.5px"></span></div>
+    <div class="watchbox" id="watchBox"></div>
     <div class="subh">进度录入（新号的当前数值，改完点保存）</div>
     <div class="plinedit" id="planEdit"></div>
     <div class="btnrow2"><button class="savebtn" id="btnPlanSave">保存进度</button><button class="savebtn ghost" id="btnPlanSync">🔄 自动识别</button></div>
@@ -1252,6 +1285,22 @@ function renderPlan(d){
     return '<div class="'+cls+'"><span class="dot2">'+dot+'</span><span class="tx">'+esc(s[0]+' · '+s[1])+'</span><span class="pr">'+esc(s[3])+'</span></div>';
   }).join('');
   $('#planLines').innerHTML=(d.lines||[]).map(l=>'<div class="ln"><span>'+esc(l.name)+'</span><span><span class="chipx'+(l.jr?' ok':'')+'">见习</span><span class="chipx'+(l.ch?' ok':'')+'">初级</span></span></div>').join('');
+  const w=d.watch||{};
+  if($('#watchMeta')) $('#watchMeta').textContent=w.last_check?('上次检查 '+String(w.last_check).slice(11,16)):'';
+  if($('#watchBox')){
+    let st;
+    if(!w.enabled) st='监控已关闭（设置页「职业」区可开）';
+    else if(!w.alive) st='调度器未运行 — 启动后自动监控';
+    else st='监控中 · '+(w.interval?('每节课后 + 每 '+w.interval+' 分钟兜底'):'每节课后')+(w.stop_study?' · 解锁后自动停学':' · 仅通知');
+    let wh='<div class="wstate">'+st+'</div>';
+    const evs=(w.events||[]).slice().reverse();
+    if(evs.length){
+      wh+=evs.map(e=>'<div class="wrow"><span class="wbadge">🎉 '+esc(e.career||'')+'（见习·'+esc(e.name||'?')+'）</span><span style="color:var(--sub);font-size:11.5px">'+esc(String(e.ts||'').slice(5,16))+'</span></div>').join('');
+    } else {
+      wh+='<div class="wrow" style="color:var(--sub)"><span>尚未解锁（武术家 / 梦境旅人 / 大明星）</span><span></span></div>';
+    }
+    $('#watchBox').innerHTML=wh;
+  }
   if(!planDirty) planBuildEdit(d.values||{});
 }
 async function refreshPlan(){ try{ renderPlan(await j('/api/plan')); }catch(e){} }
@@ -1400,11 +1449,18 @@ function renderSettings(ed){
     FG('福袋',[
     '<div class="frow"><span class="k">福袋领取</span><button class="sw'+(ed.gift_bag_enabled?' on':'')+'" id="swGiftBag" title="开=定时遍历好友领取系绳福袋"></button></div>',
     '<div class="frow"><span class="k">福袋扫描间隔（秒）</span><input type="number" id="numGbInt" min="60" step="60" value="'+(ed.gift_bag_interval??'')+'"></div>',
+    ])+
+    FG('职业',[
+    '<div class="frow"><span class="k">隐藏职业解锁监控</span><button class="sw'+(ed.career_watch?' on':'')+'" id="swCareer" title="开=每节课结算后读职业树；武术家/梦境旅人/大明星解锁时记录并推送通知"></button></div>',
+    '<div class="frow"><span class="k">解锁后自动停学</span><button class="sw'+(ed.career_stop_study?' on':'')+'" id="swCareerStop" title="开=解锁时自动关闭学习任务（等你安排下一阶段）"></button></div>',
+    '<div class="frow"><span class="k">兜底检查间隔（分钟）</span><input type="number" id="numCareerInt" min="0" step="10" title="0 = 只每节课后检查" value="'+(ed.career_interval??60)+'"></div>',
     ]);
   $('#swSchool').onclick=()=>{ $('#swSchool').classList.toggle('on'); setDirty=true; };
   $('#swFC').onclick=()=>{ $('#swFC').classList.toggle('on'); setDirty=true; };
   $('#swEmp').onclick=()=>{ $('#swEmp').classList.toggle('on'); setDirty=true; };
   $('#swGiftBag').onclick=()=>{ $('#swGiftBag').classList.toggle('on'); setDirty=true; };
+  $('#swCareer').onclick=()=>{ $('#swCareer').classList.toggle('on'); setDirty=true; };
+  $('#swCareerStop').onclick=()=>{ $('#swCareerStop').classList.toggle('on'); setDirty=true; };
 }
 
 async function saveSettings(){
@@ -1420,6 +1476,10 @@ async function saveSettings(){
   if(!!empEnabledNew !== !!setInit.employed_enabled) updates.employed_enabled=empEnabledNew;
   const gbEnabledNew = $('#swGiftBag').classList.contains('on');
   if(!!gbEnabledNew !== !!setInit.gift_bag_enabled) updates.gift_bag_enabled=gbEnabledNew;
+  const cwNew = $('#swCareer').classList.contains('on');
+  if(!!cwNew !== !!setInit.career_watch) updates.career_watch=cwNew;
+  const csNew = $('#swCareerStop').classList.contains('on');
+  if(!!csNew !== !!setInit.career_stop_study) updates.career_stop_study=csNew;
   const getv=id=>($(id)?$(id).value.trim():'');
   const num=(id,key)=>{const v=getv(id); if(v==='')return; const n=parseInt(v,10); if(!isNaN(n)&&n!==setInit[key]) updates[key]=n;};
   const selc=(id,key)=>{const v=getv(id); if(v&&v!==setInit[key]) updates[key]=v;};
@@ -1429,7 +1489,7 @@ async function saveSettings(){
   num('#numCoin','coin_threshold'); num('#numHour','daily_hour_limit'); num('#numWorkStop','work_stop_hours'); num('#numSchoolTimes','school_times');
   num('#numVisit','visit_times'); num('#numPk','pk_times'); num('#numAdv','adventure_times');
   txtc('#txtPkOnly','pk_only'); txtc('#txtPkSkip','pk_skip'); num('#numPkLv','pk_max_level'); txtc('#txtPkHelper','pk_helper');
-  num('#numEnergy','care_energy'); num('#numClean','care_clean'); num('#numExchange','care_exchange'); num('#numGbInt','gift_bag_interval');
+  num('#numEnergy','care_energy'); num('#numClean','care_clean'); num('#numExchange','care_exchange'); num('#numGbInt','gift_bag_interval'); num('#numCareerInt','career_interval');
   txtc('#txtFCName','friend_care_name'); num('#numFCInt','friend_care_interval'); num('#numEmpInt','employed_interval');
   if(!Object.keys(updates).length){ msg.className='saveMsg'; msg.textContent='没有改动'; btn.disabled=false; return; }
   try{

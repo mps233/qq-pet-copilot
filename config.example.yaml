@@ -224,6 +224,17 @@ employed:
   # 立刻召回（进被雇佣面板直接点"现在召回"）
   action: 等到25/75（小于45min）
 
+career:
+  # 隐藏职业解锁哨兵：每节课结算后读职业树，监控武术家/梦境旅人/大明星是否解锁；
+  # 解锁时记录事件（仪表盘「职业」页横幅 + Hermes 定时推 Telegram 通知）
+  watch: true
+  # 发现解锁后自动停止学习（关闭 tasks.school.enabled；日志/仪表盘会注明哨兵触发）
+  stop_study_on_unlock: true
+  # 兜底检查间隔（分钟）：除每节课结算后检查外，每隔这么久也检查一次；0 = 只每节课后查
+  check_interval_min: 60
+  # 监控的目标职业线（逗号分隔）
+  careers: 武术家,梦境旅人,大明星
+
 notify:
   # 场景多次重试仍失败时的告警通知（主任务通知后调度器退出，需人工查看）
   # Windows 桌面 Toast 通知：true/false

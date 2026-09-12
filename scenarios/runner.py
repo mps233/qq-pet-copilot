@@ -74,6 +74,8 @@ from datetime import date, datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.adb.device import Device
+from src.career_watch import (check_career_tree, load_unlock_data,
+                              save_unlock_data, TARGETS_DEFAULT, touch_last_check)
 from src.coins import read_coins
 from src.config import (
     MAIN_TASK_KEYS,
@@ -1071,6 +1073,15 @@ class TaskQueueRunner(Runner):
         self._main_order: list[str] = list(MAIN_TASK_KEYS)
         self._current_task: str | None = None  # 正在执行的任务名（队列状态展示用）
         self._sched_day: date | None = None  # 调度日期：跨天时清除任务"当天不可继续"标记
+        self._career_check_due = False  # 学习结算后待检查职业树（职业解锁哨兵）
+        # 上次哨兵检查时间（从 runs/career_unlock.json 恢复：频繁重启时启动检查不重复耗时）
+        self._career_last_check: datetime | None = None
+        try:
+            _lc = load_unlock_data().get('last_check')
+            if _lc:
+                self._career_last_check = datetime.strptime(_lc, '%Y-%m-%d %H:%M:%S')
+        except Exception:
+            self._career_last_check = None
 
     def run(self) -> None:
         if self.use_opener and not self.skip_opener:
@@ -1082,6 +1093,9 @@ class TaskQueueRunner(Runner):
         self._apply_tasks_config(tasks, order)
         self._sched_day = datetime.now().date()  # 调度日期：跨天时清除任务"当天不可继续"标记
         log(f'任务队列调度已启用，执行顺序: {" > ".join(TASK_NAMES[k] for k in order)}')
+        # 职业解锁哨兵：启动先查一次（防停机期间解锁漏报；10 分钟内刚查过则跳过）
+        if self._career_startup_check_due():
+            self._career_check(tasks, order, '启动检查')
         while True:
             try:
                 # 热修改：每轮调度前重读配置（含 tasks.order 与各任务调度设置）
@@ -1093,6 +1107,14 @@ class TaskQueueRunner(Runner):
                 # 队列状态写 runs/queue_status.json，供 GUI 状态条显示
                 # （在睡前写，睡眠期间 GUI 读到的是最新状态）
                 self._write_queue_status(tasks, order)
+                # 职业解锁哨兵：学习结算后优先检查；其余时段按兜底间隔检查
+                # （收尾窗口内不插检查，别让检查把即将到点的收尾挤后）
+                if self._career_check_due:
+                    self._career_check_due = False
+                    self._career_check(tasks, order, '学习结算后')
+                elif (not executed and self._career_interval_due()
+                        and not self._career_blocked_by_pending()):
+                    self._career_check(tasks, order, '定时检查')
                 if not executed:
                     if not self._sleep_until_next(tasks, order):
                         return
@@ -1284,6 +1306,8 @@ class TaskQueueRunner(Runner):
             if not pend.finish_pending():
                 return None  # 尚未结束（已重估收尾时间），本轮继续等
             # 收尾完成（已计数），本轮继续选择下一个主任务
+            if pend is self.school:
+                self._career_check_due = True  # 一节课结算完，职业哨兵检查
         if self.employed_window_active():
             return None  # 被雇佣时间段内主任务不触发
         now = datetime.now()
@@ -1341,7 +1365,9 @@ class TaskQueueRunner(Runner):
         wait = (pend.pending['until'] - datetime.now()).total_seconds()
         if wait <= 0:
             log(f"{pend.pending['desc']}: 已到收尾时间，优先收尾")
-            pend.finish_pending()
+            done = pend.finish_pending()
+            if done and pend is self.school:
+                self._career_check_due = True  # 一节课结算完，职业哨兵检查
             return 'finish'
         if wait <= PENDING_FINISH_HORIZON:
             log(f"{pend.pending['desc']}: 即将在 {wait:.0f}s 后收尾，先不执行其他任务")
@@ -1390,6 +1416,122 @@ class TaskQueueRunner(Runner):
             self._employed_last_check = datetime.now()
         finally:
             self._current_task = None
+
+    # ---- 职业解锁哨兵（runs/career_unlock.json + 隐藏线解锁检测） ----
+
+    def _career_startup_check_due(self) -> bool:
+        """启动检查是否该跑：距上次检查超过 10 分钟才查（防频繁重启时重复耗时）。"""
+        ccfg = getattr(self._last_cfg, 'career', None)
+        if ccfg is None or not getattr(ccfg, 'watch', False):
+            return False
+        if self._career_last_check is None:
+            return True
+        return (datetime.now() - self._career_last_check).total_seconds() >= 600
+
+    def _career_interval_due(self) -> bool:
+        """兜底检查是否到点（每 check_interval_min 分钟一次；0 = 关闭兜底）。"""
+        ccfg = getattr(self._last_cfg, 'career', None)
+        if ccfg is None or not getattr(ccfg, 'watch', False):
+            return False
+        try:
+            minutes = int(getattr(ccfg, 'check_interval_min', 0) or 0)
+        except (TypeError, ValueError):
+            minutes = 0
+        if minutes <= 0:
+            return False
+        if self._career_last_check is None:
+            return True
+        return (datetime.now() - self._career_last_check).total_seconds() >= minutes * 60
+
+    def _career_blocked_by_pending(self) -> bool:
+        """收尾窗口（PENDING_FINISH_HORIZON 内即将到点）时不插检查，先收尾。"""
+        pend = self._main_pending_scen()
+        return (pend is not None and
+                (pend.pending['until'] - datetime.now()).total_seconds()
+                <= PENDING_FINISH_HORIZON)
+
+    def _career_check(self, tasks: dict, order: list, reason: str) -> None:
+        """职业解锁哨兵检查一轮：读职业树（三维同步 + 隐藏线解锁判定），失败只记日志。
+
+        触发时机：每节课结算后 / 调度器启动时 / 每 check_interval_min 分钟兜底；
+        发现解锁 → 记录事件（仪表盘横幅 + Hermes 定时通知脚本消费）+ 可选自动停止学习。
+        """
+        ccfg = getattr(self._last_cfg, 'career', None)
+        if ccfg is None or not getattr(ccfg, 'watch', False):
+            return
+        targets = [t.strip() for t in str(getattr(ccfg, 'careers', '') or '').split(',')
+                   if t.strip()] or list(TARGETS_DEFAULT)
+        self._career_last_check = datetime.now()
+        self._current_task = '职业解锁检查'
+        self._write_queue_status(tasks, order)  # 检查期间 GUI 状态条显示当前动作
+        try:
+            result = check_career_tree(self.school, targets=targets, log=log)
+        except Exception as e:
+            result = {'ok': False, 'reason': f'{type(e).__name__}: {e}'}
+            self._back_to_main(f'职业哨兵[{reason}]失败后')
+        finally:
+            self._current_task = None
+            self._write_queue_status(tasks, order)
+        try:
+            touch_last_check()
+        except Exception:
+            pass
+        if not result.get('ok'):
+            log(f'职业哨兵[{reason}]: 本轮未完成（{result.get("reason") or "未知原因"}），跳过')
+            return
+        attrs = result.get('attrs') or {}
+        states = result.get('states') or {}
+        unlocks = result.get('unlocks') or {}
+        attrs_txt = (f"力{attrs.get('力量','?')}/智{attrs.get('智力','?')}/魅{attrs.get('魅力','?')}"
+                     if attrs else '三维未读到')
+        if unlocks:
+            log(f"职业哨兵[{reason}]: 检测到解锁 {'、'.join(unlocks.keys())} · {attrs_txt}")
+            self._career_on_unlock(unlocks, attrs, result, tasks)
+        else:
+            locked_txt = '、'.join(t for t in targets if states.get(t, {}).get('state') == 'locked')
+            unknown = [t for t in targets if states.get(t, {}).get('state') != 'locked']
+            extra = f"（{'、'.join(unknown)} 本轮未读到）" if unknown else ''
+            log(f'职业哨兵[{reason}]: 隐藏线未解锁（{locked_txt or "未读到"}）· {attrs_txt} {extra}'.rstrip())
+
+    def _career_on_unlock(self, unlocks: dict, attrs: dict, result: dict,
+                          tasks: dict | None = None) -> None:
+        """解锁处理：写事件文件（仪表盘 + 通知脚本消费），可选自动停止学习。"""
+        shots = result.get('unlock_shots') or {}
+        ccfg = getattr(self._last_cfg, 'career', None)
+        stop = bool(getattr(ccfg, 'stop_study_on_unlock', True))
+        data = load_unlock_data()
+        known = {e.get('career') for e in data.get('events', [])}
+        fresh = [(c, n) for c, n in unlocks.items() if c not in known]
+        if not fresh:
+            return
+        now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        for career, name in fresh:
+            data['events'].append({
+                'career': career, 'name': name, 'ts': now_str, 'attrs': attrs,
+                'shot': shots.get(career), 'stopped': bool(stop), 'notified_at': None,
+            })
+            log(f'🎉 职业解锁：「{career}」（见习·{name}）'
+                + ('——已自动停止学习（职业哨兵触发）' if stop else ''))
+        save_unlock_data(data)
+        if stop:
+            self._career_stop_study(tasks)
+
+    def _career_stop_study(self, tasks: dict | None = None) -> None:
+        """哨兵触发：关闭学习任务（写 config.yaml，下一轮热加载生效；仪表盘可见）。"""
+        try:
+            import src.settings as S
+            raw = S.load_raw()
+            S.set_value(raw, 'tasks.school.enabled', False)
+            S.save_raw(raw)
+            log('职业哨兵: 学习任务已停止（设置页「只打工不学习」开关=开；'
+                '要恢复学习在仪表盘设置里关掉它即可）')
+        except Exception as e:
+            log(f'职业哨兵: 停止学习写入配置失败: {e}')
+            return
+        if tasks:
+            t = tasks.get('school')
+            if t is not None:
+                t.cfg.enabled = False  # 内存副本同步：本循环内立即不再调度学习
 
     def _execute(self, task: _QueueTask, tasks: dict, now: datetime,
                  order: list) -> None:
@@ -1448,6 +1590,9 @@ class TaskQueueRunner(Runner):
                 task.next_at = now
             else:
                 task.next_at = self._success_at(cfg, now)
+                if task.key == 'school':
+                    # 一节课在本轮内完整结算（无延时收尾）→ 职业哨兵检查
+                    self._career_check_due = True
         else:
             task.dead = True
             log(f'{task.name} 当天不可继续')
@@ -1686,6 +1831,21 @@ def run_test(name: str) -> None:
         cfg = load_config()
         _open(serial=cfg.adb.device_serial or None, adb_path=find_adb(cfg.adb.path))
         log('opener 测试完成：宠物主页已打开')
+        return
+
+    if name == 'career.check':
+        # 职业树检查（不启动调度器；手机需能回宠物主页面）：
+        # 主页面 → 出门 → 小镇 → 职业树，读三维 + 判定三条隐藏线是否解锁
+        from src.career_watch import check_career_tree as _check, TARGETS_DEFAULT as _CT
+        cfgc = load_config().career
+        targets = [t.strip() for t in str(getattr(cfgc, 'careers', '') or '').split(',')
+                   if t.strip()] or list(_CT)
+        sc = SchoolScenario()
+        sc.ensure_main_page()
+        result = _check(sc, targets=targets, log=log)
+        log(f'职业树检查: ok={result.get("ok")} reason={result.get("reason")} '
+            f'attrs={result.get("attrs")} states={result.get("states")} '
+            f'unlocks={result.get("unlocks")}')
         return
 
     scen_name, _, method = name.partition('.')

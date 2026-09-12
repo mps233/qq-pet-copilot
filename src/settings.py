@@ -79,6 +79,10 @@ DEFAULTS = {
     'recover.emulator_restart_cmd': '',
     'notify.win_toast': True,
     'notify.onepush_config': '',
+    'career.watch': True,
+    'career.stop_study_on_unlock': True,
+    'career.check_interval_min': 60,
+    'career.careers': '武术家,梦境旅人,大明星',
 }
 
 
@@ -116,7 +120,7 @@ def validate_field(key: str, value):
         except ValueError:
             return False, DoubleQuotedScalarString(str(default))
     if key in ('friend_care.friend_name', 'hire_friend.friend_name', 'work.hire_name',
-               'pk.only_names', 'pk.skip_names', 'pk.helper_names'):
+               'pk.only_names', 'pk.skip_names', 'pk.helper_names', 'career.careers'):
         return True, str(value).strip()
     if key == 'pk.max_level':
         # -1 = 只打等级比自己低的（动态读取主人等级；没有可打时兜底任意等级）；0 = 不限；>0 = 只打等级 ≤ N
@@ -185,7 +189,8 @@ def validate_field(key: str, value):
         except (TypeError, ValueError):
             return False, default
     if key == 'notify.win_toast' or key == 'adventure.skip_bad_weather' \
-            or key == 'emulator.device_spoof' or key == 'gui.mirror':
+            or key == 'emulator.device_spoof' or key == 'gui.mirror' \
+            or key in ('career.watch', 'career.stop_study_on_unlock'):
         return (True, value) if isinstance(value, bool) else (False, default)
     if key == 'notify.onepush_config':
         # OnePush 推送配置（YAML，支持多行）：留空，或能解析出含 provider 的字典
