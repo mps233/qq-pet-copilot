@@ -519,6 +519,7 @@ def editable_snapshot() -> dict:
     adv = cfg.get('adventure') or {}
     care = cfg.get('care') or {}
     fc = cfg.get('friend_care') or {}
+    emp = cfg.get('employed') or {}
     return {
         'school_enabled': bool((tasks.get('school') or {}).get('enabled', True)),
         'work_location': work.get('location'),
@@ -543,6 +544,9 @@ def editable_snapshot() -> dict:
         'friend_care_name': str(fc.get('friend_name') or ''),
         'friend_care_interval': fc.get('interval_seconds', 120),
         'friend_care_method': str(fc.get('method') or 'ocr检测'),
+        'employed_enabled': bool(emp.get('enabled', False)),
+        'employed_action': str(emp.get('action') or '等到25/75（小于45min）'),
+        'employed_interval': emp.get('interval_seconds', 60),
         'gift_bag_enabled': bool((cfg.get('gift_bag') or {}).get('enabled', True)),
         'gift_bag_interval': (cfg.get('gift_bag') or {}).get('interval_seconds', 1800),
     }
@@ -577,6 +581,9 @@ def apply_settings(updates: dict) -> dict:
         'friend_care_name': ('friend_care.friend_name', None),
         'friend_care_interval': ('friend_care.interval_seconds', 'int'),
         'friend_care_method': ('friend_care.method', None),
+        'employed_enabled': ('employed.enabled', 'bool'),
+        'employed_action': ('employed.action', None),
+        'employed_interval': ('employed.interval_seconds', 'int'),
         'gift_bag_enabled': ('gift_bag.enabled', 'bool'),
         'gift_bag_interval': ('gift_bag.interval_seconds', 'int'),
     }
@@ -837,6 +844,13 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
     <div class="form" id="setForm"></div>
     <button class="savebtn" id="btnSave">保存设置</button>
     <div class="saveMsg" id="saveMsg"></div>
+    <div class="form" style="margin-top:16px">
+      <div class="fsec"><div class="fsect">小号工具人</div>
+        <div class="frow"><span class="k">大号名称</span><input type="text" id="txtAltMain" placeholder="大号的主人昵称或宠物名（服务端匹配）"></div>
+        <div class="frow"><span class="k">一键配置小号</span><button class="minibtn" id="btnAltPreset" style="padding:7px 14px;font-size:12.5px">应用小号预设</button></div>
+      </div>
+      <div class="saveMsg" id="presetMsg"></div>
+    </div>
     <div class="subh">运行信息（只读）</div>
     <div class="cfg" id="cfgList"></div>
   </section>
@@ -1206,12 +1220,18 @@ function renderSettings(ed){
     '<div class="frow"><span class="k">好友护理间隔（秒）</span><input type="number" id="numFCInt" min="30" step="30" value="'+(ed.friend_care_interval??'')+'"></div>',
     '<div class="frow"><span class="k">好友护理方式</span>'+sel('selFCMethod', ['ocr检测','一键护理'], ed.friend_care_method)+'</div>',
     ])+
+    FG('被雇佣（帮好友打工）',[
+    '<div class="frow"><span class="k">被雇佣托管</span><button class="sw'+(ed.employed_enabled?' on':'')+'" id="swEmp" title="开=定时出门检查是否被好友雇去打工"></button></div>',
+    '<div class="frow"><span class="k">被雇佣处理</span>'+sel('selEmpAction', ['等到25/75（小于45min）','等到25/75','立刻召回','让利雇主（尽早召回）'], ed.employed_action)+'</div>',
+    '<div class="frow"><span class="k">检查间隔（秒）</span><input type="number" id="numEmpInt" min="30" step="30" value="'+(ed.employed_interval??'')+'"></div>',
+    ])+
     FG('福袋',[
     '<div class="frow"><span class="k">福袋领取</span><button class="sw'+(ed.gift_bag_enabled?' on':'')+'" id="swGiftBag" title="开=定时遍历好友领取系绳福袋"></button></div>',
     '<div class="frow"><span class="k">福袋扫描间隔（秒）</span><input type="number" id="numGbInt" min="60" step="60" value="'+(ed.gift_bag_interval??'')+'"></div>',
     ]);
   $('#swSchool').onclick=()=>{ $('#swSchool').classList.toggle('on'); setDirty=true; };
   $('#swFC').onclick=()=>{ $('#swFC').classList.toggle('on'); setDirty=true; };
+  $('#swEmp').onclick=()=>{ $('#swEmp').classList.toggle('on'); setDirty=true; };
   $('#swGiftBag').onclick=()=>{ $('#swGiftBag').classList.toggle('on'); setDirty=true; };
 }
 
@@ -1224,19 +1244,21 @@ async function saveSettings(){
   if(!!schoolEnabledNew !== !!setInit.school_enabled) updates.school_enabled=schoolEnabledNew;
   const fcEnabledNew = $('#swFC').classList.contains('on');
   if(!!fcEnabledNew !== !!setInit.friend_care_enabled) updates.friend_care_enabled=fcEnabledNew;
+  const empEnabledNew = $('#swEmp').classList.contains('on');
+  if(!!empEnabledNew !== !!setInit.employed_enabled) updates.employed_enabled=empEnabledNew;
   const gbEnabledNew = $('#swGiftBag').classList.contains('on');
   if(!!gbEnabledNew !== !!setInit.gift_bag_enabled) updates.gift_bag_enabled=gbEnabledNew;
   const getv=id=>($(id)?$(id).value.trim():'');
   const num=(id,key)=>{const v=getv(id); if(v==='')return; const n=parseInt(v,10); if(!isNaN(n)&&n!==setInit[key]) updates[key]=n;};
   const selc=(id,key)=>{const v=getv(id); if(v&&v!==setInit[key]) updates[key]=v;};
   const txtc=(id,key)=>{const v=getv(id); if(v!==(setInit[key]||'')) updates[key]=v;};
-  selc('#selLoc','work_location'); selc('#selDur','work_duration'); selc('#selCare','care_method'); selc('#selFCMethod','friend_care_method');
+  selc('#selLoc','work_location'); selc('#selDur','work_duration'); selc('#selCare','care_method'); selc('#selFCMethod','friend_care_method'); selc('#selEmpAction','employed_action');
   txtc('#txtHire','hire_name');
   num('#numCoin','coin_threshold'); num('#numHour','daily_hour_limit'); num('#numWorkStop','work_stop_hours');
   num('#numVisit','visit_times'); num('#numPk','pk_times'); num('#numAdv','adventure_times');
   txtc('#txtPkOnly','pk_only'); txtc('#txtPkSkip','pk_skip'); num('#numPkLv','pk_max_level'); txtc('#txtPkHelper','pk_helper');
   num('#numEnergy','care_energy'); num('#numClean','care_clean'); num('#numExchange','care_exchange'); num('#numGbInt','gift_bag_interval');
-  txtc('#txtFCName','friend_care_name'); num('#numFCInt','friend_care_interval');
+  txtc('#txtFCName','friend_care_name'); num('#numFCInt','friend_care_interval'); num('#numEmpInt','employed_interval');
   if(!Object.keys(updates).length){ msg.className='saveMsg'; msg.textContent='没有改动'; btn.disabled=false; return; }
   try{
     const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({updates})});
@@ -1249,6 +1271,28 @@ async function saveSettings(){
 $('#btnSave').onclick=saveSettings;
 $('#setForm').addEventListener('input',()=>{setDirty=true});
 $('#setForm').addEventListener('click',()=>{setDirty=true});
+
+$('#btnAltPreset').onclick=async()=>{
+  const name=($('#txtAltMain')?$('#txtAltMain').value:'').trim();
+  const msg=$('#presetMsg');
+  if(!name){ msg.className='saveMsg err'; msg.textContent='先填大号名称（主人昵称或宠物名都能匹配）'; return; }
+  const btn=$('#btnAltPreset'); btn.disabled=true;
+  msg.className='saveMsg'; msg.textContent='应用中…';
+  try{
+    const r=await fetch('/api/preset/alt',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+    const d=await r.json();
+    if(d.ok){
+      setDirty=false;
+      msg.className='saveMsg';
+      msg.textContent='✅ 小号工具人模式已应用（'+Object.keys(d.applied||{}).length+' 项），下一轮调度生效';
+      refreshData();
+    } else {
+      msg.className='saveMsg err';
+      msg.textContent='未完全应用：'+((d.rejected||[]).join('；')||'未知');
+    }
+  }catch(e){ msg.className='saveMsg err'; msg.textContent='应用失败：'+e.message; }
+  btn.disabled=false;
+};
 
 let shotUrl=null,shotBusy=false;
 async function refreshShot(force){
@@ -1394,6 +1438,23 @@ class Handler(BaseHTTPRequestHandler):
                 body = json.dumps({'sync': result, 'plan': plan_data()},
                                   ensure_ascii=False).encode('utf-8')
                 self._send(200, 'application/json; charset=utf-8', body)
+            elif u.path == '/api/preset/alt':
+                length = int(self.headers.get('Content-Length') or 0)
+                payload = json.loads(self.rfile.read(length).decode('utf-8') or '{}')
+                name = str(payload.get('name') or '').strip()
+                if not name:
+                    body = json.dumps({'ok': False, 'error': '缺少大号名称', 'applied': {}, 'rejected': []},
+                                      ensure_ascii=False).encode('utf-8')
+                    self._send(400, 'application/json; charset=utf-8', body)
+                else:
+                    from src.presets import apply_alt_preset
+                    result = apply_alt_preset(name, dry_run=bool(payload.get('dry')))
+                    result['ok'] = not result['rejected']
+                    audit(f'应用小号预设(来自 {self.client_address[0]}): 大号={name} '
+                          f'→ 生效 {len(result["applied"])} 项')
+                    body = json.dumps(result, ensure_ascii=False).encode('utf-8')
+                    self._send(200 if result['ok'] else 400,
+                               'application/json; charset=utf-8', body)
             else:
                 self._send(404, 'text/plain', b'not found')
         except Exception as e:

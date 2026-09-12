@@ -99,6 +99,10 @@ def validate_field(key: str, value):
         return (True, value) if value in ('10分钟', '45分钟', '2小时') else (False, default)
     if key == 'care.method' or key == 'friend_care.method':
         return (True, value) if value in ('ocr检测', '一键护理') else (False, default)
+    if key == 'employed.action':
+        if value in ('等到25/75（小于45min）', '等到25/75', '立刻召回', '让利雇主（尽早召回）'):
+            return True, value
+        return False, default
     if key in ('friend_care.time_range', 'employed.time_range', 'hire_friend.time_range'):
         try:
             start_s, end_s = str(value).split('-', 1)

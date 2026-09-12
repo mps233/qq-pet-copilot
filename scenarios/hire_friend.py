@@ -19,7 +19,8 @@
    runs/hire_friend_progress.json，同时计入一次打工（runs/work_progress.json）
 
 配置（config.yaml 的 hire_friend 段）：enabled 开关 / time_range 雇佣时间段
-（HH:MM-HH:MM）/ interval_seconds 调度间隔（秒）/ friend_name 雇佣好友名称 /
+（HH:MM-HH:MM）/ interval_seconds 调度间隔（秒）/ friend_name 雇佣好友名称
+（多个用逗号/顿号分隔，按序取第一个能在好友轮播里找到的）/
 times_per_day 每天雇佣次数（0 不雇佣）。
 
 运行：python scenarios/hire_friend.py            （Ctrl+C 停止）
@@ -195,10 +196,12 @@ class FriendHireScenario(FriendCareScenario):
         if not hf.enabled:
             log('好友雇佣未启用，跳过')
             return False
-        name = hf.friend_name.strip()
-        if not name:
+        names = [s.strip() for s in re.split(r'[，,、;；]', hf.friend_name or '') if s.strip()]
+        if not names:
             log('未配置雇佣好友名称，跳过好友雇佣')
             return False
+        if len(names) > 1:
+            log(f'雇佣好友列表: {" / ".join(names)}（按序取第一个能找到的）')
         if max_times is None:
             max_times = hf.times_per_day
         today, done, history = load_progress(PROGRESS_FILE)
@@ -224,7 +227,18 @@ class FriendHireScenario(FriendCareScenario):
             round_no += 1
             log(f'===== 雇佣好友第 {round_no} 轮 =====')
             self.ensure_main_page()
-            self.goto_friend_home(name)
+            last_err = None
+            for cand in names:
+                try:
+                    self.goto_friend_home(cand)
+                    break
+                except RuntimeError as e:
+                    if '未找到' not in str(e):
+                        raise
+                    last_err = e
+                    log(f'雇佣好友: 好友轮播里没有 {cand}，试下一个')
+            else:
+                raise last_err or RuntimeError('雇佣好友: 列表里的好友都不在轮播里')
             self.wait_hire_ready()
             self._hire_and_work()
             if self.defer_wait:
