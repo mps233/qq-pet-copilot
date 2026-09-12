@@ -579,7 +579,7 @@ HTML = r"""<!doctype html>
 <meta name="theme-color" content="#f6f7f9">
 <title>QQ宠物托管</title>
 <style>
-:root{--bg:#f6f7f9;--card:#fff;--line:#e6e8ee;--text:#111827;--sub:#6b7280;--accent:#533afd;--ok:#16a34a;--warn:#b45309}
+:root{--bg:#f6f7f9;--card:#fff;--line:#e6e8ee;--text:#111827;--sub:#6b7280;--accent:#533afd;--ok:#16a34a;--warn:#b45309;--gold:#D4A017;--gold-d:#B8860B}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%;overflow-x:hidden}
 header{position:sticky;top:0;z-index:10;background:rgba(246,247,249,.9);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--line);padding:10px 14px;display:flex;flex-direction:column;align-items:stretch;gap:0;padding-top:calc(10px + env(safe-area-inset-top))}
@@ -672,7 +672,8 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 .advlist .ai{color:var(--sub);font-size:12px;flex:none;width:112px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .advlist .ag{color:var(--sub);font-size:11.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
 .advlist .av{font-weight:650;flex:none;min-width:44px;text-align:right}
-.advlist .pos{color:var(--ok)} .advlist .neg{color:#dc2626} .advlist .zero{color:#9ca3af}
+.advlist .pos{color:var(--gold-d)} .advlist .neg{color:#dc2626} .advlist .zero{color:#9ca3af}
+#coins{color:var(--gold)}
 .minibtn{border:1px solid var(--line);background:#fff;border-radius:6px;padding:2px 8px;font-size:11px;color:var(--sub)}
 .minibtn.on{background:var(--accent);border-color:var(--accent);color:#fff}
 .planbars .pb{margin-top:10px}
@@ -940,7 +941,7 @@ function renderAdventure(d){
   if(!d||!d.ok){const m=$('#advMeta');if(m)m.textContent='暂无数据';return}
   $('#advMeta').textContent='共 '+d.n+' 把 · 今日 '+(d.today_n||0)+' 把（'+((d.today_net||0)>0?'+':'')+(d.today_net||0)+'） · 更新 '+(d.updated||'');
   const big=$('#advNet');big.textContent=(d.net>0?'+':'')+d.net;
-  big.style.color=d.net>0?'var(--ok)':(d.net<0?'#dc2626':'');
+  big.style.color=d.net>0?'var(--gold)':(d.net<0?'#dc2626':'');
   $('#advNetHint').textContent='金币收益合计（结算页口径） · 平均 '+(d.avg>0?'+':'')+d.avg+'/把';
   $('#advSub').textContent='有收益 '+d.win+' 把 · 零收益 '+d.zero+' 把';
   let ch='';
