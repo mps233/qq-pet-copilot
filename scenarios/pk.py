@@ -15,6 +15,10 @@
 开始前检查：体力/清洁 都 >= 本轮计划局数 x 5 才开跑，
 不足则先喂食/洗澡补充到所需值（计划局数 x 5）。
 
+目标过滤（可选，config.yaml 的 pk 段）：only_names / skip_names（玩家昵称，
+逗号分隔，部分匹配）与 max_level（只打等级 ≤ N 的好友）；进入每个好友后、
+点 PK 前判定，不符条件直接切下一个。
+
 运行方式（同 visit.py）：run() 独立运行回主页面。
 
 运行：python scenarios/pk.py            （Ctrl+C 停止）
@@ -27,6 +31,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from src.ocr import ocr_fullscreen, ocr_texts
 from src.progress import (
     PK_PROGRESS_FILE,
     load_progress,
@@ -47,6 +52,9 @@ PK_ROUND_CAP = 16     # 一次 run() 最多 PK 局数（超出由执行器下一
 PK_STAT_COST = 5      # 每局消耗体力/清洁
 PK_TIMEOUT_STREAK_LIMIT = 2  # 连续几次"PK 结果超时"就临时推迟 PK 任务
 
+# 好友宠物页顶栏"⭐等级"的 OCR 区域（x1, y1, x2, y2，1080x2412 参考分辨率，运行时按实际尺寸换算）
+FRIEND_LEVEL_REGION = (190, 270, 460, 380)
+
 PROGRESS_FILE = PK_PROGRESS_FILE
 
 
@@ -58,7 +66,82 @@ class PKScenario(VisitScenario):
     def __init__(self, dev=None):
         DeviceScenario.__init__(self, dev)  # 跳过 VisitScenario 的踩踩字段/日志
         self.times_per_day = self.cfg.pk.times_per_day
-        log(f'每天 PK 次数: {self.times_per_day if self.times_per_day else "不限"}')
+        # PK 目标过滤（只打/跳过名单、等级上限）；runner 热加载时重新同步
+        self.only_names = str(getattr(self.cfg.pk, 'only_names', '') or '').strip()
+        self.skip_names = str(getattr(self.cfg.pk, 'skip_names', '') or '').strip()
+        self.max_level = int(getattr(self.cfg.pk, 'max_level', 0) or 0)
+        self.sync_filters()
+        log(f'每天 PK 次数: {self.times_per_day if self.times_per_day else "不限"}'
+            + (f'，只打: {self.only_names}' if self.only_names else '')
+            + (f'，跳过: {self.skip_names}' if self.skip_names else '')
+            + (f'，只打等级≤{self.max_level}' if self.max_level else ''))
+
+    def sync_filters(self) -> None:
+        """把只打/跳过名单字符串解析为列表（初始化与配置热加载共用）。
+
+        统一去掉所有空白（含全角空格），匹配用。
+        """
+        self._only_list = [x for x in (''.join(s.split()) for s in str(self.only_names or '').split(',')) if x]
+        self._skip_list = [x for x in (''.join(s.split()) for s in str(self.skip_names or '').split(',')) if x]
+
+    def read_friend_level(self, attempts: int = 3) -> int | None:
+        """读当前好友宠物页的等级（顶栏星标后的数字），识别失败返回 None。
+
+        页面切换后有加载延迟，首次没读到等 0.5 秒重试（最多 attempts 次）。
+        """
+        for i in range(attempts):
+            screen = self.screen()
+            h, w = screen.shape[:2]
+            x1, y1, x2, y2 = FRIEND_LEVEL_REGION
+            x1, x2 = int(x1 * w / 1080), int(x2 * w / 1080)
+            y1, y2 = int(y1 * h / 2412), int(y2 * h / 2412)
+            nums = [(x, int(t.strip())) for t, x, _, _ in ocr_texts(screen[y1:y2, x1:x2])
+                    if t.strip().isdigit()]
+            if nums:
+                return min(nums, key=lambda m: m[0])[1]
+            if i < attempts - 1:
+                time.sleep(0.5)
+        return None
+
+    def _friend_allowed(self, desc: str) -> bool:
+        """PK 目标过滤：只打/跳过名单（玩家昵称部分匹配）+ 等级上限。
+
+        返回 False 表示跳过该好友；等级读取失败按不过滤处理（fail-open）。
+        """
+        name = desc.strip()
+        if name.startswith('好友'):
+            name = name[len('好友'):].strip()
+        nm = ''.join(name.split())
+        if self._only_list and not any(s in nm for s in self._only_list):
+            log(f'PK: 跳过 {name}（不在只打名单）')
+            return False
+        if self._skip_list and any(s in nm for s in self._skip_list):
+            log(f'PK: 跳过 {name}（命中跳过名单）')
+            return False
+        if self.max_level > 0:
+            lv = self.read_friend_level()
+            if lv is None:
+                log(f'PK: {name} 等级读取失败，按不过滤继续')
+            elif lv > self.max_level:
+                log(f'PK: 跳过 {name}（等级 {lv} > {self.max_level}）')
+                return False
+            else:
+                log(f'PK: {name} 等级 {lv} ≤ {self.max_level}，继续')
+        return True
+
+    def _pk_block_reason(self, early_texts=None) -> str:
+        """点 PK 没进准备页的原因：对方是保镖 / 今天已经PK过了 / 未识别。
+
+        early_texts：点击后立即抓的 OCR 文本（toast 只显示 2~3 秒，大概率含原因）。
+        """
+        joined = ''.join(early_texts or [])
+        if '保镖' not in joined and '明天再来' not in joined and 'PK过' not in joined:
+            joined = ''.join(t for t, _, _, _ in ocr_fullscreen(self.screen()))
+        if '保镖' in joined:
+            return '对方是你的保镖，换人试试吧'
+        if '明天再来' in joined or 'PK过' in joined:
+            return '今天已经PK过了，明天再来'
+        return '未弹出准备页（原因未识别，可能已达上限）'
 
     # ---- 各阶段 ----
 
@@ -137,12 +220,14 @@ class PKScenario(VisitScenario):
         if not hit:
             raise RuntimeError('好友页未找到 PK 按钮')
         self.click(hit[0], hit[1])
-        time.sleep(CLICK_INTERVAL)
+        # 被拦截时只弹 toast 不跳页（还在好友宠物页），toast 只显示 2~3 秒：
+        # 点击后先抓一帧 OCR 留底，供没进准备页时识别原因
+        time.sleep(0.6)
+        early_texts = [t for t, _, _, _ in ocr_fullscreen(self.screen())]
         start = self._wait_pk_start(PK_ENTER_TIMEOUT)
         if start is None and self.see('pk', source=self.dev.hierarchy()):
-            # 已达上限时只弹 toast 不跳页（还在好友宠物页），不要点 back，
-            # 页面导航统一交给外层 leave_result_page
-            log('该好友 PK 次数已达上限，切换下一个好友')
+            # 不要点 back，页面导航统一交给外层 leave_result_page
+            log(f'该好友当前无法 PK（{self._pk_block_reason(early_texts)}），切换下一个好友')
             return done
         for i in range(1, PK_PER_FRIEND + 1):
             if max_times and done >= max_times:
@@ -177,13 +262,20 @@ class PKScenario(VisitScenario):
         return done
 
     def _pk_all(self, max_times: int, today: str, done: int, history: dict) -> int:
-        """从好友面板开始逐好友 PK，直到次数满或没有更多好友，返回新的当天次数。"""
+        """从好友面板开始逐好友 PK，直到次数满或没有更多好友，返回新的当天次数。
+
+        每个好友先过目标过滤（pk.only_names / pk.skip_names / pk.max_level），
+        不符条件直接切下一个。
+        """
         self._friends = []        # 累积好友名单（只增不减），见 visit.py
         self._friend_index = 0    # 访问进入时默认第一个好友
         self._pk_timeout_streak = 0  # 连续 PK 结果超时计数（本轮内连续，成功清零）
         self.goto_first_friend()
+        self._accumulate_friends()  # 记录第一个好友（当前停在名单第 0 个）
         while not max_times or done < max_times:
-            done = self.pk_friend(max_times, today, done, history)
+            desc = self._friends[self._friend_index] if self._friend_index < len(self._friends) else ''
+            if self._friend_allowed(desc):
+                done = self.pk_friend(max_times, today, done, history)
             if max_times and done >= max_times:
                 break
             self.leave_result_page()

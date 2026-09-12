@@ -251,6 +251,9 @@ def editable_snapshot() -> dict:
         'daily_hour_limit': sched.get('daily_hour_limit', 8),
         'visit_times': visit.get('times_per_day', 10),
         'pk_times': pk.get('times_per_day', 15),
+        'pk_only': str(pk.get('only_names') or ''),
+        'pk_skip': str(pk.get('skip_names') or ''),
+        'pk_max_level': pk.get('max_level', 0) or 0,
         'adventure_times': adv.get('times_per_day', 1),
         'care_energy': care.get('energy_threshold', 60),
         'care_clean': care.get('clean_threshold', 60),
@@ -273,6 +276,9 @@ def apply_settings(updates: dict) -> dict:
         'daily_hour_limit': ('schedule.daily_hour_limit', 'int'),
         'visit_times': ('visit.times_per_day', 'int'),
         'pk_times': ('pk.times_per_day', 'int'),
+        'pk_only': ('pk.only_names', None),
+        'pk_skip': ('pk.skip_names', None),
+        'pk_max_level': ('pk.max_level', 'int'),
         'adventure_times': ('adventure.times_per_day', 'int'),
         'care_energy': ('care.energy_threshold', 'int'),
         'care_clean': ('care.clean_threshold', 'int'),
@@ -609,6 +615,9 @@ function renderSettings(ed){
     '<div class="frow"><span class="k">时长上限（小时）</span><input type="number" id="numHour" min="0" step="1" value="'+(ed.daily_hour_limit??'')+'"></div>'+
     '<div class="frow"><span class="k">踩踩次数/天</span><input type="number" id="numVisit" min="0" step="1" value="'+(ed.visit_times??'')+'"></div>'+
     '<div class="frow"><span class="k">PK 次数/天</span><input type="number" id="numPk" min="0" step="1" value="'+(ed.pk_times??'')+'"></div>'+
+    '<div class="frow"><span class="k">PK 只打</span><input type="text" id="txtPkOnly" placeholder="昵称，逗号分隔，空=不限" value="'+esc(ed.pk_only||'')+'"></div>'+
+    '<div class="frow"><span class="k">PK 跳过</span><input type="text" id="txtPkSkip" placeholder="昵称，逗号分隔，空=不跳过" value="'+esc(ed.pk_skip||'')+'"></div>'+
+    '<div class="frow"><span class="k">PK 等级上限</span><input type="number" id="numPkLv" min="0" step="1" value="'+(ed.pk_max_level??0)+'"></div>'+
     '<div class="frow"><span class="k">冒险次数/天</span><input type="number" id="numAdv" min="0" step="1" value="'+(ed.adventure_times??'')+'"></div>'+
     '<div class="frow"><span class="k">护理阈值（体力/清洁）</span><span class="two"><input type="number" id="numEnergy" min="0" max="100" value="'+(ed.care_energy??'')+'"><input type="number" id="numClean" min="0" max="100" value="'+(ed.care_clean??'')+'"></span></div>'+
     '<div class="frow"><span class="k">护理方式</span>'+sel('selCare', ['一键护理','ocr检测'], ed.care_method)+'</div>';
@@ -630,6 +639,7 @@ async function saveSettings(){
   txtc('#txtHire','hire_name');
   num('#numCoin','coin_threshold'); num('#numHour','daily_hour_limit');
   num('#numVisit','visit_times'); num('#numPk','pk_times'); num('#numAdv','adventure_times');
+  txtc('#txtPkOnly','pk_only'); txtc('#txtPkSkip','pk_skip'); num('#numPkLv','pk_max_level');
   num('#numEnergy','care_energy'); num('#numClean','care_clean');
   if(!Object.keys(updates).length){ msg.className='saveMsg'; msg.textContent='没有改动'; btn.disabled=false; return; }
   try{

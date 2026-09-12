@@ -46,6 +46,9 @@ DEFAULTS = {
     'visit.start_time': '00:01',
     'pk.times_per_day': 15,
     'pk.start_time': '00:01',
+    'pk.only_names': '',
+    'pk.skip_names': '',
+    'pk.max_level': 0,
     'friend_care.enabled': False,
     'friend_care.time_range': '14:00-19:30',
     'friend_care.friend_name': '',
@@ -102,7 +105,8 @@ def validate_field(key: str, value):
             return True, DoubleQuotedScalarString(str(value))
         except ValueError:
             return False, DoubleQuotedScalarString(str(default))
-    if key in ('friend_care.friend_name', 'hire_friend.friend_name', 'work.hire_name'):
+    if key in ('friend_care.friend_name', 'hire_friend.friend_name', 'work.hire_name',
+               'pk.only_names', 'pk.skip_names'):
         return True, str(value).strip()
     if key in ('friend_care.enabled', 'hire_friend.enabled', 'employed.enabled'):
         return (True, value) if isinstance(value, bool) else (False, default)

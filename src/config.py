@@ -177,6 +177,12 @@ class PkConfig:
     times_per_day: int = 15
     # PK 调度时间（HH:MM），到达后开始处理
     start_time: str = "00:01"
+    # PK 目标过滤：只打这些好友（玩家昵称，逗号分隔，部分匹配）；空 = 不限
+    only_names: str = ""
+    # PK 目标过滤：跳过这些好友（玩家昵称，逗号分隔，部分匹配）；空 = 不跳过
+    skip_names: str = ""
+    # PK 目标过滤：只打等级 ≤ N 的好友宠物（0 = 不限）
+    max_level: int = 0
 
 
 @dataclass

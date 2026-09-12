@@ -602,6 +602,10 @@ class Runner:
             log(f'{e}，沿用旧值')
         self.pk.times_per_day = cfg.pk.times_per_day
         self.pk_times = cfg.pk.times_per_day
+        self.pk.only_names = str(getattr(cfg.pk, 'only_names', '') or '').strip()
+        self.pk.skip_names = str(getattr(cfg.pk, 'skip_names', '') or '').strip()
+        self.pk.max_level = int(getattr(cfg.pk, 'max_level', 0) or 0)
+        self.pk.sync_filters()
         try:
             self.pk_start = parse_hhmm(cfg.pk.start_time, 'pk.start_time')
         except ValueError as e:

@@ -125,6 +125,17 @@ class VisitScenario(DeviceScenario):
         log('当前可见好友: ' + (', '.join(f'{d}@({x},{y})' for d, x, y in items) or '无'))
         return items
 
+    def _accumulate_friends(self) -> list[tuple[str, int, int]]:
+        """抓取当前可见好友并追加进累积名单（不删除滚出屏幕的项），返回可见项。"""
+        visible = self._friend_items()
+        new = [desc for desc, _, _ in visible if desc and desc not in self._friends]
+        for desc in new:
+            self._friends.append(desc)
+        log(f'累积好友名单({len(self._friends)}): '
+            + (', '.join(self._friends) or '无')
+            + (f'（新增: {", ".join(new)}）' if new else ''))
+        return visible
+
     def next_friend(self) -> bool:
         """切换到下一个好友：按累积名单顺序点下一个。
 
@@ -133,13 +144,7 @@ class VisitScenario(DeviceScenario):
         基于累积名单；点击目标从当前可见项里按 content-desc 找，
         找不到（还没滚出来）视为没有更多好友。
         """
-        visible = self._friend_items()
-        new = [desc for desc, _, _ in visible if desc and desc not in self._friends]
-        for desc in new:
-            self._friends.append(desc)
-        log(f'累积好友名单({len(self._friends)}): '
-            + (', '.join(self._friends) or '无')
-            + (f'（新增: {", ".join(new)}）' if new else ''))
+        visible = self._accumulate_friends()
         self._friend_index += 1
         if self._friend_index >= len(self._friends):
             return False
