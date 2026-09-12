@@ -240,7 +240,10 @@ def adventure_data() -> dict:
             'win': sum(1 for r in _tl if int(r.get('coins') or 0) > 0),
             'first': (_tl[0]['ts'][11:16] if _tl else None),
             'last': (_tl[-1]['ts'][11:19] if _tl else None),
-            'rows': [[str(r.get('ts') or '')[11:19], int(r.get('coins') or 0)]
+            'rows': [[str(r.get('ts') or '')[11:19], int(r.get('coins') or 0),
+                      ' '.join(str(t).replace('值', '')
+                               for t in (r.get('settle') or [])
+                               if re.search(r'(心情|体力|清洁)值\+\d+', str(t)))]
                      for r in _tl]}
     if not rows and not stats:
         return {'ok': False, 'live': live}
@@ -813,7 +816,7 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
   <section class="card" data-page="adv">
     <h2>今日实时冒险 <span id="advLiveMeta" style="font-weight:400;font-size:10.5px"></span></h2>
     <div class="workline"><span class="big" id="advLiveNet">--</span><span class="hint" id="advLiveHint"></span></div>
-    <div class="advcap">逐把明细（新→旧，自动记录）</div>
+    <div class="advcap">逐把明细（新→旧；+N=金币，灰字=心情/体力/清洁奖励）</div>
     <div class="advlist" id="advLiveList" style="max-height:380px;overflow:auto"></div>
   </section>
 
@@ -1077,7 +1080,7 @@ function renderAdvLive(l){
   const arr=(l.rows||[]).slice().reverse();
   list.innerHTML=arr.slice(0,150).map(r=>{
     const v=r[1]; const cls=v>0?'pos':(v<0?'neg':'zero');
-    return '<div class="arow"><span class="ai">'+esc(r[0])+'</span><span class="av '+cls+'">'+(v>0?'+':'')+v+'</span></div>';
+    return '<div class="arow"><span class="ai">'+esc(r[0])+'</span><span class="ag">'+esc(r[2]||'')+'</span><span class="av '+cls+'">'+(v>0?'+':'')+v+'</span></div>';
   }).join('')||'<div class="arow"><span class="ag">暂无</span></div>';
 }
 const _advBtn=document.getElementById('btnAdvAll');
