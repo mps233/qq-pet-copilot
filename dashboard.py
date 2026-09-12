@@ -529,6 +529,7 @@ def editable_snapshot() -> dict:
         'coin_threshold': sched.get('coin_threshold', 2000),
         'daily_hour_limit': sched.get('daily_hour_limit', 8),
         'work_stop_hours': sched.get('work_stop_hours', 12),
+        'main_order': str(tasks.get('main_order') or ''),
         'visit_times': visit.get('times_per_day', 10),
         'pk_times': pk.get('times_per_day', 15),
         'pk_only': str(pk.get('only_names') or ''),
@@ -566,6 +567,7 @@ def apply_settings(updates: dict) -> dict:
         'coin_threshold': ('schedule.coin_threshold', 'int'),
         'daily_hour_limit': ('schedule.daily_hour_limit', 'int'),
         'work_stop_hours': ('schedule.work_stop_hours', 'int'),
+        'main_order': ('tasks.main_order', None),
         'visit_times': ('visit.times_per_day', 'int'),
         'pk_times': ('pk.times_per_day', 'int'),
         'pk_only': ('pk.only_names', None),
@@ -1189,6 +1191,8 @@ function renderSettings(ed){
   if(!ed) return;
   setInit=Object.assign({},ed);
   const sel=(id,opts,cur)=>'<select id="'+id+'">'+opts.map(v=>'<option value="'+v+'"'+(v===cur?' selected':'')+'>'+v+'</option>').join('')+'</select>';
+  const moOpts=[['school>hire_friend>work>adventure','打工优先（打满8h疲劳后全冒险）'],['school>hire_friend>adventure>work','冒险优先（有次数就优先冒险）']];
+  const moSel=(cur)=>'<select id="selMainOrder" title="主任务组（学习/雇佣/冒险/打工）互斥时的执行优先级，改完下一轮调度生效">'+moOpts.map(o=>'<option value="'+o[0]+'"'+(o[0]===cur?' selected':'')+'>'+o[1]+'</option>').join('')+(moOpts.some(o=>o[0]===cur)?'':'<option value="'+esc(cur||'')+'" selected>自定义：'+esc(cur||'')+'</option>')+'</select>';
   const FG=(t,rows)=>'<div class="fsec"><div class="fsect">'+t+'</div>'+rows.join('')+'</div>';
   $('#setForm').innerHTML=
     FG('学习与打工',[
@@ -1198,7 +1202,8 @@ function renderSettings(ed){
     '<div class="frow"><span class="k">优先雇佣</span><input type="text" id="txtHire" placeholder="宠物名/主人名，空=自动选收益最高" value="'+esc(ed.hire_name||'')+'"></div>',
     '<div class="frow"><span class="k">金币阈值</span><input type="number" id="numCoin" min="0" step="100" value="'+(ed.coin_threshold??'')+'"></div>',
     '<div class="frow"><span class="k">时长上限（小时）</span><input type="number" id="numHour" min="0" step="1" value="'+(ed.daily_hour_limit??'')+'"></div>',
-    '<div class="frow"><span class="k">打工停止（小时）</span><input type="number" id="numWorkStop" min="0" max="24" step="1" title="学习+打工合计到该时长后今天不再打工（避开10%效率档），0=不限" value="'+(ed.work_stop_hours??'')+'"></div>',
+    '<div class="frow"><span class="k">打工停止（小时）</span><input type="number" id="numWorkStop" min="0" max="24" step="1" title="学习+打工合计到该时长后今天不再打工（主号=8：打满疲劳档转全冒险），0=不限" value="'+(ed.work_stop_hours??'')+'"></div>',
+    '<div class="frow"><span class="k">主任务优先级</span>'+moSel(ed.main_order)+'</div>',
     ])+
     FG('踩踩 · PK · 冒险',[
     '<div class="frow"><span class="k">踩踩次数/天</span><input type="number" id="numVisit" min="0" step="1" value="'+(ed.visit_times??'')+'"></div>',
@@ -1207,7 +1212,7 @@ function renderSettings(ed){
     '<div class="frow"><span class="k">PK 跳过</span><input type="text" id="txtPkSkip" placeholder="昵称或宠物名，逗号分隔，空=不跳过" value="'+esc(ed.pk_skip||'')+'"></div>',
     '<div class="frow"><span class="k">PK 打手</span><input type="text" id="txtPkHelper" placeholder="只雇这些宠物代打（逗号分隔，按优先序）" value="'+esc(ed.pk_helper||'')+'"></div>',
     '<div class="frow"><span class="k">PK 等级上限</span><input type="number" id="numPkLv" min="-1" step="1" title="-1 = 只打等级比我低的" value="'+(ed.pk_max_level??0)+'"></div>',
-    '<div class="frow"><span class="k">冒险次数/天</span><input type="number" id="numAdv" min="0" step="1" value="'+(ed.adventure_times??'')+'"></div>',
+    '<div class="frow"><span class="k">冒险次数/天</span><input type="number" id="numAdv" min="0" step="1" title="0=不冒险；主号策略设 999 ≈ 不限（疲劳后全冒险）" value="'+(ed.adventure_times??'')+'"></div>',
     ])+
     FG('护理',[
     '<div class="frow"><span class="k">护理阈值（体力/清洁）</span><span class="two"><input type="number" id="numEnergy" min="0" max="100" value="'+(ed.care_energy??'')+'"><input type="number" id="numClean" min="0" max="100" value="'+(ed.care_clean??'')+'"></span></div>',
@@ -1252,7 +1257,7 @@ async function saveSettings(){
   const num=(id,key)=>{const v=getv(id); if(v==='')return; const n=parseInt(v,10); if(!isNaN(n)&&n!==setInit[key]) updates[key]=n;};
   const selc=(id,key)=>{const v=getv(id); if(v&&v!==setInit[key]) updates[key]=v;};
   const txtc=(id,key)=>{const v=getv(id); if(v!==(setInit[key]||'')) updates[key]=v;};
-  selc('#selLoc','work_location'); selc('#selDur','work_duration'); selc('#selCare','care_method'); selc('#selFCMethod','friend_care_method'); selc('#selEmpAction','employed_action');
+  selc('#selLoc','work_location'); selc('#selDur','work_duration'); selc('#selCare','care_method'); selc('#selFCMethod','friend_care_method'); selc('#selEmpAction','employed_action'); selc('#selMainOrder','main_order');
   txtc('#txtHire','hire_name');
   num('#numCoin','coin_threshold'); num('#numHour','daily_hour_limit'); num('#numWorkStop','work_stop_hours');
   num('#numVisit','visit_times'); num('#numPk','pk_times'); num('#numAdv','adventure_times');
