@@ -1127,23 +1127,31 @@ function renderSettings(ed){
   const moSel=(cur)=>'<select id="selMainOrder" title="主任务组（学习/雇佣/冒险/打工）互斥时的执行优先级，改完下一轮调度生效">'+moOpts.map(o=>'<option value="'+o[0]+'"'+(o[0]===cur?' selected':'')+'>'+o[1]+'</option>').join('')+(moOpts.some(o=>o[0]===cur)?'':'<option value="'+esc(cur||'')+'" selected>自定义：'+esc(cur||'')+'</option>')+'</select>';
   const FG=(t,rows)=>'<div class="fsec"><div class="fsect">'+t+'</div>'+rows.join('')+'</div>';
   $('#setForm').innerHTML=
-    FG('学习与打工',[
+    FG('学习',[
     '<div class="frow"><span class="k">只打工不学习</span><button class="sw'+(ed.school_enabled?'':' on')+'" id="swSchool" title="开=只打工；关=学习+打工"></button></div>',
+    '<div class="frow"><span class="k">金币阈值</span><input type="number" id="numCoin" min="0" step="100" title="金币 ≥ 该值优先学习，低于该值先打工" value="'+(ed.coin_threshold??'')+'"></div>',
+    ])+
+    FG('打工',[
     '<div class="frow"><span class="k">打工地点</span>'+sel('selLoc', ed.work_locations||[], ed.work_location)+'</div>',
     '<div class="frow"><span class="k">打工时长</span>'+sel('selDur', ['10分钟','45分钟','2小时'], ed.work_duration)+'</div>',
     '<div class="frow"><span class="k">优先雇佣</span><input type="text" id="txtHire" placeholder="宠物名/主人名，空=自动选收益最高" value="'+esc(ed.hire_name||'')+'"></div>',
-    '<div class="frow"><span class="k">金币阈值</span><input type="number" id="numCoin" min="0" step="100" value="'+(ed.coin_threshold??'')+'"></div>',
-    '<div class="frow"><span class="k">时长上限（小时）</span><input type="number" id="numHour" min="0" step="1" value="'+(ed.daily_hour_limit??'')+'"></div>',
-    '<div class="frow"><span class="k">打工停止（小时）</span><input type="number" id="numWorkStop" min="0" max="24" step="1" title="学习+打工合计到该时长后今天不再打工（主号=8：打满疲劳档转全冒险），0=不限" value="'+(ed.work_stop_hours??'')+'"></div>',
-    '<div class="frow"><span class="k">主任务优先级</span>'+moSel(ed.main_order)+'</div>',
     ])+
-    FG('踩踩 · PK · 冒险',[
+    FG('调度与效率',[
+    '<div class="frow"><span class="k">主任务优先级</span>'+moSel(ed.main_order)+'</div>',
+    '<div class="frow"><span class="k">时长上限（小时）</span><input type="number" id="numHour" min="0" step="1" title="学习+打工合计到该时长后今天不再学习（只打工）" value="'+(ed.daily_hour_limit??'')+'"></div>',
+    '<div class="frow"><span class="k">打工停止（小时）</span><input type="number" id="numWorkStop" min="0" max="24" step="1" title="学习+打工合计到该时长后今天不再打工（主号=8：打满疲劳档转全冒险），0=不限" value="'+(ed.work_stop_hours??'')+'"></div>',
+    ])+
+    FG('踩踩',[
     '<div class="frow"><span class="k">踩踩次数/天</span><input type="number" id="numVisit" min="0" step="1" value="'+(ed.visit_times??'')+'"></div>',
+    ])+
+    FG('PK',[
     '<div class="frow"><span class="k">PK 次数/天</span><input type="number" id="numPk" min="0" step="1" value="'+(ed.pk_times??'')+'"></div>',
     '<div class="frow"><span class="k">PK 只打</span><input type="text" id="txtPkOnly" placeholder="昵称或宠物名，逗号分隔，空=不限" value="'+esc(ed.pk_only||'')+'"></div>',
     '<div class="frow"><span class="k">PK 跳过</span><input type="text" id="txtPkSkip" placeholder="昵称或宠物名，逗号分隔，空=不跳过" value="'+esc(ed.pk_skip||'')+'"></div>',
     '<div class="frow"><span class="k">PK 打手</span><input type="text" id="txtPkHelper" placeholder="只雇这些宠物代打（逗号分隔，按优先序）" value="'+esc(ed.pk_helper||'')+'"></div>',
     '<div class="frow"><span class="k">PK 等级上限</span><input type="number" id="numPkLv" min="-1" step="1" title="-1 = 只打等级比我低的" value="'+(ed.pk_max_level??0)+'"></div>',
+    ])+
+    FG('冒险',[
     '<div class="frow"><span class="k">冒险次数/天</span><input type="number" id="numAdv" min="0" step="1" title="0=不冒险；主号策略设 999 ≈ 不限（疲劳后全冒险）" value="'+(ed.adventure_times??'')+'"></div>',
     ])+
     FG('护理',[
