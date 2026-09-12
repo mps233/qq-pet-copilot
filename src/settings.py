@@ -49,6 +49,7 @@ DEFAULTS = {
     'pk.only_names': '',
     'pk.skip_names': '',
     'pk.max_level': 0,
+    'pk.helper_names': '',
     'friend_care.enabled': False,
     'friend_care.time_range': '14:00-19:30',
     'friend_care.friend_name': '',
@@ -106,8 +107,14 @@ def validate_field(key: str, value):
         except ValueError:
             return False, DoubleQuotedScalarString(str(default))
     if key in ('friend_care.friend_name', 'hire_friend.friend_name', 'work.hire_name',
-               'pk.only_names', 'pk.skip_names'):
+               'pk.only_names', 'pk.skip_names', 'pk.helper_names'):
         return True, str(value).strip()
+    if key == 'pk.max_level':
+        # -1 = 只打等级比自己低的（动态读取主人等级）；0 = 不限；>0 = 只打等级 ≤ N
+        try:
+            return (True, value) if int(value) >= -1 else (False, default)
+        except (TypeError, ValueError):
+            return False, default
     if key in ('friend_care.enabled', 'hire_friend.enabled', 'employed.enabled'):
         return (True, value) if isinstance(value, bool) else (False, default)
     if key == 'runner.engine':

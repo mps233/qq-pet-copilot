@@ -16,8 +16,13 @@
 不足则先喂食/洗澡补充到所需值（计划局数 x 5）。
 
 目标过滤（可选，config.yaml 的 pk 段）：only_names / skip_names（玩家昵称或
-宠物名，逗号分隔，部分匹配）与 max_level（只打等级 ≤ N 的好友）；进入每个好友后、
-点 PK 前判定，不符条件直接切下一个。
+宠物名，逗号分隔，部分匹配）与 max_level（只打等级 ≤ N 的好友；-1 = 只打等级比
+自己低的，等级从主页/好友页的 ⭐ 徽章读取）；进入每个好友后、点 PK 前判定，
+不符条件直接切下一个。
+
+打手管理（可选，config.yaml 的 pk 段 helper_names）：名单非空时，每次 run() 在
+第一个打开的准备页上检查"保镖"行——已雇的不在名单里就点 ✕ 解雇；空位就点 ➕
+打开"宠友列表"，雇名单里第一个可雇的宠物（宠物名/主人名匹配，按名单顺序优先）。
 
 运行方式（同 visit.py）：run() 独立运行回主页面。
 
@@ -31,7 +36,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.ocr import ocr_fullscreen, ocr_texts
+from src.ocr import find_text, ocr_fullscreen, ocr_texts
 from src.progress import (
     PK_PROGRESS_FILE,
     load_progress,
@@ -59,6 +64,15 @@ FRIEND_LEVEL_REGION = (190, 270, 460, 380)
 FRIEND_NAME_REGION = (150, 130, 700, 260)
 FRIEND_NAME_MIN_Y = 55  # 区域内的局部 y 阈值（上一行是主人昵称，下一行才是宠物名）
 
+# PK 准备页"雇佣保镖代打"行的 ➕（打开宠友列表）位置（1080x2412 参考，运行时按实际尺寸换算）
+HELPER_ADD_POINT = (296, 1672)
+# 已雇保镖头像上的 ✕（取消雇佣）位置（1080x2412 参考）
+HELPER_CANCEL_POINT = (335, 1595)
+# 宠友列表右上角 ✕（关闭列表）位置（1080x2412 参考）
+HELPER_CLOSE_POINT = (976, 736)
+# 自己宠物主页 ⭐ 等级徽章的 OCR 区域（x1, y1, x2, y2，1080x2412 参考）
+OWN_LEVEL_REGION = (220, 292, 338, 384)
+
 PROGRESS_FILE = PK_PROGRESS_FILE
 
 
@@ -70,15 +84,20 @@ class PKScenario(VisitScenario):
     def __init__(self, dev=None):
         DeviceScenario.__init__(self, dev)  # 跳过 VisitScenario 的踩踩字段/日志
         self.times_per_day = self.cfg.pk.times_per_day
-        # PK 目标过滤（只打/跳过名单、等级上限）；runner 热加载时重新同步
+        # PK 目标过滤（只打/跳过名单、等级上限）与打手名单；runner 热加载时重新同步
         self.only_names = str(getattr(self.cfg.pk, 'only_names', '') or '').strip()
         self.skip_names = str(getattr(self.cfg.pk, 'skip_names', '') or '').strip()
         self.max_level = int(getattr(self.cfg.pk, 'max_level', 0) or 0)
+        self.helper_names = str(getattr(self.cfg.pk, 'helper_names', '') or '').strip()
+        self._own_level = None        # 自己等级（max_level < 0 时从主页读取）
+        self._helper_checked = False  # 打手管理每次 run 只做一次
         self.sync_filters()
         log(f'每天 PK 次数: {self.times_per_day if self.times_per_day else "不限"}'
             + (f'，只打: {self.only_names}' if self.only_names else '')
             + (f'，跳过: {self.skip_names}' if self.skip_names else '')
-            + (f'，只打等级≤{self.max_level}' if self.max_level else ''))
+            + (f'，只打等级≤{self.max_level}' if self.max_level > 0
+               else ('，只打等级比自己低' if self.max_level < 0 else ''))
+            + (f'，打手: {self.helper_names}' if self.helper_names else ''))
 
     def sync_filters(self) -> None:
         """把只打/跳过名单字符串解析为列表（初始化与配置热加载共用）。
@@ -87,6 +106,7 @@ class PKScenario(VisitScenario):
         """
         self._only_list = [x for x in (''.join(s.split()) for s in str(self.only_names or '').split(',')) if x]
         self._skip_list = [x for x in (''.join(s.split()) for s in str(self.skip_names or '').split(',')) if x]
+        self._helper_list = [x for x in (''.join(s.split()) for s in str(self.helper_names or '').split(',')) if x]
 
     def read_friend_level(self, attempts: int = 3) -> int | None:
         """读当前好友宠物页的等级（顶栏星标后的数字），识别失败返回 None。
@@ -129,6 +149,21 @@ class PKScenario(VisitScenario):
                 time.sleep(0.5)
         return None
 
+    def read_own_level(self, attempts: int = 3) -> int | None:
+        """读自己主页的 ⭐ 等级徽章数字（max_level = -1 模式的比较基准），失败返回 None。"""
+        for i in range(attempts):
+            screen = self.screen()
+            h, w = screen.shape[:2]
+            x1, y1, x2, y2 = OWN_LEVEL_REGION
+            x1, x2 = int(x1 * w / 1080), int(x2 * w / 1080)
+            y1, y2 = int(y1 * h / 2412), int(y2 * h / 2412)
+            for t, _, _, _ in ocr_texts(screen[y1:y2, x1:x2]):
+                if t.strip().isdigit():
+                    return int(t.strip())
+            if i < attempts - 1:
+                time.sleep(0.5)
+        return None
+
     def _friend_allowed(self, desc: str) -> bool:
         """PK 目标过滤：只打/跳过名单（玩家昵称/宠物名部分匹配）+ 等级上限。
 
@@ -153,16 +188,149 @@ class PKScenario(VisitScenario):
                     or (ne and any(s in ne for s in self._skip_list)):
                 log(f'PK: 跳过 {owner}（宠物: {pet or "读取失败"}，命中跳过名单）')
                 return False
-        if self.max_level > 0:
+        cap = self.max_level
+        if cap < 0 and self._own_level is not None:
+            cap = self._own_level - 1  # 只打等级比自己低的
+        if cap > 0:
             lv = self.read_friend_level()
             if lv is None:
                 log(f'PK: {owner} 等级读取失败，按不过滤继续')
-            elif lv > self.max_level:
-                log(f'PK: 跳过 {owner}（等级 {lv} > {self.max_level}）')
+            elif lv > cap:
+                log(f'PK: 跳过 {owner}（等级 {lv}'
+                    + (f'，只打比我低（<{self._own_level}）' if self.max_level < 0
+                       else f' > {cap}') + '）')
                 return False
             else:
-                log(f'PK: {owner} 等级 {lv} ≤ {self.max_level}，继续')
+                log(f'PK: {owner} 等级 {lv} 符合条件，继续')
         return True
+
+    # ---- 打手（保镖）管理 ----
+
+    def _helper_ensure(self) -> None:
+        """在准备页管理打手（保镖）：不在名单里的解雇、空位雇名单里的宠物。
+
+        只在名单非空时执行；任何失败只记日志，不影响 PK 主流程。
+        """
+        if not self._helper_list:
+            return
+        try:
+            texts = [t for t, _, _, _ in ocr_fullscreen(self.screen())]
+            joined = ' '.join(texts)
+            if any(any(s in t for s in self._helper_list) for t in texts):
+                log(f'PK 打手: 当前保镖已在名单（{self.helper_names}），保持')
+                return
+            if '剩余保护时间' in joined or '代打' in joined:
+                log('PK 打手: 当前保镖不在名单，解雇')
+                if not self._helper_cancel():
+                    return
+                time.sleep(1.0)
+                texts = [t for t, _, _, _ in ocr_fullscreen(self.screen())]
+                joined = ' '.join(texts)
+            if '雇佣保镖' not in joined and '保镖' not in joined:
+                log('PK 打手: 未识别到保镖行，跳过')
+                return
+            self._helper_hire()
+            self._ensure_prep_ready()
+        except Exception as e:
+            log(f'PK 打手: 管理异常（跳过）: {e}')
+
+    def _helper_cancel(self) -> bool:
+        """点保镖 ✕ → 确认解雇；成功返回 True。"""
+        screen = self.screen()
+        h, w = screen.shape[:2]
+        x, y = HELPER_CANCEL_POINT
+        self.click(int(x * w / 1080), int(y * h / 2412))
+        time.sleep(1.2)
+        joined = ' '.join(t for t, _, _, _ in ocr_fullscreen(self.screen()))
+        if '取消雇佣' not in joined and '解雇' not in joined:
+            log('PK 打手: 未出现取消雇佣弹框')
+            return False
+        res = ocr_fullscreen(self.screen())
+        c = find_text(res, '确认解雇') or find_text(res, '解雇')
+        if not c:
+            log('PK 打手: 没找到"确认解雇"按钮，放弃解雇')
+            return False
+        self.click(c[0], c[1])
+        time.sleep(1.5)
+        log('PK 打手: 已解雇旧保镖')
+        return True
+
+    def _helper_hire(self) -> bool:
+        """点 ➕ 打开宠友列表，雇名单里第一个可雇的宠物；成功返回 True。"""
+        screen = self.screen()
+        h, w = screen.shape[:2]
+        x, y = HELPER_ADD_POINT
+        self.click(int(x * w / 1080), int(y * h / 2412))
+        time.sleep(1.6)
+        res = ocr_fullscreen(self.screen())
+        if '宠友列表' not in ' '.join(t for t, _, _, _ in res):
+            log('PK 打手: 宠友列表未打开')
+            return False
+        for name in self._helper_list:
+            item = None
+            for t, ix, iy, _ in res:
+                if name in t and '主人' not in t:
+                    item = (t, ix, iy)
+                    break
+            if not item:
+                log(f'PK 打手: 列表里没有 {name}')
+                continue
+            _, nx, ny = item
+            if any(('不可雇佣' in t or '被雇佣中' in t) and abs(iy2 - ny) <= 120
+                   for t, _, iy2, _ in res):
+                log(f'PK 打手: {name} 当前不可雇（不可雇佣/被雇佣中）')
+                continue
+            btn = None
+            for t, ix2, iy2, _ in res:
+                if t.strip().isdigit() and ix2 > int(700 * w / 1080) and abs(iy2 - ny) <= 120:
+                    btn = (ix2, iy2)
+            if not btn:
+                btn = (int(920 * w / 1080), ny)
+            self.click(btn[0], btn[1])
+            time.sleep(1.5)
+            res2 = ocr_fullscreen(self.screen())
+            j2 = ' '.join(t for t, _, _, _ in res2)
+            if '宠友列表' in j2 and any(k in j2 for k in ('确认雇佣', '确认', '确定')):
+                c = find_text(res2, '确认雇佣') or find_text(res2, '确认') or find_text(res2, '确定')
+                if c:
+                    self.click(c[0], c[1])
+                    time.sleep(1.5)
+            j3 = ' '.join(t for t, _, _, _ in ocr_fullscreen(self.screen()))
+            if '剩余保护时间' in j3 or '代打' in j3:
+                log(f'PK 打手: 已雇佣 {name} ✅')
+                return True
+            log(f'PK 打手: 点雇 {name} 后未确认成功')
+            return False
+        log('PK 打手: 名单里没有可雇的宠物')
+        self._helper_close_picker()
+        return False
+
+    def _helper_close_picker(self) -> None:
+        """关闭宠友列表回准备页（先试右上角 ✕，不行按 back 再重进准备页）。"""
+        screen = self.screen()
+        h, w = screen.shape[:2]
+        x, y = HELPER_CLOSE_POINT
+        self.click(int(x * w / 1080), int(y * h / 2412))
+        time.sleep(1.0)
+        if '宠友列表' in ' '.join(t for t, _, _, _ in ocr_fullscreen(self.screen())):
+            self.go_back()
+            time.sleep(0.8)
+
+    def _ensure_prep_ready(self) -> bool:
+        """确保回到能看到开始按钮的准备页；不在就重新点 PK 进。"""
+        if self.see('pk_start'):
+            return True
+        hit = self.see('pk', source=self.dev.hierarchy())
+        if hit:
+            self.click(hit[0], hit[1])
+            time.sleep(2.0)
+        deadline = time.monotonic() + 6.0
+        while time.monotonic() < deadline:
+            if self.see('pk_start'):
+                return True
+            time.sleep(CLICK_INTERVAL)
+        log('PK 打手: 结束管理后未回到准备页')
+        return False
 
     def _pk_block_reason(self, early_texts=None) -> str:
         """点 PK 没进准备页的原因：对方是保镖 / 今天已经PK过了 / 未识别。
@@ -264,6 +432,10 @@ class PKScenario(VisitScenario):
             # 不要点 back，页面导航统一交给外层 leave_result_page
             log(f'该好友当前无法 PK（{self._pk_block_reason(early_texts)}），切换下一个好友')
             return done
+        if self._helper_list and not self._helper_checked:
+            # 打手（保镖）管理：每次 run 只在第一个打开的准备页上做一次
+            self._helper_checked = True
+            self._helper_ensure()
         for i in range(1, PK_PER_FRIEND + 1):
             if max_times and done >= max_times:
                 break
@@ -305,6 +477,7 @@ class PKScenario(VisitScenario):
         self._friends = []        # 累积好友名单（只增不减），见 visit.py
         self._friend_index = 0    # 访问进入时默认第一个好友
         self._pk_timeout_streak = 0  # 连续 PK 结果超时计数（本轮内连续，成功清零）
+        self._helper_checked = False  # 打手管理本轮只做一次
         self.goto_first_friend()
         self._accumulate_friends()  # 记录第一个好友（当前停在名单第 0 个）
         while not max_times or done < max_times:
@@ -382,6 +555,12 @@ class PKScenario(VisitScenario):
         start_done = done
         round_target = self._round_limit(max_times, done)
         self.ensure_main_page()
+        if self.max_level < 0:
+            self._own_level = self.read_own_level()
+            if self._own_level is not None:
+                log(f'你的宠物等级: {self._own_level}（PK 只打等级低于 {self._own_level} 的好友）')
+            else:
+                log('你的宠物等级读取失败：本轮不做等级过滤')
         self._prepare_stats(round_target - done)
         done = self._pk_all(round_target, today, done, history)
         self.close()  # 点 back 收掉好友相关页面，再确认回主页面
