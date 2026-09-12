@@ -364,6 +364,26 @@ class Runner:
             update_status(None, coins=coins)
         return coins
 
+    COINS_REFRESH_SECONDS = 300  # 状态缓存金币兜底刷新间隔（秒，节流用）
+
+    def _refresh_coins(self) -> None:
+        """金币状态缓存兜底刷新（节流）。
+
+        金币只在 _school_due（"去学习还是去打工"判定）里读：只打工策略
+        （tasks.school.enabled=false）下这条路径不会执行，状态缓存/仪表盘里的
+        金币会一直停在最后一次读取的旧值（历史问题：「金币怎么一直是1500」）。
+        护理巡检每 90 秒本来就在主页面，顺带按 COINS_REFRESH_SECONDS 节流补读。
+        """
+        if time.time() - getattr(self, '_coins_refreshed_at', 0.0) < self.COINS_REFRESH_SECONDS:
+            return
+        self._coins_refreshed_at = time.time()
+        try:
+            coins = self.read_main_coins()
+            if coins is not None:
+                log(f'金币状态缓存刷新: {coins}')
+        except Exception as e:
+            log(f'金币状态缓存刷新失败（不影响调度）: {e}')
+
     def run_one(self, scen, name: str, fatal: bool = True) -> bool:
         """跑一个场景一轮（一节课/一次打工）。
 
@@ -1288,6 +1308,9 @@ class TaskQueueRunner(Runner):
             # 护理检查异常直接抛给外层走重启恢复（同 legacy）
             self.care.check_and_care()
             self.care.last_care_at = datetime.now()
+            # 顺带补刷金币状态缓存：只打工策略下学习判定被跳过、金币不会读，
+            # 缓存会一直停在旧值（护理巡检本来就在主页面，就地补一次）
+            self._refresh_coins()
             task.next_at = self._success_at(cfg, now)
             return
         scen = {'adventure': self.adventure, 'visit': self.visit, 'pk': self.pk,

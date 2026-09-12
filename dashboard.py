@@ -38,6 +38,16 @@ def read_json(name: str) -> dict:
         return {}
 
 
+def audit(msg: str) -> None:
+    """关键操作审计日志（谁什么时候改了什么），写 runs/logs/dashboard.log。"""
+    try:
+        LOGS.mkdir(parents=True, exist_ok=True)
+        with open(LOGS / 'dashboard.log', 'a', encoding='utf-8') as f:
+            f.write(f'[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}\n')
+    except Exception:
+        pass
+
+
 def scheduler_info() -> dict:
     try:
         out = subprocess.run(['pgrep', '-f', 'scenarios/runner.py'],
@@ -406,7 +416,7 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
   </section>
 
   <section class="grid">
-    <div class="tile"><div class="v" id="coins">--</div><div class="k">金币</div></div>
+    <div class="tile"><div class="v" id="coins">--</div><div class="k">金币 <span id="coinsAt" style="opacity:.75"></span></div></div>
     <div class="tile"><div class="v" id="visitTxt">--</div><div class="k">今日踩踩</div><div class="bar"><i id="visitBar"></i></div></div>
     <div class="tile"><div class="v" id="pkTxt">--</div><div class="k">今日PK</div><div class="bar"><i id="pkBar"></i></div></div>
     <div class="tile"><div class="v" id="advTxt">--</div><div class="k">今日冒险</div></div>
@@ -474,6 +484,7 @@ function renderData(d){
   // 金币
   const st=d.status||{};
   $('#coins').textContent=st.coins!=null?st.coins:'--';
+  $('#coinsAt').textContent=(st.coins!=null&&st.updated)?'· '+st.updated.slice(11,16):'';
   // 打工卡片
   etaRemain=(d.work_eta&&d.work_eta.remaining!=null)?d.work_eta.remaining:null;
   etaClock=d.work_eta?d.work_eta.eta_clock:'';
@@ -721,7 +732,11 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == '/api/settings':
                 length = int(self.headers.get('Content-Length') or 0)
                 payload = json.loads(self.rfile.read(length).decode('utf-8') or '{}')
-                result = apply_settings(payload.get('updates') or {})
+                updates = payload.get('updates') or {}
+                result = apply_settings(updates)
+                audit(f'设置保存(来自 {self.client_address[0]}): 提交 {updates} '
+                      f'→ 生效 {result["applied"]}'
+                      + (f' 拒绝 {result["rejected"]}' if result['rejected'] else ''))
                 body = json.dumps(result, ensure_ascii=False).encode('utf-8')
                 self._send(200 if result['ok'] else 400,
                            'application/json; charset=utf-8', body)
