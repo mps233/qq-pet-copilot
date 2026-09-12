@@ -280,6 +280,7 @@ def config_summary() -> dict:
         'pk_per_day': pk.get('times_per_day'),
         'adventure_times': adv.get('times_per_day'),
         'adventure_start': adv.get('start_time'),
+        'task_order': [x.strip() for x in str(tasks.get('order') or '').split('>') if x.strip()],
         'rows': rows,
     }
 
@@ -994,21 +995,28 @@ function renderData(d){
   $('#expTxt').textContent=ed;
   // 队列
   const q=d.queue||{}, qt=q.tasks||{};
-  $('#qTop').textContent='待执行 '+(q.ready??'--')+' · 等待中 '+(q.waiting??'--')+(q.next?(' · 下一个：'+(TASKNAME[q.next]||q.next)+' '+(q.next_at||'')):'');
+  $('#qTop').textContent='待执行 '+(q.ready??'--')+' · 等待中 '+(q.waiting??'--')+(q.next?(' · 下个定时：'+(TASKNAME[q.next]||q.next)+' '+(q.next_at||'')):'');
   $('#qUpd').textContent=q.updated?('更新 '+q.updated):'';
+  // 按执行顺序排：可执行在前（按任务执行顺序）、定时的居中（按时间升序）、已禁用/今日完成沉底
+  const qOrder=(cfg.task_order||[]);
+  const qRank=k=>{const i=qOrder.indexOf(k);return i<0?999:i;};
+  const qStatRank=s=> s==='ready'?0 : s==='waiting'?1 : 2;
+  const qItems=Object.entries(qt).map(([k,v])=>({k,v,st:v.state||'',sr:qStatRank(v.state||'')}));
+  qItems.sort((a,b)=> (a.sr-b.sr)
+      || (a.sr===1 ? String(a.v.next||'~').localeCompare(String(b.v.next||'~')) : (qRank(a.k)-qRank(b.k))));
   let rows='';
-  for(const [k,v] of Object.entries(qt)){
-    const stt=v.state||'';
+  if(q.pending) rows+='<div class="row"><div class="t"><span>收尾队列</span><span class="chip ready">'+q.pending+' 待结算</span></div><div class="nx"></div></div>';
+  for(const o of qItems){
+    const stt=o.st;
     const chip= stt==='ready'?'<span class="chip ready">可执行</span>'
               : stt==='waiting'?'<span class="chip wait">等待</span>'
               : stt==='done'?'<span class="chip done">✓ 今日完成</span>'
               : stt==='dead'?'<span class="chip done">✓ 今日完成</span>'
               : stt==='disabled'?'<span class="chip off">已禁用</span>'
               : '<span class="chip">'+stt+'</span>';
-    const nx=v.next?('→ '+(v.next.slice(0,10)===todayStr?'':'明 ')+v.next.slice(11,16)):'';
-    rows+='<div class="row"><div class="t"><span>'+(TASKNAME[k]||k)+'</span>'+chip+'</div><div class="nx">'+nx+'</div></div>';
+    const nx=o.v.next?('→ '+(o.v.next.slice(0,10)===todayStr?'':'明 ')+o.v.next.slice(11,16)):'';
+    rows+='<div class="row"><div class="t"><span>'+(TASKNAME[o.k]||o.k)+'</span>'+chip+'</div><div class="nx">'+nx+'</div></div>';
   }
-  if(q.pending) rows+='<div class="row"><div class="t"><span>收尾队列</span><span class="chip ready">'+q.pending+' 待结算</span></div><div class="nx"></div></div>';
   $('#taskList').innerHTML=rows||'<div class="row">无数据（调度器未运行？）</div>';
   // 截图
   const shots=d.shots||[];
