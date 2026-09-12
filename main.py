@@ -291,6 +291,7 @@ TASK_SETTING_FIELDS = [
     ('care.energy_threshold', '体力阈值', 'int'),
     ('care.clean_threshold', '清洁阈值', 'int'),
     ('care.interval_seconds', '护理间隔（秒）', 'int'),
+    ('care.exchange_count', '护理补货数量（饼干/香皂一次买几个）', 'int'),
     ('employed.action', '被雇佣后处理', ['等到25/75（小于45min）', '等到25/75', '立刻召回']),
     ('employed.enabled', '被雇佣开关', 'bool'),
     ('employed.time_range', '被雇佣时间段', 'str'),

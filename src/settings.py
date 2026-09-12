@@ -69,6 +69,7 @@ DEFAULTS = {
     'care.clean_threshold': 60,
     'care.method': '一键护理',
     'care.interval_seconds': 60,
+    'care.exchange_count': 20,
     'work.duration': '45分钟',
     'employed.enabled': False,
     'employed.time_range': '19:31-23:59',
@@ -142,6 +143,12 @@ def validate_field(key: str, value):
         return False, default
     if key in ('care.energy_threshold', 'care.clean_threshold'):
         return (True, value) if 0 <= int(value) <= 100 else (False, default)
+    if key == 'care.exchange_count':
+        # 补货数量 1~99（游戏弹窗允许的上限 99）
+        try:
+            return (True, value) if 1 <= int(value) <= 99 else (False, default)
+        except (TypeError, ValueError):
+            return False, default
     if key == 'schedule.back_method':
         return (True, value) if value in ('返回图标', '系统返回') else (False, default)
     if key == 'tasks.failure_interval':
@@ -163,7 +170,8 @@ def validate_field(key: str, value):
         except (TypeError, ValueError):
             return False, default
     if key in ('employed.interval_seconds', 'hire_friend.interval_seconds',
-               'care.interval_seconds', 'gift_bag.interval_seconds'):
+               'care.interval_seconds', 'gift_bag.interval_seconds',
+               'friend_care.interval_seconds'):
         # 调度间隔至少 1 秒（0 会变成无间隔连续调度）
         try:
             return (True, value) if int(value) >= 1 else (False, default)

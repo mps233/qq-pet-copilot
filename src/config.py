@@ -165,6 +165,8 @@ class CareConfig:
     clean_threshold: int = 60
     # 护理间隔（秒）：距上次护理检查至少间隔这么久才再次检查
     interval_seconds: int = 60
+    # 补货数量：饼干/香皂不足时一次金币购买多少个（兑换食物/购买洗澡道具弹窗里改成该数量）
+    exchange_count: int = 20
 
 
 @dataclass

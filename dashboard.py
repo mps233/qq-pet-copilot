@@ -513,6 +513,7 @@ def editable_snapshot() -> dict:
     pk = cfg.get('pk') or {}
     adv = cfg.get('adventure') or {}
     care = cfg.get('care') or {}
+    fc = cfg.get('friend_care') or {}
     return {
         'school_enabled': bool((tasks.get('school') or {}).get('enabled', True)),
         'work_location': work.get('location'),
@@ -532,6 +533,11 @@ def editable_snapshot() -> dict:
         'care_energy': care.get('energy_threshold', 60),
         'care_clean': care.get('clean_threshold', 60),
         'care_method': care.get('method', '一键护理'),
+        'care_exchange': care.get('exchange_count', 20),
+        'friend_care_enabled': bool(fc.get('enabled', False)),
+        'friend_care_name': str(fc.get('friend_name') or ''),
+        'friend_care_interval': fc.get('interval_seconds', 120),
+        'friend_care_method': str(fc.get('method') or 'ocr检测'),
         'gift_bag_enabled': bool((cfg.get('gift_bag') or {}).get('enabled', True)),
         'gift_bag_interval': (cfg.get('gift_bag') or {}).get('interval_seconds', 1800),
     }
@@ -561,6 +567,11 @@ def apply_settings(updates: dict) -> dict:
         'care_energy': ('care.energy_threshold', 'int'),
         'care_clean': ('care.clean_threshold', 'int'),
         'care_method': ('care.method', None),
+        'care_exchange': ('care.exchange_count', 'int'),
+        'friend_care_enabled': ('friend_care.enabled', 'bool'),
+        'friend_care_name': ('friend_care.friend_name', None),
+        'friend_care_interval': ('friend_care.interval_seconds', 'int'),
+        'friend_care_method': ('friend_care.method', None),
         'gift_bag_enabled': ('gift_bag.enabled', 'bool'),
         'gift_bag_interval': ('gift_bag.interval_seconds', 'int'),
     }
@@ -1172,9 +1183,15 @@ function renderSettings(ed){
     '<div class="frow"><span class="k">冒险次数/天</span><input type="number" id="numAdv" min="0" step="1" value="'+(ed.adventure_times??'')+'"></div>'+
     '<div class="frow"><span class="k">护理阈值（体力/清洁）</span><span class="two"><input type="number" id="numEnergy" min="0" max="100" value="'+(ed.care_energy??'')+'"><input type="number" id="numClean" min="0" max="100" value="'+(ed.care_clean??'')+'"></span></div>'+
     '<div class="frow"><span class="k">护理方式</span>'+sel('selCare', ['一键护理','ocr检测'], ed.care_method)+'</div>'+
+    '<div class="frow"><span class="k">补货数量（个）</span><input type="number" id="numExchange" min="1" max="99" step="1" title="饼干/香皂不足时一次金币买多少个" value="'+(ed.care_exchange??'')+'"></div>'+
+    '<div class="frow"><span class="k">好友护理</span><button class="sw'+(ed.friend_care_enabled?' on':'')+'" id="swFC" title="开=按间隔到指定好友家护理（体力/清洁<90自动补）"></button></div>'+
+    '<div class="frow"><span class="k">好友护理对象</span><input type="text" id="txtFCName" placeholder="宠物名或主人名" value="'+esc(ed.friend_care_name||'')+'"></div>'+
+    '<div class="frow"><span class="k">好友护理间隔（秒）</span><input type="number" id="numFCInt" min="30" step="30" value="'+(ed.friend_care_interval??'')+'"></div>'+
+    '<div class="frow"><span class="k">好友护理方式</span>'+sel('selFCMethod', ['ocr检测','一键护理'], ed.friend_care_method)+'</div>'+
     '<div class="frow"><span class="k">福袋领取</span><button class="sw'+(ed.gift_bag_enabled?' on':'')+'" id="swGiftBag" title="开=定时遍历好友领取系绳福袋"></button></div>'+
     '<div class="frow"><span class="k">福袋扫描间隔（秒）</span><input type="number" id="numGbInt" min="60" step="60" value="'+(ed.gift_bag_interval??'')+'"></div>';
   $('#swSchool').onclick=()=>{ $('#swSchool').classList.toggle('on'); setDirty=true; };
+  $('#swFC').onclick=()=>{ $('#swFC').classList.toggle('on'); setDirty=true; };
   $('#swGiftBag').onclick=()=>{ $('#swGiftBag').classList.toggle('on'); setDirty=true; };
 }
 
@@ -1185,18 +1202,21 @@ async function saveSettings(){
   const updates={};
   const schoolEnabledNew = !$('#swSchool').classList.contains('on');
   if(!!schoolEnabledNew !== !!setInit.school_enabled) updates.school_enabled=schoolEnabledNew;
+  const fcEnabledNew = $('#swFC').classList.contains('on');
+  if(!!fcEnabledNew !== !!setInit.friend_care_enabled) updates.friend_care_enabled=fcEnabledNew;
   const gbEnabledNew = $('#swGiftBag').classList.contains('on');
   if(!!gbEnabledNew !== !!setInit.gift_bag_enabled) updates.gift_bag_enabled=gbEnabledNew;
   const getv=id=>($(id)?$(id).value.trim():'');
   const num=(id,key)=>{const v=getv(id); if(v==='')return; const n=parseInt(v,10); if(!isNaN(n)&&n!==setInit[key]) updates[key]=n;};
   const selc=(id,key)=>{const v=getv(id); if(v&&v!==setInit[key]) updates[key]=v;};
   const txtc=(id,key)=>{const v=getv(id); if(v!==(setInit[key]||'')) updates[key]=v;};
-  selc('#selLoc','work_location'); selc('#selDur','work_duration'); selc('#selCare','care_method');
+  selc('#selLoc','work_location'); selc('#selDur','work_duration'); selc('#selCare','care_method'); selc('#selFCMethod','friend_care_method');
   txtc('#txtHire','hire_name');
   num('#numCoin','coin_threshold'); num('#numHour','daily_hour_limit'); num('#numWorkStop','work_stop_hours');
   num('#numVisit','visit_times'); num('#numPk','pk_times'); num('#numAdv','adventure_times');
   txtc('#txtPkOnly','pk_only'); txtc('#txtPkSkip','pk_skip'); num('#numPkLv','pk_max_level'); txtc('#txtPkHelper','pk_helper');
-  num('#numEnergy','care_energy'); num('#numClean','care_clean'); num('#numGbInt','gift_bag_interval');
+  num('#numEnergy','care_energy'); num('#numClean','care_clean'); num('#numExchange','care_exchange'); num('#numGbInt','gift_bag_interval');
+  txtc('#txtFCName','friend_care_name'); num('#numFCInt','friend_care_interval');
   if(!Object.keys(updates).length){ msg.className='saveMsg'; msg.textContent='没有改动'; btn.disabled=false; return; }
   try{
     const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({updates})});

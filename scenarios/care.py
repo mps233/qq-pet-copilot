@@ -41,7 +41,7 @@ STATUS_COL_TOL = 80  # 名字下方同列数字的横向容差
 FEED_RESULT_WAIT = 1.5  # 喂食后等数值刷新的时间（秒）
 FEED_PANEL_RETRIES = 4  # 点 feed 后等喂食面板加载（feed_10 或"兑换食物"出现）的重试次数
 MAX_FEED_ATTEMPTS = 10    # 喂食最多次数，超过认为异常
-EXCHANGE_FOOD_COUNT = 20  # 饼干/香皂不足时金币购买的数量（兑换食物弹窗默认 5 / 购买洗澡道具弹窗默认 10，两处共用），弹窗里改成该数量
+EXCHANGE_FOOD_COUNT = 20  # 补货数量兜底值：饼干/香皂不足时金币购买的数量（实际取 care.exchange_count 配置，缺失/非法时用这个）
 EXCHANGE_POPUP_RETRIES = 3  # 等兑换食物弹窗（数量输入框）出现的重试次数
 MAX_SHOWER_ATTEMPTS = 25  # 搓洗最多回合数，超过认为异常
 # 清洁连续多少回合不提升判定按压失效（minitouch 会话静默中断，touch_move 全丢，
@@ -232,12 +232,21 @@ class CareScenario(DeviceScenario):
 
     # ---- 照顾动作 ----
 
+    def _exchange_count(self) -> int:
+        """补货数量（兑换食物/购买洗澡道具共用）：care.exchange_count 配置优先（1~99），非法/缺失用常量兜底。"""
+        try:
+            count = int(getattr(self.cfg.care, 'exchange_count', EXCHANGE_FOOD_COUNT))
+        except (AttributeError, TypeError, ValueError):
+            return EXCHANGE_FOOD_COUNT
+        return count if 1 <= count <= 99 else EXCHANGE_FOOD_COUNT
+
     def _pay_buy_popup(self, amount_default: str, select_name: str | None = None) -> None:
         """购买弹窗（兑换食物/购买洗澡道具点开后的弹窗）通用流程：
-        数量输入框（默认 amount_default）改为 EXCHANGE_FOOD_COUNT；select_name 传入时先点选商品，随后点输入框 ->
+        数量输入框（默认 amount_default）改为 care.exchange_count 配置的数量（默认 20）；select_name 传入时先点选商品，随后点输入框 ->
         点"支付 xx 金币"（两个弹窗的支付按钮相同，共用 exchange_pay），
         弹窗关闭后由调用方重新找物品按钮继续护理。"""
-        # 数量输入框有默认值，改成 EXCHANGE_FOOD_COUNT。
+        count = self._exchange_count()
+        # 数量输入框有默认值，改成配置的补货数量。
         # set_text 需要控件句柄（LOCATORS 的 see() 只给坐标），直接用 u2 xpath
         amount = self.dev.d.xpath(f'//*[@text="{amount_default}"]')
         for attempt in range(1, EXCHANGE_POPUP_RETRIES + 1):
@@ -262,12 +271,12 @@ class CareScenario(DeviceScenario):
         log('点击数量输入框')
         self.click((x1 + x2) // 2, (y1 + y2) // 2)
         time.sleep(CLICK_INTERVAL)
-        amount.set_text(str(EXCHANGE_FOOD_COUNT))
+        amount.set_text(str(count))
         time.sleep(0.5)  # 等"支付 xx 金币"按钮金额随数量刷新
         pay = self.see('exchange_pay')
         if not pay:
             raise RuntimeError('购买弹窗未找到"支付 xx 金币"按钮')
-        log(f'购买 {EXCHANGE_FOOD_COUNT} 个，点击支付 ({pay[0]}, {pay[1]})')
+        log(f'购买 {count} 个，点击支付 ({pay[0]}, {pay[1]})')
         self.click(pay[0], pay[1])
         time.sleep(CLICK_INTERVAL)
 
