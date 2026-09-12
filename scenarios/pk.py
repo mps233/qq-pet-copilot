@@ -15,8 +15,8 @@
 开始前检查：体力/清洁 都 >= 本轮计划局数 x 5 才开跑，
 不足则先喂食/洗澡补充到所需值（计划局数 x 5）。
 
-目标过滤（可选，config.yaml 的 pk 段）：only_names / skip_names（玩家昵称，
-逗号分隔，部分匹配）与 max_level（只打等级 ≤ N 的好友）；进入每个好友后、
+目标过滤（可选，config.yaml 的 pk 段）：only_names / skip_names（玩家昵称或
+宠物名，逗号分隔，部分匹配）与 max_level（只打等级 ≤ N 的好友）；进入每个好友后、
 点 PK 前判定，不符条件直接切下一个。
 
 运行方式（同 visit.py）：run() 独立运行回主页面。
@@ -54,6 +54,10 @@ PK_TIMEOUT_STREAK_LIMIT = 2  # 连续几次"PK 结果超时"就临时推迟 PK �
 
 # 好友宠物页顶栏"⭐等级"的 OCR 区域（x1, y1, x2, y2，1080x2412 参考分辨率，运行时按实际尺寸换算）
 FRIEND_LEVEL_REGION = (190, 270, 460, 380)
+
+# 好友宠物页顶部"主人昵称 + 宠物名"两行大字区域；宠物名 = 区域里 y >= FRIEND_NAME_MIN_Y 的行
+FRIEND_NAME_REGION = (150, 130, 700, 260)
+FRIEND_NAME_MIN_Y = 55  # 区域内的局部 y 阈值（上一行是主人昵称，下一行才是宠物名）
 
 PROGRESS_FILE = PK_PROGRESS_FILE
 
@@ -103,30 +107,61 @@ class PKScenario(VisitScenario):
                 time.sleep(0.5)
         return None
 
+    def read_friend_pet_name(self, attempts: int = 2) -> str | None:
+        """读当前好友宠物页的宠物名（顶部大字第二行；上一行是主人昵称）。
+
+        取区域里 y 靠下的那行、长度 >= 2 的文字；识别失败返回 None
+        （过滤按只匹配主人昵称处理）。
+        """
+        for i in range(attempts):
+            screen = self.screen()
+            h, w = screen.shape[:2]
+            x1, y1, x2, y2 = FRIEND_NAME_REGION
+            x1, x2 = int(x1 * w / 1080), int(x2 * w / 1080)
+            y1, y2 = int(y1 * h / 2412), int(y2 * h / 2412)
+            cands = [(y, x, t.strip()) for t, x, y, s in ocr_texts(screen[y1:y2, x1:x2])
+                     if y >= FRIEND_NAME_MIN_Y and len(t.strip()) >= 2
+                     and not t.strip().isdigit()]
+            if cands:
+                cands.sort()
+                return cands[-1][2]
+            if i < attempts - 1:
+                time.sleep(0.5)
+        return None
+
     def _friend_allowed(self, desc: str) -> bool:
-        """PK 目标过滤：只打/跳过名单（玩家昵称部分匹配）+ 等级上限。
+        """PK 目标过滤：只打/跳过名单（玩家昵称/宠物名部分匹配）+ 等级上限。
 
         返回 False 表示跳过该好友；等级读取失败按不过滤处理（fail-open）。
         """
-        name = desc.strip()
-        if name.startswith('好友'):
-            name = name[len('好友'):].strip()
-        nm = ''.join(name.split())
-        if self._only_list and not any(s in nm for s in self._only_list):
-            log(f'PK: 跳过 {name}（不在只打名单）')
-            return False
-        if self._skip_list and any(s in nm for s in self._skip_list):
-            log(f'PK: 跳过 {name}（命中跳过名单）')
-            return False
+        owner = desc.strip()
+        if owner.startswith('好友'):
+            owner = owner[len('好友'):].strip()
+        no = ''.join(owner.split())
+        pet = None
+        ne = None
+        if self._only_list or self._skip_list:
+            pet = self.read_friend_pet_name()
+            ne = ''.join((pet or '').split())
+        if self._only_list:
+            if not (any(s in no for s in self._only_list)
+                    or (ne and any(s in ne for s in self._only_list))):
+                log(f'PK: 跳过 {owner}（宠物: {pet or "读取失败"}，不在只打名单）')
+                return False
+        if self._skip_list:
+            if any(s in no for s in self._skip_list) \
+                    or (ne and any(s in ne for s in self._skip_list)):
+                log(f'PK: 跳过 {owner}（宠物: {pet or "读取失败"}，命中跳过名单）')
+                return False
         if self.max_level > 0:
             lv = self.read_friend_level()
             if lv is None:
-                log(f'PK: {name} 等级读取失败，按不过滤继续')
+                log(f'PK: {owner} 等级读取失败，按不过滤继续')
             elif lv > self.max_level:
-                log(f'PK: 跳过 {name}（等级 {lv} > {self.max_level}）')
+                log(f'PK: 跳过 {owner}（等级 {lv} > {self.max_level}）')
                 return False
             else:
-                log(f'PK: {name} 等级 {lv} ≤ {self.max_level}，继续')
+                log(f'PK: {owner} 等级 {lv} ≤ {self.max_level}，继续')
         return True
 
     def _pk_block_reason(self, early_texts=None) -> str:

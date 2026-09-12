@@ -615,8 +615,8 @@ function renderSettings(ed){
     '<div class="frow"><span class="k">时长上限（小时）</span><input type="number" id="numHour" min="0" step="1" value="'+(ed.daily_hour_limit??'')+'"></div>'+
     '<div class="frow"><span class="k">踩踩次数/天</span><input type="number" id="numVisit" min="0" step="1" value="'+(ed.visit_times??'')+'"></div>'+
     '<div class="frow"><span class="k">PK 次数/天</span><input type="number" id="numPk" min="0" step="1" value="'+(ed.pk_times??'')+'"></div>'+
-    '<div class="frow"><span class="k">PK 只打</span><input type="text" id="txtPkOnly" placeholder="昵称，逗号分隔，空=不限" value="'+esc(ed.pk_only||'')+'"></div>'+
-    '<div class="frow"><span class="k">PK 跳过</span><input type="text" id="txtPkSkip" placeholder="昵称，逗号分隔，空=不跳过" value="'+esc(ed.pk_skip||'')+'"></div>'+
+    '<div class="frow"><span class="k">PK 只打</span><input type="text" id="txtPkOnly" placeholder="昵称或宠物名，逗号分隔，空=不限" value="'+esc(ed.pk_only||'')+'"></div>'+
+    '<div class="frow"><span class="k">PK 跳过</span><input type="text" id="txtPkSkip" placeholder="昵称或宠物名，逗号分隔，空=不跳过" value="'+esc(ed.pk_skip||'')+'"></div>'+
     '<div class="frow"><span class="k">PK 等级上限</span><input type="number" id="numPkLv" min="0" step="1" value="'+(ed.pk_max_level??0)+'"></div>'+
     '<div class="frow"><span class="k">冒险次数/天</span><input type="number" id="numAdv" min="0" step="1" value="'+(ed.adventure_times??'')+'"></div>'+
     '<div class="frow"><span class="k">护理阈值（体力/清洁）</span><span class="two"><input type="number" id="numEnergy" min="0" max="100" value="'+(ed.care_energy??'')+'"><input type="number" id="numClean" min="0" max="100" value="'+(ed.care_clean??'')+'"></span></div>'+
