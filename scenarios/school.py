@@ -12,8 +12,8 @@
    力量/智力/魅力；高级学园/进修学院固定为 魅力/力量/智力，每次上课前重新判断），
    再把轮播归位到第一页，按 school.duration 选课：10分钟课直接点对应框；
    30分钟课小步扫描卡名（COURSE30_NAMES）点击，点后按详情面板"奖励<属性>+N"
-   核对（10分+2 / 30分+5），不通过归位重试一次；学习科目=夏令营（萌芽夏令营，
-   30分钟、奖励随机属性+5）走 30分钟路径、课时时长固定按 30分钟结算
+   核对（只核对属性：数值随年级抬升不能硬比；时长走学分软信号），不通过归位重试一次；
+   学习科目=夏令营（萌芽夏令营，30分钟、奖励随机属性）走 30分钟路径、课时时长固定按 30分钟结算
 5. 点击 school_start，直到页面出现 school_in 标志（进入上课）
 6. 上课中：按配置的检查间隔（schedule.check_interval）检查，直到出现 school_end 标志
 7. 点击 quit 结束，当天已学次数 +1 并持久化到 runs/school_progress.json
@@ -110,7 +110,7 @@ class SchoolScenario(DeviceScenario):
         # 课按阶段名字表找卡）
         self._stage: str | None = None
         # 本次实际课时时长（select_course 里确定：夏令营固定 30分钟，其余=配置值），
-        # verify_course_selected 按它核对奖励数字
+        # verify_course_selected 按它做学分时长软核对
         self._session_duration = self.duration
         self.times_per_day = self.cfg.school.times_per_day
         # 毕业处理防循环标志：关闭毕业面板后重新进学校仍出现毕业标志时抛异常，
@@ -277,13 +277,14 @@ class SchoolScenario(DeviceScenario):
         return False
 
     def verify_course_selected(self) -> bool:
-        """核对详情面板奖励行与所选课程一致：
-        普通科目 = 奖励<属性>+N（10分钟+2 / 30分钟+5）；夏令营 = 奖励随机属性+5。
+        """核对详情面板与所选课程一致：奖励属性一致 + 数值存在即可。
 
-        详情面板点选后即时刷新；OCR 会把末尾"+5点"读成"+50/③"等，
-        所以只取奖励后的第一位数字比对；偶尔拆行，按相邻行合并后再匹配。
+        注意：学园**年级会抬升奖励数值**（实测 1年级 10分钟课 = 智力+2，
+        升到 2年级后同一张课 = 智力+4）——不能按固定数字比对，否则年级一变
+        就误报"与预期奖励不符"，把主任务告警退出（2026-09-13 凌晨踩坑）。
+        时长核对走**学分软信号**：学分 +10=10分钟课 / +25=30分钟课（读不到则跳过）。
+        OCR 会把"+5点"读成"+50/③"等，所以只取首位数字；偶尔拆行，按相邻行合并后再匹配。
         """
-        want = {'10分钟': '2', '30分钟': '5'}[self._session_duration]
         time.sleep(0.5)
         results = ocr_texts(self.screen())
         for t, x, y, _ in results:
@@ -293,13 +294,20 @@ class SchoolScenario(DeviceScenario):
                            if abs(yy - y) <= 70)
             if self.attribute == '夏令营':
                 m = re.search(r'奖励随机属性[+＋]?(\d)', band)
-                ok = bool(m) and m.group(1) == want
+                ok = bool(m)
             else:
                 m = re.search(r'奖励(力量|智力|魅力)[+＋]?(\d)', band)
-                ok = bool(m) and m.group(1) == self.attribute and m.group(2) == want
+                ok = bool(m) and m.group(1) == self.attribute
             if ok:
+                # 学分软核对（读到才查）：10分钟课 +10 / 30分钟课 +25（首位数字 1/2）
+                cred = re.search(r'学分[+＋]?(\d)', band)
+                if cred:
+                    want_cred = '1' if self._session_duration == '10分钟' else '2'
+                    if cred.group(1) != want_cred:
+                        log(f'选课核对: 学分行 {band[:40]!r} 与 {self._session_duration} 不符')
+                        return False
                 return True
-            log(f'选课核对: 详情显示 {band[:60]!r}，与预期奖励不符')
+            log(f'选课核对: 详情显示 {band[:60]!r}，奖励属性不符')
             return False
         log('选课核对: 详情面板未找到"奖励"行')
         return False
