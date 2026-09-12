@@ -17,6 +17,7 @@ friend_name 护理好友名称 / method 护理好友方式 / interval_seconds �
 """
 
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -24,6 +25,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.progress import log
+from src.ocr import ocr_texts
 from src.scenario import CLICK_INTERVAL, DeviceScenario
 from scenarios.care import CARE_METHODS, ONE_CLICK_PAY_RETRIES, CareScenario
 from scenarios.visit import VisitScenario
@@ -31,6 +33,10 @@ from scenarios.visit import VisitScenario
 FRIEND_CARE_TARGET = 90  # ocr检测方式下好友体力/清洁的护理目标值
 MAX_FRIEND_SWITCHES = 30  # 查找/切回目标好友时最多切换次数（防无限切换）
 FRIEND_CARE_RETRIES = 2   # 进好友家/护理偶发卡顿时回主页面重进好友家再试的次数
+
+# 好友宠物页顶部"主人昵称 + 宠物名"两行大字区域（pk.py 同款；宠物名 = y 靠下的行）
+FRIEND_NAME_REGION = (150, 130, 700, 260)
+FRIEND_NAME_MIN_Y = 55
 
 
 def parse_time_range(value: str, name: str = 'friend_care.time_range') -> tuple:
@@ -99,13 +105,57 @@ class FriendCareScenario(VisitScenario):
         log(f'切换 {max_switches} 次仍未找到好友 {name}')
         return False
 
+    def read_friend_pet_name(self, attempts: int = 2) -> str | None:
+        """读当前好友宠物页顶部的宠物名（大字第二行；上一行是主人昵称）。
+
+        与 pk.py 同款区域，识别失败返回 None（该好友按无宠物名处理）。
+        """
+        for i in range(attempts):
+            screen = self.screen()
+            h, w = screen.shape[:2]
+            x1, y1, x2, y2 = FRIEND_NAME_REGION
+            x1, x2 = int(x1 * w / 1080), int(x2 * w / 1080)
+            y1, y2 = int(y1 * h / 2412), int(y2 * h / 2412)
+            cands = [(y, x, t.strip()) for t, x, y, s in ocr_texts(screen[y1:y2, x1:x2])
+                     if y >= FRIEND_NAME_MIN_Y and len(t.strip()) >= 2
+                     and not t.strip().isdigit()]
+            if cands:
+                cands.sort()
+                return cands[-1][2]
+            if i < attempts - 1:
+                time.sleep(0.5)
+        return None
+
     def goto_friend_home(self, name: str) -> None:
-        """好友面板 -> 访问 -> 依次切换好友列表，直到进入名称为 name 的好友家。"""
+        """好友面板 -> 访问 -> 依次切换好友列表，直到进入目标好友家。
+
+        匹配范围：列表里的主人昵称（content-desc "好友 xxx"）或好友页顶部的
+        宠物名（pk.py 同款区域识别）——配置宠物名（如"张二狗"）也能命中。
+        """
+        def norm(s: str) -> str:
+            return re.sub(r'\s+', '', s or '')
+
+        target = norm(name)
         self._friends = []        # 累积好友名单（只增不减），见 visit.py
         self._friend_index = 0    # 访问进入时默认第一个好友
         self.goto_first_friend()
-        if not self.switch_to_friend(name):
-            raise RuntimeError(f'好友列表中未找到好友: {name}')
+        self._accumulate_friends()
+        for _ in range(MAX_FRIEND_SWITCHES + 20):
+            desc = (self._friends[self._friend_index]
+                    if self._friend_index < len(self._friends) else '')
+            if target and target in norm(desc):
+                log(f'命中主人昵称: {desc}')
+                return
+            try:
+                pet = self.read_friend_pet_name()
+            except Exception:
+                pet = None
+            if pet and target in norm(pet):
+                log(f'命中宠物名: {pet}（主人 {desc}）')
+                return
+            if not self.next_friend():
+                break
+        raise RuntimeError(f'好友列表中未找到好友/宠物: {name}')
 
     # ---- 护理 ----
 
