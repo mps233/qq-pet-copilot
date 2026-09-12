@@ -17,7 +17,8 @@
 
 目标过滤（可选，config.yaml 的 pk 段）：only_names / skip_names（玩家昵称或
 宠物名，逗号分隔，部分匹配）与 max_level（只打等级 ≤ N 的好友；-1 = 只打等级比
-自己低的，等级从主页/好友页的 ⭐ 徽章读取）；进入每个好友后、点 PK 前判定，
+自己低的，等级从主页/好友页的 ⭐ 徽章读取；max_level < 0 且整轮没打成任何一个
+"比我低"的时，自动兜底放宽为任意等级再跑一轮）；进入每个好友后、点 PK 前判定，
 不符条件直接切下一个。
 
 打手管理（可选，config.yaml 的 pk 段 helper_names）：名单非空时，每次 run() 在
@@ -70,8 +71,7 @@ HELPER_ADD_POINT = (296, 1672)
 HELPER_CANCEL_POINT = (335, 1595)
 # 宠友列表右上角 ✕（关闭列表）位置（1080x2412 参考）
 HELPER_CLOSE_POINT = (976, 736)
-# 自己宠物主页 ⭐ 等级徽章的 OCR 区域（x1, y1, x2, y2，1080x2412 参考）
-OWN_LEVEL_REGION = (220, 292, 338, 384)
+# 注：自己主页的 ⭐ 等级徽章与好友页同区域（FRIEND_LEVEL_REGION），不单独定义
 
 PROGRESS_FILE = PK_PROGRESS_FILE
 
@@ -90,6 +90,7 @@ class PKScenario(VisitScenario):
         self.max_level = int(getattr(self.cfg.pk, 'max_level', 0) or 0)
         self.helper_names = str(getattr(self.cfg.pk, 'helper_names', '') or '').strip()
         self._own_level = None        # 自己等级（max_level < 0 时从主页读取）
+        self._level_any = False       # 兜底轮：没有"比我低"的可打时放宽为任意等级
         self._helper_checked = False  # 打手管理每次 run 只做一次
         self.sync_filters()
         log(f'每天 PK 次数: {self.times_per_day if self.times_per_day else "不限"}'
@@ -150,19 +151,12 @@ class PKScenario(VisitScenario):
         return None
 
     def read_own_level(self, attempts: int = 3) -> int | None:
-        """读自己主页的 ⭐ 等级徽章数字（max_level = -1 模式的比较基准），失败返回 None。"""
-        for i in range(attempts):
-            screen = self.screen()
-            h, w = screen.shape[:2]
-            x1, y1, x2, y2 = OWN_LEVEL_REGION
-            x1, x2 = int(x1 * w / 1080), int(x2 * w / 1080)
-            y1, y2 = int(y1 * h / 2412), int(y2 * h / 2412)
-            for t, _, _, _ in ocr_texts(screen[y1:y2, x1:x2]):
-                if t.strip().isdigit():
-                    return int(t.strip())
-            if i < attempts - 1:
-                time.sleep(0.5)
-        return None
+        """读自己主页的 ⭐ 等级徽章数字（与好友页徽章同区域同读法），失败返回 None。
+
+        注意：徽章 OCR 区域不能裁得太小（小图 RapidOCR 检测不到），
+        直接复用 FRIEND_LEVEL_REGION 的尺寸读自己页面（两页布局一致）。
+        """
+        return self.read_friend_level(attempts)
 
     def _friend_allowed(self, desc: str) -> bool:
         """PK 目标过滤：只打/跳过名单（玩家昵称/宠物名部分匹配）+ 等级上限。
@@ -189,11 +183,18 @@ class PKScenario(VisitScenario):
                 log(f'PK: 跳过 {owner}（宠物: {pet or "读取失败"}，命中跳过名单）')
                 return False
         cap = self.max_level
-        if cap < 0 and self._own_level is not None:
-            cap = self._own_level - 1  # 只打等级比自己低的
+        if cap < 0:
+            if self._level_any:
+                cap = 0  # 兜底轮：不限等级（仍受只打/跳过名单约束）
+            elif self._own_level is not None:
+                cap = self._own_level - 1  # 只打等级比自己低的
         if cap > 0:
             lv = self.read_friend_level()
             if lv is None:
+                if self.max_level < 0:
+                    # "只打比我低"模式读不到等级：保守跳过，留给兜底轮打
+                    log(f'PK: 跳过 {owner}（等级读取失败，留给兜底轮）')
+                    return False
                 log(f'PK: {owner} 等级读取失败，按不过滤继续')
             elif lv > cap:
                 log(f'PK: 跳过 {owner}（等级 {lv}'
@@ -555,6 +556,7 @@ class PKScenario(VisitScenario):
         start_done = done
         round_target = self._round_limit(max_times, done)
         self.ensure_main_page()
+        self._level_any = False
         if self.max_level < 0:
             self._own_level = self.read_own_level()
             if self._own_level is not None:
@@ -563,6 +565,14 @@ class PKScenario(VisitScenario):
                 log('你的宠物等级读取失败：本轮不做等级过滤')
         self._prepare_stats(round_target - done)
         done = self._pk_all(round_target, today, done, history)
+        if self.max_level < 0 and done == start_done and (not max_times or done < max_times):
+            # 兜底：整轮没打成任何一个"等级比我低"的（没有这种好友/都被挡），
+            # 放宽为打任意等级再跑一轮——避免白白不 PK；仍受只打/跳过名单约束
+            log('PK 兜底: 没有等级比我低的可打，本轮放宽为打任意等级')
+            self._level_any = True
+            self.close()
+            self.ensure_main_page()
+            done = self._pk_all(round_target, today, done, history)
         self.close()  # 点 back 收掉好友相关页面，再确认回主页面
         self.ensure_main_page()
         return done > start_done

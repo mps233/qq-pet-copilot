@@ -110,7 +110,7 @@ def validate_field(key: str, value):
                'pk.only_names', 'pk.skip_names', 'pk.helper_names'):
         return True, str(value).strip()
     if key == 'pk.max_level':
-        # -1 = 只打等级比自己低的（动态读取主人等级）；0 = 不限；>0 = 只打等级 ≤ N
+        # -1 = 只打等级比自己低的（动态读取主人等级；没有可打时兜底任意等级）；0 = 不限；>0 = 只打等级 ≤ N
         try:
             return (True, value) if int(value) >= -1 else (False, default)
         except (TypeError, ValueError):
