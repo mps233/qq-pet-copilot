@@ -279,6 +279,9 @@ TASK_SETTING_FIELDS = [
     ('friend_care.friend_name', '护理好友名称', 'str'),
     ('friend_care.method', '护理好友方式', ['一键护理', 'ocr检测']),
     ('friend_care.interval_seconds', '好友护理调度间隔（秒）', 'int'),
+    ('gift_bag.enabled', '启用福袋领取', 'bool'),
+    ('gift_bag.time_range', '福袋时间段', 'str'),
+    ('gift_bag.interval_seconds', '福袋扫描间隔（秒）', 'int'),
     ('hire_friend.enabled', '雇佣好友开关', 'bool'),
     ('hire_friend.time_range', '雇佣好友时间段', 'str'),
     ('hire_friend.interval_seconds', '雇佣好友调度间隔（秒）', 'int'),
@@ -296,7 +299,7 @@ TASK_SETTING_FIELDS = [
 
 # 调度选项卡的任务显示名（任务键定义在 src/config.py 的 TASK_KEYS）
 SCHEDULE_TASK_NAMES = {'care': '护理', 'adventure': '冒险', 'visit': '踩踩', 'pk': 'PK',
-                       'hire_friend': '雇佣好友', 'friend_care': '好友护理',
+                       'hire_friend': '雇佣好友', 'friend_care': '好友护理', 'gift_bag': '福袋',
                        'school': '学习', 'work': '打工'}
 
 # 设置/任务表单的分组卡片标题：按配置键第一段分组（顺序按字段首次出现）
@@ -308,7 +311,7 @@ SETTING_GROUP_TITLES = {
     'notify': '告警通知',
     'school': '学习', 'work': '打工', 'adventure': '冒险',
     'visit': '踩踩', 'pk': 'PK',
-    'friend_care': '好友护理', 'hire_friend': '雇佣好友',
+    'friend_care': '好友护理', 'hire_friend': '雇佣好友', 'gift_bag': '福袋',
     'care': '护理', 'employed': '被雇佣',
 }
 
@@ -1253,11 +1256,11 @@ class MainWindow(MSFluentWindow):
             item = getattr(cfg.tasks, key)
             if key in ('adventure', 'visit', 'pk'):
                 interval_v = getattr(cfg, key).start_time
-            elif key in ('care', 'hire_friend', 'friend_care'):
+            elif key in ('care', 'hire_friend', 'friend_care', 'gift_bag'):
                 interval_v = getattr(cfg, key).interval_seconds
             else:
                 interval_v = '—'
-            if key in ('hire_friend', 'friend_care'):
+            if key in ('hire_friend', 'friend_care', 'gift_bag'):
                 range_v = str(getattr(cfg, key).time_range)
             else:
                 range_v = str(item.enabled_time_range)
@@ -1323,7 +1326,7 @@ class MainWindow(MSFluentWindow):
             te.setToolTip('每日调度时间（HH:MM）')
             te.timeChanged.connect(lambda qt, k=key: self._save_schedule_time(k, qt))
             return te
-        if key in ('care', 'hire_friend', 'friend_care'):
+        if key in ('care', 'hire_friend', 'friend_care', 'gift_bag'):
             # 调度间隔（秒）：护理用 tasks.care.interval_seconds，好友护理/雇佣好友用场景值
             value = (getattr(cfg.tasks, key).interval_seconds if key == 'care'
                      else getattr(cfg, key).interval_seconds)

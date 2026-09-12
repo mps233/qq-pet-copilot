@@ -155,6 +155,8 @@ def config_summary() -> dict:
         ['金币阈值', f"{sched.get('coin_threshold', '-')}（低于优先打工）"],
         ['时长上限', f"{sched.get('daily_hour_limit', '-')} 小时/天"],
         ['打工停止', f"{sched.get('work_stop_hours', '-')} 小时/天（避 10% 效率档）"],
+        ['福袋', f"{'启用' if (cfg.get('gift_bag') or {}).get('enabled', True) else '未启用'}"
+                 f" · 每 {(cfg.get('gift_bag') or {}).get('interval_seconds', '-')} 秒扫描"],
         ['踩踩', f"{visit.get('times_per_day', '-')} 次/天 @ {visit.get('start_time', '')}"],
         ['PK', f"{pk.get('times_per_day', '-')} 次/天 @ {pk.get('start_time', '')}"],
         ['冒险', f"{adv.get('times_per_day', '-')} 次/天 @ {adv.get('start_time', '')}"],
@@ -530,6 +532,8 @@ def editable_snapshot() -> dict:
         'care_energy': care.get('energy_threshold', 60),
         'care_clean': care.get('clean_threshold', 60),
         'care_method': care.get('method', '一键护理'),
+        'gift_bag_enabled': bool((cfg.get('gift_bag') or {}).get('enabled', True)),
+        'gift_bag_interval': (cfg.get('gift_bag') or {}).get('interval_seconds', 1800),
     }
 
 
@@ -557,6 +561,8 @@ def apply_settings(updates: dict) -> dict:
         'care_energy': ('care.energy_threshold', 'int'),
         'care_clean': ('care.clean_threshold', 'int'),
         'care_method': ('care.method', None),
+        'gift_bag_enabled': ('gift_bag.enabled', 'bool'),
+        'gift_bag_interval': ('gift_bag.interval_seconds', 'int'),
     }
     data = S.load_raw()
     applied, rejected = {}, []
@@ -839,7 +845,7 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 <script>
 const $=s=>document.querySelector(s);
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-const TASKNAME={care:'护理',school:'学习',friend_care:'好友护理',hire_friend:'雇佣好友',adventure:'冒险',visit:'踩踩',pk:'PK',work:'打工'};
+const TASKNAME={care:'护理',school:'学习',friend_care:'好友护理',gift_bag:'福袋',hire_friend:'雇佣好友',adventure:'冒险',visit:'踩踩',pk:'PK',work:'打工'};
 let etaRemain=null, etaClock='';
 let logAuto=true, logFilter='';
 try{ logAuto = localStorage.getItem('qpet_logAuto')!=='0'; }catch(e){}
@@ -1165,8 +1171,11 @@ function renderSettings(ed){
     '<div class="frow"><span class="k">PK 等级上限</span><input type="number" id="numPkLv" min="-1" step="1" title="-1 = 只打等级比我低的" value="'+(ed.pk_max_level??0)+'"></div>'+
     '<div class="frow"><span class="k">冒险次数/天</span><input type="number" id="numAdv" min="0" step="1" value="'+(ed.adventure_times??'')+'"></div>'+
     '<div class="frow"><span class="k">护理阈值（体力/清洁）</span><span class="two"><input type="number" id="numEnergy" min="0" max="100" value="'+(ed.care_energy??'')+'"><input type="number" id="numClean" min="0" max="100" value="'+(ed.care_clean??'')+'"></span></div>'+
-    '<div class="frow"><span class="k">护理方式</span>'+sel('selCare', ['一键护理','ocr检测'], ed.care_method)+'</div>';
+    '<div class="frow"><span class="k">护理方式</span>'+sel('selCare', ['一键护理','ocr检测'], ed.care_method)+'</div>'+
+    '<div class="frow"><span class="k">福袋领取</span><button class="sw'+(ed.gift_bag_enabled?' on':'')+'" id="swGiftBag" title="开=定时遍历好友领取系绳福袋"></button></div>'+
+    '<div class="frow"><span class="k">福袋扫描间隔（秒）</span><input type="number" id="numGbInt" min="60" step="60" value="'+(ed.gift_bag_interval??'')+'"></div>';
   $('#swSchool').onclick=()=>{ $('#swSchool').classList.toggle('on'); setDirty=true; };
+  $('#swGiftBag').onclick=()=>{ $('#swGiftBag').classList.toggle('on'); setDirty=true; };
 }
 
 async function saveSettings(){
@@ -1176,6 +1185,8 @@ async function saveSettings(){
   const updates={};
   const schoolEnabledNew = !$('#swSchool').classList.contains('on');
   if(!!schoolEnabledNew !== !!setInit.school_enabled) updates.school_enabled=schoolEnabledNew;
+  const gbEnabledNew = $('#swGiftBag').classList.contains('on');
+  if(!!gbEnabledNew !== !!setInit.gift_bag_enabled) updates.gift_bag_enabled=gbEnabledNew;
   const getv=id=>($(id)?$(id).value.trim():'');
   const num=(id,key)=>{const v=getv(id); if(v==='')return; const n=parseInt(v,10); if(!isNaN(n)&&n!==setInit[key]) updates[key]=n;};
   const selc=(id,key)=>{const v=getv(id); if(v&&v!==setInit[key]) updates[key]=v;};
@@ -1185,7 +1196,7 @@ async function saveSettings(){
   num('#numCoin','coin_threshold'); num('#numHour','daily_hour_limit'); num('#numWorkStop','work_stop_hours');
   num('#numVisit','visit_times'); num('#numPk','pk_times'); num('#numAdv','adventure_times');
   txtc('#txtPkOnly','pk_only'); txtc('#txtPkSkip','pk_skip'); num('#numPkLv','pk_max_level'); txtc('#txtPkHelper','pk_helper');
-  num('#numEnergy','care_energy'); num('#numClean','care_clean');
+  num('#numEnergy','care_energy'); num('#numClean','care_clean'); num('#numGbInt','gift_bag_interval');
   if(!Object.keys(updates).length){ msg.className='saveMsg'; msg.textContent='没有改动'; btn.disabled=false; return; }
   try{
     const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({updates})});

@@ -163,7 +163,7 @@ def validate_field(key: str, value):
         except (TypeError, ValueError):
             return False, default
     if key in ('employed.interval_seconds', 'hire_friend.interval_seconds',
-               'care.interval_seconds'):
+               'care.interval_seconds', 'gift_bag.interval_seconds'):
         # 调度间隔至少 1 秒（0 会变成无间隔连续调度）
         try:
             return (True, value) if int(value) >= 1 else (False, default)

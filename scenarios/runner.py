@@ -32,6 +32,9 @@
   时间段内按 friend_care.interval_seconds 间隔调度：每次访问该好友家按
   friend_care.method 护理一次（单次巡检，不再场景内切换好友刷新状态）后回主页面
   （scenarios/friend_care.py）
+- 福袋：gift_bag.enabled 开启时在 gift_bag.time_range 内按 gift_bag.interval_seconds
+  间隔调度：遍历好友列表领取系绳的福袋（敞口/无袋跳过；非好友弹加好友提示不领），
+  一轮结束回主页面（scenarios/gift_bag.py）
 - 好友雇佣：hire_friend.enabled 开启且配置了好友名称时，在 hire_friend.time_range
   时间段内按 hire_friend.interval_seconds 间隔调度且当天次数未满
   （hire_friend.times_per_day）时访问该好友家，OCR hire 按钮上的
@@ -107,6 +110,7 @@ from scenarios.adventure import AdventureScenario
 from scenarios.care import CareScenario
 from scenarios.employed import EmployedScenario
 from scenarios.friend_care import FriendCareScenario, in_time_range, parse_time_range
+from scenarios.gift_bag import GiftBagScenario
 from scenarios.hire_friend import FriendHireScenario
 from scenarios.pk import PKDeferred, PKScenario
 from scenarios.school import ATTRIBUTE_COURSES, SchoolScenario
@@ -194,6 +198,7 @@ class Runner:
         self.visit = VisitScenario(dev)
         self.pk = PKScenario(dev)
         self.friend_care = FriendCareScenario(dev)
+        self.gift_bag = GiftBagScenario(dev)
         self.hire_friend = FriendHireScenario(dev)
         self.employed = EmployedScenario(dev)
         self.recoveries = 0  # 连续异常恢复次数（成功跑完一轮清零；距上次超过 RECOVERY_RESET_AFTER 也清零）
@@ -204,6 +209,7 @@ class Runner:
         self.friend_care_dead = False  # 好友护理今天不再可用（执行失败）
         self.hire_friend_dead = False  # 好友雇佣今天不再可用（执行失败）
         self._fc_bad_range_logged = False  # 时间段格式错误只记一次日志（due() 每轮都调）
+        self._gb_bad_range_logged = False  # 福袋时间段格式错误只记一次日志（同上）
         self._hf_bad_time_logged = False   # 雇佣好友时间格式错误只记一次日志（同上）
         self._ec_bad_range_logged = False  # 被雇佣时间段格式错误只记一次日志（同上）
         self._work_over_logged_on = None   # “打工停止时长已达”日志每天只记一次的日期标记
@@ -299,6 +305,26 @@ class Runner:
                 self._fc_bad_range_logged = True
             return False
         self._fc_bad_range_logged = False
+        return in_time_range(datetime.now().time(), start, end)
+
+    def gift_bag_due(self) -> bool:
+        """是否该扫福袋了：已启用、当前时间在时间段内、距上次扫描已过
+        gift_bag.interval_seconds 且不在失败延后期。"""
+        gb = self.gift_bag.cfg.gift_bag
+        if not gb.enabled or self._deferred('福袋'):
+            return False
+        last = getattr(self.gift_bag, 'last_sweep_at', None)
+        interval = max(0, int(getattr(gb, 'interval_seconds', 1800) or 0))
+        if last is not None and datetime.now() < last + timedelta(seconds=interval):
+            return False
+        try:
+            start, end = parse_time_range(gb.time_range)
+        except ValueError as e:
+            if not self._gb_bad_range_logged:
+                log(f'{e}，福袋不调度')
+                self._gb_bad_range_logged = True
+            return False
+        self._gb_bad_range_logged = False
         return in_time_range(datetime.now().time(), start, end)
 
     def hire_friend_due(self) -> bool:
@@ -575,7 +601,7 @@ class Runner:
             log(f'恢复失败: {e}')
             return False
         for scen in (self.school, self.work, self.adventure, self.care, self.visit, self.pk,
-                     self.friend_care, self.hire_friend, self.employed):
+                     self.friend_care, self.gift_bag, self.hire_friend, self.employed):
             scen.dev = dev
         log('恢复完成，继续调度')
         return True
@@ -601,7 +627,7 @@ class Runner:
         # schedule 整体替换到各场景实例：check_interval / encourage_times /
         # main_page_checks / 金币阈值等全部热加载（设置页保存后下一轮即生效）
         for scen in (self.school, self.work, self.adventure, self.care, self.visit, self.pk,
-                     self.friend_care, self.hire_friend, self.employed):
+                     self.friend_care, self.gift_bag, self.hire_friend, self.employed):
             scen.cfg.schedule = sched
             # 控制方案热加载（各场景共享同一个 dev，同步一次即全部生效；
             # minitouch 会话懒加载，切换方案后下次点击自动按新方案走）
@@ -613,6 +639,7 @@ class Runner:
             scen.cfg.emulator = cfg.emulator
         # 好友护理/好友雇佣配置整体替换（启用开关/时间段/好友名称/方式/次数下一轮即生效）
         self.friend_care.cfg.friend_care = cfg.friend_care
+        self.gift_bag.cfg.gift_bag = cfg.gift_bag
         self.hire_friend.cfg.hire_friend = cfg.hire_friend
 
         adv = cfg.adventure
@@ -700,7 +727,7 @@ class Runner:
             self._alert_and_exit(f'启动进入宠物页失败: {e}')
             return
         for scen in (self.school, self.work, self.adventure, self.care, self.visit, self.pk,
-                     self.friend_care, self.hire_friend, self.employed):
+                     self.friend_care, self.gift_bag, self.hire_friend, self.employed):
             scen.dev = dev
         log('启动检查：已进入宠物主页面')
 
@@ -944,12 +971,12 @@ class Runner:
 # ---- 任务队列调度（engine: task_queue） ----
 
 TASK_NAMES = {'care': '护理', 'adventure': '冒险', 'visit': '踩踩', 'pk': 'PK',
-              'hire_friend': '雇佣好友', 'friend_care': '好友护理',
+              'hire_friend': '雇佣好友', 'friend_care': '好友护理', 'gift_bag': '福袋',
               'school': '学习', 'work': '打工'}
 # 支线任务（异常重排期/主任务结束后可等待的任务）。
 # 注：雇佣好友属于主任务组（互斥统一调度），但失败处理仍按支线语义
 # （回主页面 + failure_interval 退避重试，不发告警不退出）
-SIDE_TASK_KEYS = ('adventure', 'visit', 'pk', 'hire_friend', 'friend_care')
+SIDE_TASK_KEYS = ('adventure', 'visit', 'pk', 'hire_friend', 'friend_care', 'gift_bag')
 # 主任务组键定义在 src/config.py 的 MAIN_TASK_KEYS（GUI 设置校验也用）
 # 没有任务可执行且没有明确等待点时的短轮询间隔（秒），顺带热加载配置
 QUEUE_POLL_INTERVAL = 30
@@ -1293,6 +1320,8 @@ class TaskQueueRunner(Runner):
             return self.pk_due()
         if key == 'friend_care':
             return self.friend_care_due()
+        if key == 'gift_bag':
+            return self.gift_bag_due()
         return False
 
     # ---- 执行 ----
@@ -1382,6 +1411,7 @@ class TaskQueueRunner(Runner):
             return
         scen = {'adventure': self.adventure, 'visit': self.visit, 'pk': self.pk,
                 'hire_friend': self.hire_friend, 'friend_care': self.friend_care,
+                'gift_bag': self.gift_bag,
                 'school': self.school, 'work': self.work}[task.key]
         if task.key == 'hire_friend':
             # 调度间隔从实际执行起算（不在 hire_friend_due 判定里记：_main_choice
@@ -1500,6 +1530,10 @@ class TaskQueueRunner(Runner):
             if key == 'friend_care':
                 fc = self.friend_care.cfg.friend_care
                 if not fc.enabled or not fc.friend_name.strip():
+                    task_states[key] = {'state': 'disabled', 'next': ''}
+                    continue
+            if key == 'gift_bag':
+                if not self.gift_bag.cfg.gift_bag.enabled:
                     task_states[key] = {'state': 'disabled', 'next': ''}
                     continue
             if key == 'hire_friend':
