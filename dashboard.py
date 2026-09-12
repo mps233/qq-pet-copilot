@@ -226,6 +226,11 @@ def adventure_data() -> dict:
     if not rows and not stats:
         return {'ok': False}
     target = 100
+    try:
+        import json as _json
+        target = int(_json.loads((ADV_DIR / 'meta.json').read_text('utf-8')).get('target') or target)
+    except Exception:
+        pass
     golds = [(r['i'], r['delta']) for r in rows if r.get('delta') is not None]
     net = sum(d for _, d in golds)
     cum, s = [], 0
