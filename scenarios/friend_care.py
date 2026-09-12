@@ -27,7 +27,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.progress import log
 from src.ocr import ocr_texts
 from src.scenario import CLICK_INTERVAL, DeviceScenario
-from scenarios.care import CARE_METHODS, ONE_CLICK_PAY_RETRIES, CareScenario
+from scenarios.care import (CARE_METHODS, FEED_PANEL_RETRIES, FEED_RESULT_WAIT,
+                            MAX_FEED_ATTEMPTS, MAX_SHOWER_ATTEMPTS,
+                            ONE_CLICK_PAY_RETRIES, SCRUB_BOTTOM_PCT,
+                            SCRUB_STALL_REPRESS, SCRUB_TOP_PCT, CareScenario)
 from scenarios.visit import VisitScenario
 
 FRIEND_CARE_TARGET = 90  # ocr检测方式下好友体力/清洁的护理目标值
@@ -60,10 +63,139 @@ def in_time_range(now, start, end) -> bool:
 
 class _FriendCare(CareScenario):
     """好友家护理：复用喂食/洗澡/状态面板流程，但不写自己的状态缓存
-    （cache_care_items 会把好友的体力/库存写进当前账号缓存，污染 GUI 状态条）。"""
+    （cache_care_items 会把好友的体力/库存写进当前账号缓存，污染 GUI 状态条）。
+
+    好友页面实测差异（1080x2412，详见实测记录）：
+    - 喂食/洗澡面板的物品按钮要用 content-desc 定位（"饼干" / "香皂片，剩余N"），
+      care.py 的结构 xpath（RecyclerView/...）在好友页会命中底部好友栏 (y≈2196)，
+      导致"喂食"一直点在好友列表上反复切好友；
+    - 点"饼干" = 体力+10/次；洗澡 = 按住"香皂片"拖到搓洗区间来回搓（与自家页一致）；
+    - 库存为空时面板显示"兑换食物"/"购买洗澡道具"，复用自家页兑换/购买流程
+      （实测可用；金币扣访客自己的账号，好友账号不动）。
+    """
 
     def cache_care_items(self, anchor: str, **status_fields) -> None:
         pass
+
+    def _panel_item_bounds(self, name_prefix: str):
+        """面板物品按钮（饼干/香皂片）的 bounds：desc 以 name_prefix 开头，
+        排除购买弹窗里的"xx，N金币"条目；找不到返回 None。"""
+        return self.dev.find_xpath_bounds(
+            f'//*[starts-with(@content-desc, "{name_prefix}")'
+            f' and not(contains(@content-desc, "金币"))]')
+
+    def exit_care_mode(self, source=None):
+        """好友页版本：feed_10/shower_10 的结构 xpath 在好友页永远误命中好友栏
+        （原逻辑会误判"仍在喂食/洗澡界面"并连点 back，把页面点出去），改为不动作；
+        喂食/洗澡面板留在页面上不影响后续（收起状态面板/回家都不敏感，
+        再次进入面板时自动切换）。"""
+        return source if source is not None else self.dev.hierarchy()
+
+    def feed(self, source=None) -> None:
+        """好友页喂食：点 feed 开面板 -> 点"饼干"（体力+10/次）直到阈值。
+        没有饼干（库存空）时 _exchange_food() 金币兑换 20 个（访客账号扣费）后继续。"""
+        hit = self.see('feed', source=source)
+        if not hit:
+            raise RuntimeError('未找到 feed 喂食按钮')
+        self.click(hit[0], hit[1])
+        time.sleep(CLICK_INTERVAL)
+        for attempt in range(1, FEED_PANEL_RETRIES + 1):
+            if self._panel_item_bounds('饼干') or self.see('exchange_food'):
+                break
+            log(f'等待喂食面板加载 ({attempt}/{FEED_PANEL_RETRIES})')
+            time.sleep(CLICK_INTERVAL)
+        exchanged = False
+        for attempt in range(1, MAX_FEED_ATTEMPTS + 1):
+            b = self._panel_item_bounds('饼干')
+            if not b:
+                if exchanged:
+                    log('兑换后仍未找到饼干按钮，跳过本次喂食')
+                    return
+                self._exchange_food()
+                exchanged = True
+                time.sleep(CLICK_INTERVAL)
+                continue
+            x1, y1, x2, y2 = b
+            self.click((x1 + x2) // 2, (y1 + y2) // 2)
+            time.sleep(FEED_RESULT_WAIT)
+            screen, source = self.snapshot()
+            energy = self.read_status(screen, source).get('体力')
+            log(f'第 {attempt} 次喂食后体力: {energy}')
+            if energy is not None and energy >= self.energy_threshold:
+                log(f'体力已达标（>= {self.energy_threshold}）')
+                return
+        log(f'喂食 {MAX_FEED_ATTEMPTS} 次后体力仍未达到 {self.energy_threshold}，'
+            f'跳过本次喂食（可能是游戏显示未刷新，实际已达标）')
+
+    def shower(self, source=None) -> None:
+        """好友页洗澡：点 shower 开面板 -> 按住"香皂片"不松手拖到搓洗区间来回搓，
+        直到清洁达标后抬手（沿用自家页的 drag 搓洗手感）。
+        香皂不足时 _buy_soap() 金币购买（访客账号扣费）后继续。"""
+        hit = self.see('shower', source=source)
+        if not hit:
+            raise RuntimeError('未找到 shower 洗澡按钮')
+        self.click(hit[0], hit[1])
+        time.sleep(CLICK_INTERVAL)
+        source = self.dev.hierarchy()
+        b = self._panel_item_bounds('香皂片')
+        if not b:
+            self._buy_soap(source)
+            time.sleep(CLICK_INTERVAL)
+            b = self._panel_item_bounds('香皂片')
+            if not b:
+                hit = self.see('shower', source=source)
+                if hit:
+                    log('购买后洗澡面板已关闭，原地重新打开')
+                    self.click(hit[0], hit[1])
+                    time.sleep(CLICK_INTERVAL)
+                    source = self.dev.hierarchy()
+                    b = self._panel_item_bounds('香皂片')
+            if not b:
+                raise RuntimeError('购买洗澡道具后仍未找到香皂片按钮')
+        x1, y1, x2, y2 = b
+        sx, sy = (x1 + x2) // 2, (y1 + y2) // 2
+        w, h = self.dev.window_size()
+        top = (round(w * SCRUB_TOP_PCT[0]), round(h * SCRUB_TOP_PCT[1]))
+        bottom = (round(w * SCRUB_BOTTOM_PCT[0]), round(h * SCRUB_BOTTOM_PCT[1]))
+        log(f'按住香皂 ({sx}, {sy}) 拖到 {top} 开始搓洗')
+        self.dev.touch_down(sx, sy)
+        try:
+            self.scrub_path(sx, sy, *top)
+            last_clean: int | None = None
+            stall = 0  # 清洁连续不提升的回合数（按压失效自愈，同自家页）
+            for attempt in range(1, MAX_SHOWER_ATTEMPTS + 1):
+                self.scrub_path(*bottom, *top)
+                self.scrub_path(*top, *bottom)
+                # 读取依赖状态面板处于展开态（生产流程 care_friend 已先展开）；
+                # 用当下快照读取更稳（试过旧 source 正常，面板没展开才会全 None）
+                screen, source = self.snapshot()
+                clean = self.read_status(screen, source).get('清洁')
+                log(f'搓洗 {attempt} 回合后清洁: {clean}')
+                if clean is not None and clean >= self.clean_threshold:
+                    log(f'清洁已达标（>= {self.clean_threshold}）')
+                    return
+                if clean is not None and last_clean is not None and clean <= last_clean:
+                    stall += 1
+                elif clean is not None:
+                    stall = 0
+                if clean is not None:
+                    last_clean = clean
+                if stall >= SCRUB_STALL_REPRESS:
+                    log(f'清洁连续 {stall} 回合未提升，抬手重按香皂')
+                    self.dev.touch_up(*bottom)
+                    time.sleep(CLICK_INTERVAL)
+                    b = self._panel_item_bounds('香皂片')
+                    if not b:
+                        raise RuntimeError('重按香皂时未找到香皂片按钮')
+                    x1, y1, x2, y2 = b
+                    sx, sy = (x1 + x2) // 2, (y1 + y2) // 2
+                    self.dev.touch_down(sx, sy)
+                    self.scrub_path(sx, sy, *top)
+                    stall = 0
+            log(f'搓洗 {MAX_SHOWER_ATTEMPTS} 回合后清洁仍未达到 {self.clean_threshold}，'
+                f'跳过本次洗澡')
+        finally:
+            self.dev.touch_up(*bottom)
 
 
 class FriendCareScenario(VisitScenario):
