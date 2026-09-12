@@ -220,11 +220,30 @@ def _adv_care_pairs(row: dict) -> list:
 
 
 def adventure_data() -> dict:
-    """冒险实验实时数据（读 /tmp/adventure_experiment 的 results/stats）。"""
+    """冒险实验实时数据（/tmp/adventure_experiment 的 results/stats）
+    + 调度器自动记录的今日实时（runs/adventure_live.jsonl）。"""
     rows = _adv_load('results.jsonl')
     stats = _adv_load('stats.jsonl')
+    live_rows = []
+    try:
+        for _line in (RUNS / 'adventure_live.jsonl').read_text('utf-8').splitlines()[-600:]:
+            try:
+                live_rows.append(json.loads(_line))
+            except Exception:
+                pass
+    except Exception:
+        pass
+    _today = datetime.now().strftime('%Y-%m-%d')
+    _tl = [r for r in live_rows if str(r.get('ts') or '').startswith(_today)]
+    live = {'n': len(_tl),
+            'net': sum(int(r.get('coins') or 0) for r in _tl),
+            'win': sum(1 for r in _tl if int(r.get('coins') or 0) > 0),
+            'first': (_tl[0]['ts'][11:16] if _tl else None),
+            'last': (_tl[-1]['ts'][11:19] if _tl else None),
+            'rows': [[str(r.get('ts') or '')[11:19], int(r.get('coins') or 0)]
+                     for r in _tl]}
     if not rows and not stats:
-        return {'ok': False}
+        return {'ok': False, 'live': live}
     target = 100
     try:
         import json as _json
@@ -314,6 +333,7 @@ def adventure_data() -> dict:
                     'e': latest.get('体力'), 'c': latest.get('清洁'),
                     'm': latest.get('心情')} if latest else None),
         'updated': updated,
+        'live': live,
     }
 
 
@@ -790,6 +810,13 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
     <div class="subline" id="workSub"></div>
   </section>
 
+  <section class="card" data-page="adv">
+    <h2>今日实时冒险 <span id="advLiveMeta" style="font-weight:400;font-size:10.5px"></span></h2>
+    <div class="workline"><span class="big" id="advLiveNet">--</span><span class="hint" id="advLiveHint"></span></div>
+    <div class="advcap">逐把明细（新→旧，自动记录）</div>
+    <div class="advlist" id="advLiveList" style="max-height:380px;overflow:auto"></div>
+  </section>
+
   <section class="card" id="advCard" data-page="adv">
     <h2>冒险实验 <span id="advMeta" style="font-weight:400;font-size:10.5px"></span></h2>
     <div class="workline"><span class="big" id="advNet">--</span><span class="hint" id="advNetHint"></span></div>
@@ -1005,6 +1032,8 @@ function drawAdv(){
   svgSet('svgStats',inner3);
 }
 function renderAdventure(d){
+  window.__adv=d;
+  renderAdvLive(d&&d.live||null);
   if(!d||!d.ok){const m=$('#advMeta');if(m)m.textContent='实验数据未找到';return}
   window.__adv=d;
   $('#advMeta').textContent=d.n+'/'+d.target+' 次 · 更新 '+(d.updated||'');
@@ -1034,6 +1063,22 @@ function renderAdvList(d){
     return '<div class="arow"><span class="ai">#'+r[0]+' '+(r[1]||'').slice(0,5)+'</span><span class="ag">'+g+'</span><span class="av '+cls+'">'+vt+'</span></div>';
   }).join('')||'<div class="arow"><span class="ag">暂无记录</span></div>';
   const b=$('#btnAdvAll'); if(b){b.className='minibtn'+(advShowAll?' on':'');b.textContent=advShowAll?'全部':'仅变化';}
+}
+function renderAdvLive(l){
+  const meta=$('#advLiveMeta'), big=$('#advLiveNet'), hint=$('#advLiveHint'), list=$('#advLiveList');
+  if(!meta)return;
+  if(!l||!l.n){meta.textContent=''; big.textContent='--'; big.style.color='';
+    hint.textContent='从下一把起自动记录';
+    list.innerHTML='<div class="arow"><span class="ag">今天还没有记录</span></div>'; return;}
+  meta.textContent='记录自 '+l.first+' 起';
+  big.textContent=(l.net>0?'+':'')+l.net;
+  big.style.color=l.net>0?'var(--ok)':(l.net<0?'#dc2626':'');
+  hint.textContent='今日 '+l.n+' 把 · 有收益 '+l.win+' 次 · 最近 '+l.last;
+  const arr=(l.rows||[]).slice().reverse();
+  list.innerHTML=arr.slice(0,150).map(r=>{
+    const v=r[1]; const cls=v>0?'pos':(v<0?'neg':'zero');
+    return '<div class="arow"><span class="ai">'+esc(r[0])+'</span><span class="av '+cls+'">'+(v>0?'+':'')+v+'</span></div>';
+  }).join('')||'<div class="arow"><span class="ag">暂无</span></div>';
 }
 const _advBtn=document.getElementById('btnAdvAll');
 if(_advBtn) _advBtn.onclick=()=>{advShowAll=!advShowAll; if(window.__adv)renderAdvList(window.__adv);};

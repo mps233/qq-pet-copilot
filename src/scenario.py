@@ -1,6 +1,10 @@
 """场景基类：设备连接、截图、u2/OCR 定位点击、通用导航。"""
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import re
 import time
 from datetime import datetime, timedelta
 
@@ -16,6 +20,47 @@ from .progress import (
     log,
 )
 from .u2dev import U2Device
+
+
+# ---- 冒险实时记录（仪表盘的"今日实时"数据源） ----
+def record_adventure_live(texts) -> None:
+    """把一次冒险结算记入 runs/adventure_live.jsonl。
+
+    金币数 = 结算页"主人"之后、"分享"之前的纯数字（无数字 = 0，没中奖）；
+    sig 优先取故事里的日期时间（每条结算唯一），与文件最后一条相同则跳过（去重）。
+    记录失败仅忽略，绝不影响调度主流程。
+    """
+    try:
+        toks = [str(t).strip() for t in texts]
+        if '分享' not in toks:
+            return
+        i = toks.index('分享')
+        start = 0
+        for j, t in enumerate(toks[:i]):
+            if t.startswith('主人'):
+                start = j + 1
+        nums = [int(t) for t in toks[start:i] if re.fullmatch(r'\d{1,4}', t)]
+        coins = nums[-1] if nums else 0
+        dt = next((t for t in toks
+                   if re.search(r'\d{4}/\d{1,2}/\d{1,2}\s+\d{1,2}:\d{2}', t)), '')
+        sig = dt or hashlib.md5('\n'.join(toks).encode('utf-8')).hexdigest()[:12]
+        path = os.path.join(os.path.dirname(HIRE_FRIEND_PROGRESS_FILE),
+                            'adventure_live.jsonl')
+        try:
+            with open(path, encoding='utf-8') as f:
+                last = f.readlines()[-1]
+            if json.loads(last).get('sig') == sig:
+                return  # 同一结算页被重复检测，跳过
+        except Exception:
+            pass
+        rec = {'ts': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+               'coins': coins, 'sig': sig, 'settle': toks}
+        with open(path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + '\n')
+        log(f'冒险结算已记录: +{coins} 金币')
+    except Exception:
+        pass
+
 
 # ---- 可调参数 ----
 CLICK_INTERVAL = 1.0       # 连续点击/重试间隔（秒）
@@ -650,6 +695,8 @@ class DeviceScenario:
             screen, source = self.snapshot()
             if self.see(pend['end_name'], screen, source):
                 log(f"{pend['desc']}: 检测到结算页 {pend['end_name']}，收尾")
+                if pend['end_name'] == 'adventure_end':
+                    record_adventure_live([t for t, *_ in ocr_screen(screen)])
                 if pend.get('encourage'):
                     # 结算页实测没有鼓励按钮（快速 3 轮不中即放弃），仅作兜底
                     self._encourage_burst()
@@ -734,6 +781,7 @@ class DeviceScenario:
                 log(f'打工总结含雇佣好友 {hf_name}，已计入雇佣好友次数（{n} 次）')
             return 'work'
         if self.see('adventure_end', screen, source):
+            record_adventure_live(texts)
             return 'adventure'
         return None
 
