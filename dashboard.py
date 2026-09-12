@@ -230,6 +230,30 @@ def today_duration(lines: list[str]):
     return {'learn_min': learn_min, 'work_min': work_min, 'eff_pct': eff}
 
 
+def _task_enabled_map(tasks: dict, friend_care: dict, gift_bag: dict,
+                      hire_friend: dict) -> dict:
+    """各任务的"配置启用状态"，等价于 runner 写队列快照时的 disabled 判定：
+    任务级 tasks.<key>.enabled + 场景级开关（好友护理/福袋/雇佣好友还有额外条件：
+    好友护理需 friend_name、雇佣好友需 times_per_day+friend_name、福袋看场景 enabled）。
+    供调度器停止时队列卡显示——避免用旧快照里的 disabled 状态误导。"""
+    out = {}
+    for k, v in (tasks or {}).items():
+        if not isinstance(v, dict) or 'enabled' not in v:
+            continue
+        ok = bool(v.get('enabled', True))
+        if k == 'friend_care':
+            ok = ok and bool(friend_care.get('enabled', False)) \
+                 and bool(str(friend_care.get('friend_name') or '').strip())
+        elif k == 'gift_bag':
+            ok = ok and bool(gift_bag.get('enabled', True))
+        elif k == 'hire_friend':
+            ok = (ok and bool(hire_friend.get('enabled', False))
+                  and bool(int(hire_friend.get('times_per_day') or 0))
+                  and bool(str(hire_friend.get('friend_name') or '').strip()))
+        out[k] = ok
+    return out
+
+
 def config_summary() -> dict:
     try:
         import yaml  # venv 里有；缺失时返回空
@@ -243,6 +267,9 @@ def config_summary() -> dict:
     visit = cfg.get('visit') or {}
     pk = cfg.get('pk') or {}
     care = cfg.get('care') or {}
+    friend_care = cfg.get('friend_care') or {}
+    gift_bag = cfg.get('gift_bag') or {}
+    hire_friend = cfg.get('hire_friend') or {}
     recover = cfg.get('recover') or {}
     adb = cfg.get('adb') or {}
     control = cfg.get('control') or {}
@@ -281,6 +308,7 @@ def config_summary() -> dict:
         'adventure_times': adv.get('times_per_day'),
         'adventure_start': adv.get('start_time'),
         'task_order': [x.strip() for x in str(tasks.get('order') or '').split('>') if x.strip()],
+        'tasks_enabled': _task_enabled_map(tasks, friend_care, gift_bag, hire_friend),
         'rows': rows,
     }
 
@@ -993,32 +1021,47 @@ function renderData(d){
   $('#workCnt').textContent=etaRemain!=null?wk+'+1':wk;
   const ed=(pg.exp_daily&&pg.exp_daily.done)?'✓ 完成':'未完成';
   $('#expTxt').textContent=ed;
-  // 队列
+  // 队列：运行中=实时快照（按执行顺序排）；停止=按当前配置显示启用状态（旧快照会误导，不用）
   const q=d.queue||{}, qt=q.tasks||{};
-  $('#qTop').textContent='待执行 '+(q.ready??'--')+' · 等待中 '+(q.waiting??'--')+(q.next?(' · 下个定时：'+(TASKNAME[q.next]||q.next)+' '+(q.next_at||'')):'');
   const qLive=(d.scheduler||{}).alive;
-  $('#qUpd').innerHTML=(q.updated?('更新 '+q.updated+' '):'')+(qLive?'':'<span style="color:#d97706">· 调度器未运行，为上次运行快照（启动后刷新）</span>');
-  // 按执行顺序排：可执行在前（按任务执行顺序）、定时的居中（按时间升序）、已禁用/今日完成沉底
   const qOrder=(cfg.task_order||[]);
   const qRank=k=>{const i=qOrder.indexOf(k);return i<0?999:i;};
-  const qStatRank=s=> s==='ready'?0 : s==='waiting'?1 : 2;
-  const qItems=Object.entries(qt).map(([k,v])=>({k,v,st:v.state||'',sr:qStatRank(v.state||'')}));
-  qItems.sort((a,b)=> (a.sr-b.sr)
-      || (a.sr===1 ? String(a.v.next||'~').localeCompare(String(b.v.next||'~')) : (qRank(a.k)-qRank(b.k))));
   let rows='';
-  if(q.pending) rows+='<div class="row"><div class="t"><span>收尾队列</span><span class="chip ready">'+q.pending+' 待结算</span></div><div class="nx"></div></div>';
-  for(const o of qItems){
-    const stt=o.st;
-    const chip= stt==='ready'?'<span class="chip ready">可执行</span>'
-              : stt==='waiting'?'<span class="chip wait">等待</span>'
-              : stt==='done'?'<span class="chip done">✓ 今日完成</span>'
-              : stt==='dead'?'<span class="chip done">✓ 今日完成</span>'
-              : stt==='disabled'?'<span class="chip off">已禁用</span>'
-              : '<span class="chip">'+stt+'</span>';
-    const nx=o.v.next?('→ '+(o.v.next.slice(0,10)===todayStr?'':'明 ')+o.v.next.slice(11,16)):'';
-    rows+='<div class="row"><div class="t"><span>'+(TASKNAME[o.k]||o.k)+'</span>'+chip+'</div><div class="nx">'+nx+'</div></div>';
+  if(qLive){
+    $('#qTop').textContent='待执行 '+(q.ready??'--')+' · 等待中 '+(q.waiting??'--')+(q.next?(' · 下个定时：'+(TASKNAME[q.next]||q.next)+' '+(q.next_at||'')):'');
+    $('#qUpd').textContent=q.updated?('更新 '+q.updated):'';
+    // 按执行顺序排：可执行在前（按任务执行顺序）、定时的居中（按时间升序）、已禁用/今日完成沉底
+    const qStatRank=s=> s==='ready'?0 : s==='waiting'?1 : 2;
+    const qItems=Object.entries(qt).map(([k,v])=>({k,v,st:v.state||'',sr:qStatRank(v.state||'')}));
+    qItems.sort((a,b)=> (a.sr-b.sr)
+        || (a.sr===1 ? String(a.v.next||'~').localeCompare(String(b.v.next||'~')) : (qRank(a.k)-qRank(b.k))));
+    if(q.pending) rows+='<div class="row"><div class="t"><span>收尾队列</span><span class="chip ready">'+q.pending+' 待结算</span></div><div class="nx"></div></div>';
+    for(const o of qItems){
+      const stt=o.st;
+      const chip= stt==='ready'?'<span class="chip ready">可执行</span>'
+                : stt==='waiting'?'<span class="chip wait">等待</span>'
+                : stt==='done'?'<span class="chip done">✓ 今日完成</span>'
+                : stt==='dead'?'<span class="chip done">✓ 今日完成</span>'
+                : stt==='disabled'?'<span class="chip off">已禁用</span>'
+                : '<span class="chip">'+stt+'</span>';
+      const nx=o.v.next?('→ '+(o.v.next.slice(0,10)===todayStr?'':'明 ')+o.v.next.slice(11,16)):'';
+      rows+='<div class="row"><div class="t"><span>'+(TASKNAME[o.k]||o.k)+'</span>'+chip+'</div><div class="nx">'+nx+'</div></div>';
+    }
+  }else{
+    // 调度器未运行：不用旧快照（曾残留"学习 已禁用"误导），按当前配置逐任务算启用状态
+    const te=cfg.tasks_enabled||{};
+    const keys=qOrder.length?qOrder:Object.keys(te);
+    $('#qTop').textContent='调度器未运行 · 按当前配置显示';
+    $('#qUpd').innerHTML='<span style="color:#d97706">启动后显示实时队列（可执行/等待/今日完成）</span>';
+    for(const k of keys){
+      const en=te[k];
+      const chip= en===false?'<span class="chip off">已禁用</span>'
+                : en===true?'<span class="chip ready">已启用</span>'
+                : '<span class="chip">—</span>';
+      rows+='<div class="row"><div class="t"><span>'+(TASKNAME[k]||k)+'</span>'+chip+'</div><div class="nx"></div></div>';
+    }
   }
-  $('#taskList').innerHTML=rows||'<div class="row">无数据（调度器未运行？）</div>';
+  $('#taskList').innerHTML=rows||'<div class="row">无数据</div>';
   // 截图
   const shots=d.shots||[];
   if(shots.length){
