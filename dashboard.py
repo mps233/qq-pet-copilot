@@ -259,6 +259,31 @@ def adventure_data() -> dict:
                 got = sorted(set(new))[0]
                 break
         care_costs.append(got)
+    # 逐次明细（新→旧由前端反转；spend = 本次读数新出现的购买类扣费）
+    recent = []
+    prev_set = None
+    for r in rows:
+        items = r.get('ledger_lines') or []
+        spend = 0
+        if prev_set is not None:
+            for t, y in items:
+                s2 = t.strip()
+                if s2.startswith('-') and s2[1:].isdigit() and t not in prev_set:
+                    if any(abs(y3 - y) <= 8 and ('购买' in t3 or '护理' in t3 or '道具' in t3)
+                           for t3, y3 in items):
+                        spend += int(s2)
+        prev_set = {t for t, _ in items}
+        gs = []
+        for t in (r.get('settle') or []):
+            for m in _ADV_GAIN_RE.finditer(t):
+                kw = m.group(1).strip()
+                if kw == '金币':
+                    continue
+                for k in ('心情', '体力', '清洁'):
+                    if kw.startswith(k):
+                        kw = k + '值'
+                gs.append(f'{kw}+{m.group(2)}')
+        recent.append([r.get('i'), r.get('time'), r.get('delta'), ' '.join(gs), spend])
     st_series = [[x.get('i'), x.get('体力'), x.get('清洁'), x.get('心情'),
                   1 if (x.get('note') or '') == 'post_care' else 0] for x in stats]
     latest = stats[-1] if stats else None
@@ -270,7 +295,7 @@ def adventure_data() -> dict:
         'gains': [[k, v[0], v[1]] for k, v in sorted(gains.items())],
         'care_n': len(care_rows),
         'care_costs': [c for c in care_costs if c is not None],
-        'cum': cum, 'pts': pts, 'stats': st_series,
+        'cum': cum, 'pts': pts, 'stats': st_series, 'recent': recent,
         'latest': ({'i': latest.get('i'), 't': latest.get('t'),
                     'e': latest.get('体力'), 'c': latest.get('清洁'),
                     'm': latest.get('心情')} if latest else None),
@@ -522,6 +547,15 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 .advchart{width:100%;height:auto;display:block;margin:6px 0 0;border:1px solid var(--line);border-radius:8px;background:#fcfcfd}
 .advcap{font-size:11px;color:var(--sub);margin:8px 0 0;letter-spacing:.03em}
 .advchips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.advlist{max-height:44vh;overflow:auto;margin-top:6px;border:1px solid var(--line);border-radius:8px;background:#fff;overscroll-behavior:contain}
+.advlist .arow{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:7px 10px;border-top:1px dashed var(--line);font-size:13px;font-variant-numeric:tabular-nums}
+.advlist .arow:first-child{border-top:0}
+.advlist .ai{color:var(--sub);font-size:12px;flex:none;width:76px}
+.advlist .ag{color:var(--sub);font-size:11.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
+.advlist .av{font-weight:650;flex:none;min-width:44px;text-align:right}
+.advlist .pos{color:var(--ok)} .advlist .neg{color:#dc2626} .advlist .zero{color:#9ca3af}
+.minibtn{border:1px solid var(--line);background:#fff;border-radius:6px;padding:2px 8px;font-size:11px;color:var(--sub)}
+.minibtn.on{background:var(--accent);border-color:var(--accent);color:#fff}
 .hide{display:none!important}
 </style>
 </head>
@@ -548,6 +582,8 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
     <svg class="advchart" id="svgPts" viewBox="0 0 340 84"></svg>
     <div class="advcap"><span style="color:#16a34a">体力</span> / <span style="color:#0891b2">清洁</span> / <span style="color:#d97706">心情</span>（红虚线=阈值60，红竖线=护理）</div>
     <svg class="advchart" id="svgStats" viewBox="0 0 340 84"></svg>
+    <div class="advcap">逐次明细（新→旧） <button class="minibtn on" id="btnAdvAll" style="float:right;margin-top:-2px">全部</button></div>
+    <div class="advlist" id="advList"></div>
   </section>
 
   <section class="grid">
@@ -735,7 +771,24 @@ function renderAdventure(d){
   if(d.latest){ch+='<span class="chip wait">体力 '+d.latest.e+' · 清洁 '+d.latest.c+' · 心情 '+d.latest.m+'</span>';}
   $('#advChips').innerHTML=ch;
   drawAdv();
+  renderAdvList(d);
 }
+let advShowAll=true;
+function renderAdvList(d){
+  const list=$('#advList'); if(!list)return;
+  let arr=(d.recent||[]).slice().reverse();
+  if(!advShowAll) arr=arr.filter(r=>r[2]!==0||r[4]);
+  list.innerHTML=arr.map(r=>{
+    const v=r[2]; const cls=v>0?'pos':(v<0?'neg':'zero');
+    const vt=(v>0?'+':'')+(v==null?'?':v);
+    let g=esc(r[3]||'');
+    if(r[4]) g+=(g?' ':'')+'<span style="color:#dc2626">扣费'+r[4]+'</span>';
+    return '<div class="arow"><span class="ai">#'+r[0]+' '+(r[1]||'').slice(0,5)+'</span><span class="ag">'+g+'</span><span class="av '+cls+'">'+vt+'</span></div>';
+  }).join('')||'<div class="arow"><span class="ag">暂无记录</span></div>';
+  const b=$('#btnAdvAll'); if(b){b.className='minibtn'+(advShowAll?' on':'');b.textContent=advShowAll?'全部':'仅变化';}
+}
+const _advBtn=document.getElementById('btnAdvAll');
+if(_advBtn) _advBtn.onclick=()=>{advShowAll=!advShowAll; if(window.__adv)renderAdvList(window.__adv);};
 async function refreshAdventure(){
   try{ renderAdventure(await j('/api/adventure')); }catch(e){}
 }
