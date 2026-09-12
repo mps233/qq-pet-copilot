@@ -303,6 +303,144 @@ def adventure_data() -> dict:
     }
 
 
+PLAN_FILE = RUNS / 'career_plan.json'
+_PLAN_DEFAULTS = {'力': 0, '智': 0, '魅': 0, '工分': 0, '金币': 0,
+                  '初级毕业': False, '中级毕业': False}
+
+# (线名, 见习条件: 三元组 或 0/1/2=比例专修轴, 初级三元组)
+_PLAN_LINES = [
+    ('流浪散人', None, None),
+    ('画家', (7, 3, 11), (225, 113, 412)),
+    ('侦探', (11, 5, 5), (350, 200, 200)),
+    ('法师', (3, 11, 7), (113, 412, 225)),
+    ('大厨', (11, 7, 3), (412, 225, 113)),
+    ('武术家', 0, (750, 0, 0)),
+    ('梦境旅人', 1, (0, 750, 0)),
+    ('大明星', 2, (0, 0, 750)),
+]
+
+
+def _plan_values() -> dict:
+    try:
+        data = json.loads(PLAN_FILE.read_text('utf-8'))
+    except Exception:
+        data = {}
+    v = dict(_PLAN_DEFAULTS)
+    for k in v:
+        if k in data:
+            v[k] = data[k]
+    return v
+
+
+def _triple_ok(V, tri):
+    return all(V[i] >= tri[i] for i in range(3))
+
+
+def plan_data() -> dict:
+    """职业解锁计划进度（runs/career_plan.json + 规则换算）。"""
+    v = _plan_values()
+    V = [int(v['力']), int(v['智']), int(v['魅'])]
+
+    def ratio_ok(axis):
+        return V[axis] >= 24 and V[axis] >= 2.5 * (sum(V) - V[axis])
+
+    gates = {'工分': int(v['工分']) >= 360, '金币': int(v['金币']) >= 1000,
+             '初级毕业': bool(v['初级毕业']), '中级毕业': bool(v['中级毕业'])}
+    gates_ok = gates['工分'] and gates['金币'] and gates['初级毕业']
+    lines = []
+    for name, jr, ch in _PLAN_LINES:
+        if jr is None and ch is None:
+            lines.append({'name': name, 'jr': True, 'ch': False})
+            continue
+        jr_ok = ratio_ok(jr) if isinstance(jr, int) else _triple_ok(V, jr)
+        ch_attr = _triple_ok(V, ch)
+        lines.append({'name': name, 'jr': jr_ok, 'ch': ch_attr and gates_ok,
+                      'ch_attr': ch_attr})
+    r_force = max(24, int(2.5 * (V[1] + V[2])))
+    r_int = max(100, int(2.5 * (V[0] + V[2])))
+    steps = [
+        ('S1', '魅力→24，解锁 偶像练习生', V[2] >= 24, f'{V[2]}/24'),
+        ('S2', '补 力11·智11，解锁 侦探/法师/画家/大厨',
+         V[0] >= 11 and V[1] >= 11 and V[2] >= 24, f'{V[0]}/11 · {V[1]}/11'),
+        ('S3', '力量专修，解锁 习武小童（≥其余两和的2.5倍）',
+         V[0] >= 24 and V[0] >= 2.5 * (V[1] + V[2]), f'{V[0]}（需≥{r_force}）'),
+        ('S4', '智力专修，解锁 浅梦行者', V[1] >= 100 and V[1] >= 2.5 * (V[0] + V[2]),
+         f'{V[1]}（需≥{r_int}）'),
+        ('S5', '魅力补到 225（混合线初级前置）', V[2] >= 225, f'{V[2]}/225'),
+        ('S6', '三维各 750 → 全 8 线初级', min(V) >= 750, f'最低 {min(V)}/750'),
+    ]
+    total = sum(V)
+    return {
+        'ok': True, 'values': v, 'total': total, 'total_target': 2250,
+        'jr_n': sum(1 for l in lines if l['jr']),
+        'ch_n': sum(1 for l in lines if l['ch']),
+        'lines': lines,
+        'steps': [[s[0], s[1], s[2], s[3]] for s in steps],
+        'gates': gates,
+        'updated': datetime.now().strftime('%H:%M:%S'),
+    }
+
+
+def apply_plan(updates: dict) -> dict:
+    v = _plan_values()
+    applied, rejected = {}, []
+    int_limits = {'力': 99999, '智': 99999, '魅': 99999, '工分': 9999999, '金币': 99999999}
+    for k, val in (updates or {}).items():
+        if k in int_limits:
+            try:
+                n = int(val)
+            except Exception:
+                rejected.append(f'{k}: 需要数字')
+                continue
+            if not (0 <= n <= int_limits[k]):
+                rejected.append(f'{k}: 超范围')
+                continue
+            v[k] = n
+            applied[k] = n
+        elif k in ('初级毕业', '中级毕业'):
+            if not isinstance(val, bool):
+                rejected.append(f'{k}: 需要布尔')
+                continue
+            v[k] = val
+            applied[k] = val
+        else:
+            rejected.append(f'{k}: 不支持')
+    if applied:
+        RUNS.mkdir(parents=True, exist_ok=True)
+        tmp = PLAN_FILE.with_suffix('.json.tmp')
+        tmp.write_text(json.dumps(v, ensure_ascii=False, indent=1), 'utf-8')
+        tmp.replace(PLAN_FILE)
+    return {'ok': not rejected, 'applied': applied, 'rejected': rejected}
+
+
+_SYNC = {'busy': False}
+
+
+def career_sync() -> dict:
+    """运行 tools/career_sync.py 自动识别游戏里的属性（占用设备约 20 秒）。"""
+    if _SYNC['busy']:
+        return {'ok': False, 'reason': '正在同步中，请稍候'}
+    script = BASE / 'tools' / 'career_sync.py'
+    if not script.is_file():
+        return {'ok': False, 'reason': '未找到 tools/career_sync.py'}
+    _SYNC['busy'] = True
+    try:
+        proc = subprocess.run([sys.executable, str(script)],
+                              capture_output=True, text=True, timeout=150, cwd=str(BASE))
+    except subprocess.TimeoutExpired:
+        return {'ok': False, 'reason': '识别超时（150 秒）'}
+    finally:
+        _SYNC['busy'] = False
+    for line in reversed((proc.stdout or '').splitlines()):
+        line = line.strip()
+        if line.startswith('{'):
+            try:
+                return json.loads(line)
+            except Exception:
+                continue
+    return {'ok': False, 'reason': '脚本无有效输出', 'stderr': (proc.stderr or '')[-300:]}
+
+
 def list_shots() -> list[dict]:
     out = []
     for p in sorted(RUNS.glob('*.png'), key=lambda x: x.stat().st_mtime, reverse=True)[:12]:
@@ -473,7 +611,11 @@ HTML = r"""<!doctype html>
 :root{--bg:#f6f7f9;--card:#fff;--line:#e6e8ee;--text:#111827;--sub:#6b7280;--accent:#533afd;--ok:#16a34a;--warn:#b45309}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%;overflow-x:hidden}
-header{position:sticky;top:0;z-index:10;background:rgba(246,247,249,.9);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--line);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;padding-top:calc(10px + env(safe-area-inset-top))}
+header{position:sticky;top:0;z-index:10;background:rgba(246,247,249,.9);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--line);padding:10px 14px;display:flex;flex-direction:column;align-items:stretch;gap:0;padding-top:calc(10px + env(safe-area-inset-top))}
+.hrow{display:flex;justify-content:space-between;align-items:center;width:100%}
+.tabs{display:flex;gap:6px;margin-top:8px;width:100%}
+.tabs button{flex:1;border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 0;font-size:12.5px;color:var(--sub)}
+.tabs button.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
 .brand{font-weight:650;font-size:15px;display:flex;gap:8px;align-items:center}
 .dot{width:8px;height:8px;border-radius:50%;background:#9ca3af;flex:none}
 .dot.on{background:var(--ok);box-shadow:0 0 0 3px rgba(22,163,74,.15)}
@@ -557,22 +699,53 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 .advlist .pos{color:var(--ok)} .advlist .neg{color:#dc2626} .advlist .zero{color:#9ca3af}
 .minibtn{border:1px solid var(--line);background:#fff;border-radius:6px;padding:2px 8px;font-size:11px;color:var(--sub)}
 .minibtn.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.planbars .pb{margin-top:10px}
+.planbars .pb .t{display:flex;justify-content:space-between;font-size:12px;color:var(--sub);margin-bottom:3px;font-variant-numeric:tabular-nums}
+.planbars .bar{margin-top:0}
+.plansteps .st{display:flex;justify-content:space-between;gap:8px;padding:7px 0;border-top:1px dashed var(--line);font-size:13px;align-items:baseline}
+.plansteps .st:first-child{border-top:0}
+.plansteps .dot2{flex:none;font-size:12px}
+.plansteps .tx{flex:1;min-width:0}
+.plansteps .pr{color:var(--sub);font-size:11.5px;flex:none;font-variant-numeric:tabular-nums}
+.plansteps .st.done .tx{color:var(--sub)}
+.plansteps .st.done .pr{color:#9ca3af}
+.plansteps .st.cur{background:#f6f4ff;border-radius:8px;padding-left:6px;padding-right:6px}
+.planlines{display:grid;grid-template-columns:1fr 1fr;gap:6px 8px}
+.planlines .ln{display:flex;justify-content:space-between;align-items:center;font-size:12.5px;padding:5px 8px;border:1px solid var(--line);border-radius:8px}
+.planlines .chipx{font-size:10.5px;padding:1px 6px;border-radius:999px;background:#f4f4f5;color:#a1a1aa;margin-left:4px}
+.planlines .chipx.ok{background:#eaf7ee;color:#15803d}
+.plinedit{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.plinedit label{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--sub)}
+.plinedit input{border:1px solid var(--line);border-radius:8px;padding:6px;font-size:14px;text-align:center;background:#fafafa;color:var(--text);width:100%}
+.planeditrow{grid-column:span 3;display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12.5px;margin-top:2px}
+.btnrow2{display:flex;gap:8px;margin-top:10px}
+.btnrow2 .savebtn{margin-top:0}
+.savebtn.ghost{background:#fff;color:var(--accent);border:1.5px solid var(--accent)}
 .hide{display:none!important}
 </style>
 </head>
 <body>
 <header>
-  <div class="brand"><span class="dot" id="schedDot"></span>QQ宠物托管 <span style="font-weight:400;color:var(--sub);font-size:12px" id="schedTxt"></span></div>
-  <div class="meta" id="clock">--:--:--</div>
+  <div class="hrow">
+    <div class="brand"><span class="dot" id="schedDot"></span>QQ宠物托管 <span style="font-weight:400;color:var(--sub);font-size:12px" id="schedTxt"></span></div>
+    <div class="meta" id="clock">--:--:--</div>
+  </div>
+  <nav class="tabs" id="tabbar">
+    <button data-tab="main" class="on">总览</button>
+    <button data-tab="adv">冒险</button>
+    <button data-tab="plan">职业</button>
+    <button data-tab="set">设置</button>
+    <button data-tab="log">日志</button>
+  </nav>
 </header>
 <main>
-  <section class="card" id="workCard">
+  <section class="card" id="workCard" data-page="main">
     <h2>打工循环</h2>
     <div class="workline"><span class="big" id="workBig">--</span><span class="hint" id="workHint"></span></div>
     <div class="subline" id="workSub"></div>
   </section>
 
-  <section class="card" id="advCard">
+  <section class="card" id="advCard" data-page="adv">
     <h2>冒险实验 <span id="advMeta" style="font-weight:400;font-size:10.5px"></span></h2>
     <div class="workline"><span class="big" id="advNet">--</span><span class="hint" id="advNetHint"></span></div>
     <div class="subline" id="advSub"></div>
@@ -588,7 +761,20 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
     <div class="advlist" id="advList"></div>
   </section>
 
-  <section class="grid">
+  <section class="card" id="planCard" data-page="plan">
+    <h2>职业解锁计划 <span id="planMeta" style="font-weight:400;font-size:10.5px"></span></h2>
+    <div class="planbars" id="planBars"></div>
+    <div class="subh">进度录入（新号的当前数值，改完点保存）</div>
+    <div class="plinedit" id="planEdit"></div>
+    <div class="btnrow2"><button class="savebtn" id="btnPlanSave">保存进度</button><button class="savebtn ghost" id="btnPlanSync">🔄 自动识别</button></div>
+    <div class="saveMsg" id="planMsg"></div>
+    <div class="subh">阶梯路线</div>
+    <div class="plansteps" id="planSteps"></div>
+    <div class="subh">8 线解锁状态（见习 / 初级）</div>
+    <div class="planlines" id="planLines"></div>
+  </section>
+
+  <section class="grid" data-page="main">
     <div class="tile"><div class="v" id="coins">--</div><div class="k">金币 <span id="coinsAt" style="opacity:.75"></span></div></div>
     <div class="tile"><div class="v" id="visitTxt">--</div><div class="k">今日踩踩</div><div class="bar"><i id="visitBar"></i></div></div>
     <div class="tile"><div class="v" id="pkTxt">--</div><div class="k">今日PK</div><div class="bar"><i id="pkBar"></i></div></div>
@@ -597,7 +783,7 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
     <div class="tile"><div class="v" id="expTxt">--</div><div class="k">经验日常</div></div>
   </section>
 
-  <section class="duo">
+  <section class="duo" data-page="main">
     <div class="card duoshot">
       <h2>手机画面 <span id="shotMeta" style="font-weight:400;font-size:10.5px"></span></h2>
       <a id="shotLink" href="/api/screenshot" target="_blank" rel="noopener"><img id="phoneShot" alt="加载中…"></a>
@@ -610,7 +796,7 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
     </div>
   </section>
 
-  <section class="card">
+  <section class="card" data-page="set">
     <h2>设置 <span style="font-weight:400;color:var(--sub)">保存后下一轮调度生效</span></h2>
     <div class="form" id="setForm"></div>
     <button class="savebtn" id="btnSave">保存设置</button>
@@ -619,7 +805,7 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
     <div class="cfg" id="cfgList"></div>
   </section>
 
-  <section class="card">
+  <section class="card" data-page="log">
     <h2>实时日志 <span id="logMeta" style="font-weight:400"></span></h2>
     <div class="logctl">
       <button id="btnAuto" class="on">自动滚动</button>
@@ -628,10 +814,12 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
     <pre id="logbox">加载中…</pre>
   </section>
 
+  <div data-page="log">
   <section class="card hide" id="shotCard">
     <h2>异常截图（自动保存）</h2>
     <div class="thumbs" id="shots"></div>
   </section>
+  </div>
 </main>
 <footer>
   <div id="footStrategy"></div>
@@ -838,6 +1026,72 @@ function bindAdvChart(id,chart){
   el.addEventListener('pointerup',up);el.addEventListener('pointercancel',up);el.addEventListener('pointerleave',up);
 }
 bindAdvChart('svgCum','cum');bindAdvChart('svgPts','pts');bindAdvChart('svgStats','stats');
+let planDirty=false;
+function planBar(t,c,tg,col){
+  const w=tg?Math.max(0,Math.min(100,c/tg*100)):0;
+  return '<div class="pb"><div class="t"><span>'+t+'</span><span>'+c+' / '+tg+'</span></div><div class="bar"><i style="width:'+w.toFixed(1)+'%;background:'+col+'"></i></div></div>';
+}
+function planBuildEdit(v){
+  $('#planEdit').innerHTML=
+    '<label>力量<input type="number" id="pn1" min="0" value="'+(v['力']??0)+'"></label>'+
+    '<label>智力<input type="number" id="pn2" min="0" value="'+(v['智']??0)+'"></label>'+
+    '<label>魅力<input type="number" id="pn3" min="0" value="'+(v['魅']??0)+'"></label>'+
+    '<label>工分<input type="number" id="pn4" min="0" value="'+(v['工分']??0)+'"></label>'+
+    '<label>金币<input type="number" id="pn5" min="0" value="'+(v['金币']??0)+'"></label>'+
+    '<div class="planeditrow"><span>学园：</span><button class="sw'+(v['初级毕业']?' on':'')+'" id="swPrim"></button><span>初级毕业</span><button class="sw'+(v['中级毕业']?' on':'')+'" id="swMid"></button><span>中级毕业</span></div>';
+  for(const id of ['#pn1','#pn2','#pn3','#pn4','#pn5']){ const el=$(id); if(el) el.oninput=()=>{planDirty=true;}; }
+  const sp=$('#swPrim'), sm=$('#swMid');
+  if(sp) sp.onclick=()=>{sp.classList.toggle('on');planDirty=true;};
+  if(sm) sm.onclick=()=>{sm.classList.toggle('on');planDirty=true;};
+}
+function renderPlan(d){
+  if(!d||!d.ok)return;
+  window.__plan=d;
+  $('#planMeta').textContent='总属性 '+d.total+'/'+d.total_target+' · 更新 '+(d.updated||'');
+  $('#planBars').innerHTML=planBar('属性总进度',d.total,d.total_target,'var(--accent)')+planBar('见习解锁',d.jr_n,8,'#16a34a')+planBar('初级解锁',d.ch_n,8,'#533afd');
+  let firstOpen=false;
+  $('#planSteps').innerHTML=(d.steps||[]).map(s=>{
+    let cls='st',dot='○';
+    if(s[2]){cls+=' done';dot='✅';}
+    else if(!firstOpen){cls+=' cur';dot='▶';firstOpen=true;}
+    return '<div class="'+cls+'"><span class="dot2">'+dot+'</span><span class="tx">'+esc(s[0]+' · '+s[1])+'</span><span class="pr">'+esc(s[3])+'</span></div>';
+  }).join('');
+  $('#planLines').innerHTML=(d.lines||[]).map(l=>'<div class="ln"><span>'+esc(l.name)+'</span><span><span class="chipx'+(l.jr?' ok':'')+'">见习</span><span class="chipx'+(l.ch?' ok':'')+'">初级</span></span></div>').join('');
+  if(!planDirty) planBuildEdit(d.values||{});
+}
+async function refreshPlan(){ try{ renderPlan(await j('/api/plan')); }catch(e){} }
+const _planBtn=document.getElementById('btnPlanSave');
+if(_planBtn) _planBtn.onclick=async()=>{
+  const g=id=>{const el=$(id);return el?(parseInt(el.value||'0',10)||0):0;};
+  const updates={'力':g('#pn1'),'智':g('#pn2'),'魅':g('#pn3'),'工分':g('#pn4'),'金币':g('#pn5'),
+    '初级毕业':$('#swPrim')?$('#swPrim').classList.contains('on'):false,
+    '中级毕业':$('#swMid')?$('#swMid').classList.contains('on'):false};
+  try{
+    const r=await fetch('/api/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({updates})});
+    const d=await r.json();
+    if(d.rejected&&d.rejected.length){$('#planMsg').className='saveMsg err';$('#planMsg').textContent='部分未保存：'+d.rejected.join('；');}
+    else{planDirty=false;$('#planMsg').className='saveMsg';$('#planMsg').textContent='✅ 已保存';refreshPlan();}
+  }catch(e){$('#planMsg').className='saveMsg err';$('#planMsg').textContent='保存失败：'+e.message;}
+};
+const _planSync=$('#btnPlanSync');
+if(_planSync) _planSync.onclick=async()=>{
+  if(_planSync.disabled) return;
+  _planSync.disabled=true;
+  const old=_planSync.textContent;
+  _planSync.textContent='识别中…（约20秒）';
+  $('#planMsg').className='saveMsg';
+  $('#planMsg').textContent='正在识别游戏里的属性…';
+  try{
+    const r=await fetch('/api/plan/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const d=await r.json();
+    const s=d.sync||{};
+    if(s.ok){planDirty=false;$('#planMsg').className='saveMsg';$('#planMsg').textContent='✅ 已读取：力量'+s['力']+' · 智力'+s['智']+' · 魅力'+s['魅'];}
+    else{$('#planMsg').className='saveMsg err';$('#planMsg').textContent='识别失败：'+(s.reason||'未知')+'（游戏画面忙，可稍后重试）';}
+    refreshPlan();
+  }catch(e){$('#planMsg').className='saveMsg err';$('#planMsg').textContent='识别失败：'+e.message;}
+  _planSync.disabled=false;
+  _planSync.textContent=old;
+};
 async function refreshAdventure(){
   try{ renderAdventure(await j('/api/adventure')); }catch(e){}
 }
@@ -947,12 +1201,23 @@ async function refreshShot(force){
 }
 $('#btnShot').onclick=()=>refreshShot(true);
 
+function showTab(name){
+  document.querySelectorAll('main > [data-page]').forEach(el=>el.classList.toggle('hide', el.dataset.page!==name));
+  document.querySelectorAll('#tabbar button').forEach(b=>b.classList.toggle('on', b.dataset.tab===name));
+  try{localStorage.setItem('qpet_tab',name);}catch(e){}
+}
+document.querySelectorAll('#tabbar button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
+let initTab='main';
+try{initTab=localStorage.getItem('qpet_tab')||'main';}catch(e){}
+showTab(initTab);
+
 setInterval(()=>{if(!document.hidden)refreshLogs()},3000);
 setInterval(()=>{if(!document.hidden)refreshData()},6000);
 setInterval(()=>{if(!document.hidden)refreshAdventure()},10000);
+setInterval(()=>{if(!document.hidden)refreshPlan()},15000);
 setInterval(()=>{if(!document.hidden)refreshShot(false)},15000);
-refreshData();refreshLogs();refreshAdventure();refreshShot(false);
-document.addEventListener('visibilitychange',()=>{if(!document.hidden){refreshData();refreshLogs();refreshAdventure();refreshShot(false)}});
+refreshData();refreshLogs();refreshAdventure();refreshPlan();refreshShot(false);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){refreshData();refreshLogs();refreshAdventure();refreshPlan();refreshShot(false)}});
 </script>
 </body>
 </html>
@@ -982,6 +1247,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, 'application/json; charset=utf-8', body)
             elif path == '/api/adventure':
                 body = json.dumps(adventure_data(), ensure_ascii=False).encode('utf-8')
+                self._send(200, 'application/json; charset=utf-8', body)
+            elif path == '/api/plan':
+                body = json.dumps(plan_data(), ensure_ascii=False).encode('utf-8')
                 self._send(200, 'application/json; charset=utf-8', body)
             elif path == '/api/logs':
                 q = parse_qs(u.query)
@@ -1047,6 +1315,20 @@ class Handler(BaseHTTPRequestHandler):
                 body = json.dumps(result, ensure_ascii=False).encode('utf-8')
                 self._send(200 if result['ok'] else 400,
                            'application/json; charset=utf-8', body)
+            elif u.path == '/api/plan':
+                length = int(self.headers.get('Content-Length') or 0)
+                payload = json.loads(self.rfile.read(length).decode('utf-8') or '{}')
+                result = apply_plan(payload.get('updates') or {})
+                audit(f'职业计划进度更新(来自 {self.client_address[0]}): {result["applied"]}')
+                body = json.dumps(result, ensure_ascii=False).encode('utf-8')
+                self._send(200 if result['ok'] else 400,
+                           'application/json; charset=utf-8', body)
+            elif u.path == '/api/plan/sync':
+                result = career_sync()
+                audit(f'职业进度自动识别(来自 {self.client_address[0]}): {result}')
+                body = json.dumps({'sync': result, 'plan': plan_data()},
+                                  ensure_ascii=False).encode('utf-8')
+                self._send(200, 'application/json; charset=utf-8', body)
             else:
                 self._send(404, 'text/plain', b'not found')
         except Exception as e:
