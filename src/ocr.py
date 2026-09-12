@@ -177,6 +177,24 @@ def ocr_texts(screen: np.ndarray) -> list[tuple[str, int, int, float]]:
     return out
 
 
+def ocr_rec_only(img: np.ndarray) -> list[tuple[str, float]]:
+    """整图当单行文字识别（跳过检测阶段），返回 [(文字, 置信度)]。
+
+    用于很小的裁切图（如 ⭐ 星徽章里嵌的数字）：检测模型对细笔画的
+    「11」这类文本容易漏检或与轮廓糊在一起，直接整行识别更稳。
+    注：极小的裁切图建议先放大（如 3 倍）再传入。
+    """
+    res = get_engine()(img, use_det=False, use_cls=False, use_rec=True)
+    txts = getattr(res, 'txts', None)
+    scores = getattr(res, 'scores', None)
+    out = []
+    if txts is not None:
+        for j, t in enumerate(txts):
+            s = float(scores[j]) if scores is not None and j < len(scores) else 0.0
+            out.append((t, s))
+    return out
+
+
 def ocr_fullscreen(screen: np.ndarray) -> list[tuple[str, int, int, float]]:
     """整屏 OCR：先保持长宽比缩放到接近 720x1280 级别再识别。
 

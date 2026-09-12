@@ -276,7 +276,7 @@ TASK_SETTING_FIELDS = [
     ('pk.start_time', 'PK 调度时间', 'str'),
     ('pk.only_names', 'PK只打这些好友（昵称或宠物名逗号分隔，空=不限）', 'str'),
     ('pk.skip_names', 'PK跳过这些好友（昵称或宠物名逗号分隔，空=不跳过）', 'str'),
-    ('pk.max_level', 'PK只打等级≤N（0=不限，-1=只打比我低的）', 'int'),
+    ('pk.max_level', 'PK只打等级≤N（0=不限，-1=比我低，-2=比打手低）', 'int'),
     ('pk.helper_names', 'PK打手（只雇这些宠物代打，逗号分隔按优先序）', 'str'),
     ('friend_care.enabled', '启用好友护理', 'bool'),
     ('friend_care.time_range', '好友护理时间段', 'str'),

@@ -16,9 +16,10 @@
 不足则先喂食/洗澡补充到所需值（计划局数 x 5）。
 
 目标过滤（可选，config.yaml 的 pk 段）：only_names / skip_names（玩家昵称或
-宠物名，逗号分隔，部分匹配）与 max_level（只打等级 ≤ N 的好友；-1 = 只打等级比
-自己低的，等级从主页/好友页的 ⭐ 徽章读取；max_level < 0 且整轮没打成任何一个
-"比我低"的时，自动兜底放宽为任意等级再跑一轮）；进入每个好友后、点 PK 前判定，
+宠物名，逗号分隔，部分匹配）与 max_level（等级过滤：0 = 不限；-1 = 只打等级比
+自己低的；-2 = 只打比雇佣打手（helper_names 第一个）等级低的；正数 = 只打等级
+≤ N 的好友；等级从主页/好友页的 ⭐ 徽章读取；max_level < 0 且整轮没打成任何一个
+时，自动兜底放宽为任意等级再跑一轮）；进入每个好友后、点 PK 前判定，
 不符条件直接切下一个。
 
 打手管理（可选，config.yaml 的 pk 段 helper_names）：名单非空时，每次 run() 在
@@ -32,12 +33,15 @@
 """
 
 import os
+import re
 import sys
 import time
 
+import cv2
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.ocr import find_text, ocr_fullscreen, ocr_texts
+from src.ocr import find_text, ocr_fullscreen, ocr_rec_only, ocr_texts
 from src.progress import (
     PK_PROGRESS_FILE,
     load_progress,
@@ -59,11 +63,20 @@ PK_STAT_COST = 5      # 每局消耗体力/清洁
 PK_TIMEOUT_STREAK_LIMIT = 2  # 连续几次"PK 结果超时"就临时推迟 PK 任务
 
 # 好友宠物页顶栏"⭐等级"的 OCR 区域（x1, y1, x2, y2，1080x2412 参考分辨率，运行时按实际尺寸换算）
-FRIEND_LEVEL_REGION = (190, 270, 460, 380)
+# 右边界收到 368：只覆盖 ⭐ 星徽章，避免切到右边战力数字（防把战力当等级读）
+FRIEND_LEVEL_REGION = (190, 270, 368, 380)
+
+# ⭐ 星徽章兜底识别区域（V 通道整行识别用）：星标主体
+# 背景：检测模型对星徽章里细笔画数字（"11"）漏检/误检（糊成"中"）——裁这小块
+# 转 HSV 亮度通道放大 3 倍后走整行识别，实测 6/11/12 全通
+LEVEL_REC_REGION = (228, 283, 352, 352)
 
 # 好友宠物页顶部"主人昵称 + 宠物名"两行大字区域；宠物名 = 区域里 y >= FRIEND_NAME_MIN_Y 的行
 FRIEND_NAME_REGION = (150, 130, 700, 260)
 FRIEND_NAME_MIN_Y = 55  # 区域内的局部 y 阈值（上一行是主人昵称，下一行才是宠物名）
+
+# 找打手主页时最多切换的好友数（打手可能排在列表较后/轮播轮换，防死循环）
+MAX_HELPER_SEARCH = 60
 
 # PK 准备页"雇佣保镖代打"行的 ➕（打开宠友列表）位置（1080x2412 参考，运行时按实际尺寸换算）
 HELPER_ADD_POINT = (296, 1672)
@@ -74,6 +87,39 @@ HELPER_CLOSE_POINT = (976, 736)
 # 注：自己主页的 ⭐ 等级徽章与好友页同区域（FRIEND_LEVEL_REGION），不单独定义
 
 PROGRESS_FILE = PK_PROGRESS_FILE
+
+
+def read_level_from_image(screen) -> int | None:
+    """从好友页截图读 ⭐ 等级（区域 OCR + 星徽章 V 通道兜底），失败返回 None。
+
+    纯函数，便于离线回归。兜底原因：星徽章里的两位数细笔画（典型 "11"）检测
+    模型读不出（会和星形轮廓糊成"中"字）——把星徽章裁出来转 HSV 亮度通道、
+    放大 3 倍走整行识别即可稳定读出（"11/6/12" 实测全通）。
+    """
+    h, w = screen.shape[:2]
+    x1, y1, x2, y2 = FRIEND_LEVEL_REGION
+    x1, x2 = int(x1 * w / 1080), int(x2 * w / 1080)
+    y1, y2 = int(y1 * h / 2412), int(y2 * h / 2412)
+    nums = [(x, int(t.strip())) for t, x, _, _ in ocr_texts(screen[y1:y2, x1:x2])
+            if t.strip().isdigit()]
+    if nums:
+        return min(nums, key=lambda m: m[0])[1]
+    # 兜底：星徽章 V 通道整行识别
+    try:
+        x1, y1, x2, y2 = LEVEL_REC_REGION
+        x1, x2 = int(x1 * w / 1080), int(x2 * w / 1080)
+        y1, y2 = int(y1 * h / 2412), int(y2 * h / 2412)
+        v = cv2.cvtColor(screen[y1:y2, x1:x2], cv2.COLOR_BGR2HSV)[:, :, 2]
+        v = cv2.resize(v, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+        for t, _s in ocr_rec_only(cv2.cvtColor(v, cv2.COLOR_GRAY2BGR)):
+            d = re.sub(r'[^0-9]', '', t)
+            if d and len(d) <= 2:
+                n = int(d)
+                if 1 <= n <= 20:
+                    return n
+    except Exception:
+        pass
+    return None
 
 
 class PKDeferred(Exception):
@@ -89,7 +135,8 @@ class PKScenario(VisitScenario):
         self.skip_names = str(getattr(self.cfg.pk, 'skip_names', '') or '').strip()
         self.max_level = int(getattr(self.cfg.pk, 'max_level', 0) or 0)
         self.helper_names = str(getattr(self.cfg.pk, 'helper_names', '') or '').strip()
-        self._own_level = None        # 自己等级（max_level < 0 时从主页读取）
+        self._own_level = None        # 自己等级（max_level=-1 时从主页读取）
+        self._helper_level = None     # 打手等级（max_level=-2 时从打手主页读取）
         self._level_any = False       # 兜底轮：没有"比我低"的可打时放宽为任意等级
         self._helper_checked = False  # 打手管理每次 run 只做一次
         self.sync_filters()
@@ -97,7 +144,8 @@ class PKScenario(VisitScenario):
             + (f'，只打: {self.only_names}' if self.only_names else '')
             + (f'，跳过: {self.skip_names}' if self.skip_names else '')
             + (f'，只打等级≤{self.max_level}' if self.max_level > 0
-               else ('，只打等级比自己低' if self.max_level < 0 else ''))
+               else ('，只打等级比打手低' if self.max_level == -2
+                     else ('，只打等级比自己低' if self.max_level < 0 else '')))
             + (f'，打手: {self.helper_names}' if self.helper_names else ''))
 
     def sync_filters(self) -> None:
@@ -110,20 +158,15 @@ class PKScenario(VisitScenario):
         self._helper_list = [x for x in (''.join(s.split()) for s in str(self.helper_names or '').split(',')) if x]
 
     def read_friend_level(self, attempts: int = 3) -> int | None:
-        """读当前好友宠物页的等级（顶栏星标后的数字），识别失败返回 None。
+        """读当前好友宠物页的等级（顶栏 ⭐ 后数字），识别失败返回 None。
 
         页面切换后有加载延迟，首次没读到等 0.5 秒重试（最多 attempts 次）。
+        识别细节见 read_level_from_image（含星徽章细笔画数字的兜底）。
         """
         for i in range(attempts):
-            screen = self.screen()
-            h, w = screen.shape[:2]
-            x1, y1, x2, y2 = FRIEND_LEVEL_REGION
-            x1, x2 = int(x1 * w / 1080), int(x2 * w / 1080)
-            y1, y2 = int(y1 * h / 2412), int(y2 * h / 2412)
-            nums = [(x, int(t.strip())) for t, x, _, _ in ocr_texts(screen[y1:y2, x1:x2])
-                    if t.strip().isdigit()]
-            if nums:
-                return min(nums, key=lambda m: m[0])[1]
+            lv = read_level_from_image(self.screen())
+            if lv is not None:
+                return lv
             if i < attempts - 1:
                 time.sleep(0.5)
         return None
@@ -158,6 +201,53 @@ class PKScenario(VisitScenario):
         """
         return self.read_friend_level(attempts)
 
+    def read_helper_level(self) -> int | None:
+        """读打手（helper_names 第一个）的等级：进其主页读 ⭐ 徽章，失败返回 None。
+
+        用于 max_level=-2（只打比打手低的）。按名字在好友列表里找其主页
+        （主人昵称 content-desc 或顶部宠物名匹配）；找不到/读不到按 fail-open
+        处理（本轮不做等级过滤）。结束时收起好友页面（后续流程照常从主页面开始）。
+        """
+        name = self._helper_list[0] if self._helper_list else ''
+        if not name:
+            return None
+        try:
+            self._friends = []
+            self._friend_index = 0
+            self.goto_first_friend()
+            self._accumulate_friends()
+            found = False
+            for _ in range(MAX_HELPER_SEARCH):
+                desc = (self._friends[self._friend_index]
+                        if self._friend_index < len(self._friends) else '')
+                if name in ''.join(desc.split()):
+                    log(f'PK 打手: 已到 {desc} 主页（主人昵称命中）')
+                    found = True
+                    break
+                pet = None
+                try:
+                    pet = self.read_friend_pet_name()
+                except Exception:
+                    pet = None
+                if pet and name in ''.join(pet.split()):
+                    log(f'PK 打手: 已到 {name} 主页（宠物名命中，主人 {desc}）')
+                    found = True
+                    break
+                if not self.next_friend():
+                    break
+            if not found:
+                log(f'PK 打手: 好友列表里没找到 {name}，打手等级读取失败')
+                return None
+            return self.read_friend_level(attempts=4)
+        except Exception as e:
+            log(f'PK 打手: 等级读取异常（跳过）: {e}')
+            return None
+        finally:
+            try:
+                self.close()
+            except Exception:
+                pass
+
     def _friend_allowed(self, desc: str) -> bool:
         """PK 目标过滤：只打/跳过名单（玩家昵称/宠物名部分匹配）+ 等级上限。
 
@@ -186,19 +276,23 @@ class PKScenario(VisitScenario):
         if cap < 0:
             if self._level_any:
                 cap = 0  # 兜底轮：不限等级（仍受只打/跳过名单约束）
+            elif cap == -2:
+                # 只打比打手低；打手等级没读到 → 不过滤（fail-open）
+                cap = (self._helper_level - 1) if self._helper_level else 0
             elif self._own_level is not None:
                 cap = self._own_level - 1  # 只打等级比自己低的
         if cap > 0:
             lv = self.read_friend_level()
             if lv is None:
                 if self.max_level < 0:
-                    # "只打比我低"模式读不到等级：保守跳过，留给兜底轮打
+                    # "只打比我低/比打手低"模式读不到等级：保守跳过，留给兜底轮打
                     log(f'PK: 跳过 {owner}（等级读取失败，留给兜底轮）')
                     return False
                 log(f'PK: {owner} 等级读取失败，按不过滤继续')
             elif lv > cap:
                 log(f'PK: 跳过 {owner}（等级 {lv}'
-                    + (f'，只打比我低（<{self._own_level}）' if self.max_level < 0
+                    + (f'，只打比打手低（<{self._helper_level}）' if self.max_level == -2
+                       else f'，只打比我低（<{self._own_level}）' if self.max_level < 0
                        else f' > {cap}') + '）')
                 return False
             else:
@@ -562,7 +656,16 @@ class PKScenario(VisitScenario):
         round_target = self._round_limit(max_times, done)
         self.ensure_main_page()
         self._level_any = False
-        if self.max_level < 0:
+        self._helper_level = None
+        if self.max_level == -2:
+            # 只打比打手低：先读打手等级（fail-open：读不到本轮不过滤）
+            self._helper_level = self.read_helper_level()
+            if self._helper_level is not None:
+                log(f'PK 打手等级: {self._helper_level}'
+                    f'（只打等级低于 {self._helper_level} 的好友）')
+            else:
+                log('PK 打手等级读取失败：本轮不做等级过滤')
+        elif self.max_level < 0:
             self._own_level = self.read_own_level()
             if self._own_level is not None:
                 log(f'你的宠物等级: {self._own_level}（PK 只打等级低于 {self._own_level} 的好友）')
@@ -570,14 +673,18 @@ class PKScenario(VisitScenario):
                 log('你的宠物等级读取失败：本轮不做等级过滤')
         self._prepare_stats(round_target - done)
         done = self._pk_all(round_target, today, done, history)
-        if self.max_level < 0 and done == start_done and (not max_times or done < max_times):
-            # 兜底：整轮没打成任何一个"等级比我低"的（没有这种好友/都被挡），
-            # 放宽为打任意等级再跑一轮——避免白白不 PK；仍受只打/跳过名单约束
-            log('PK 兜底: 没有等级比我低的可打，本轮放宽为打任意等级')
-            self._level_any = True
-            self.close()
-            self.ensure_main_page()
-            done = self._pk_all(round_target, today, done, history)
+        if done == start_done and (not max_times or done < max_times):
+            if self.max_level == -1:
+                # 兜底：整轮没打成任何一个"等级比我低"的（没有这种好友/都被挡），
+                # 放宽为打任意等级再跑一轮——避免白白不 PK；仍受只打/跳过名单约束
+                log('PK 兜底: 没有等级比我低的可打，本轮放宽为打任意等级')
+                self._level_any = True
+                self.close()
+                self.ensure_main_page()
+                done = self._pk_all(round_target, today, done, history)
+            elif self.max_level == -2:
+                # 比打手低的模式不兜底：打高等级=大概率输还费体力/清洁，宁可本轮不打
+                log('PK: 没有等级比打手低的可打，本轮不打（等好友列表轮换后再试）')
         self.close()  # 点 back 收掉好友相关页面，再确认回主页面
         self.ensure_main_page()
         return done > start_done

@@ -123,9 +123,10 @@ def validate_field(key: str, value):
                'pk.only_names', 'pk.skip_names', 'pk.helper_names', 'career.careers'):
         return True, str(value).strip()
     if key == 'pk.max_level':
-        # -1 = 只打等级比自己低的（动态读取主人等级；没有可打时兜底任意等级）；0 = 不限；>0 = 只打等级 ≤ N
+        # 0 = 不限；-1 = 只打等级比自己低的（动态读取自己等级）；-2 = 只打比雇佣打手低的
+        # （读 helper_names 第一个的等级）；>0 = 只打等级 ≤ N；-1/-2 没有可打时兜底任意等级
         try:
-            return (True, value) if int(value) >= -1 else (False, default)
+            return (True, value) if int(value) >= -2 else (False, default)
         except (TypeError, ValueError):
             return False, default
     if key in ('friend_care.enabled', 'hire_friend.enabled', 'employed.enabled'):
