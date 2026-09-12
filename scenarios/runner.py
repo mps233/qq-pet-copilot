@@ -1409,6 +1409,39 @@ class TaskQueueRunner(Runner):
                 task_states[key] = {'state': 'dead',
                                     'next': nxt.strftime('%Y-%m-%d %H:%M:%S') if nxt else ''}
                 continue
+            # 每日配额已完成（踩踩/PK/冒险当天次数已满）：显示"今日完成"，不再计入待执行/等待中
+            quota_done = False
+            if key == 'visit' and self.visit_times:
+                _, done, _ = load_progress(VISIT_PROGRESS_FILE, quiet=True)
+                quota_done = done >= self.visit_times and exp_daily_done()
+            elif key == 'pk' and self.pk_times:
+                _, done, _ = load_progress(PK_PROGRESS_FILE, quiet=True)
+                quota_done = done >= self.pk_times
+            elif key == 'adventure' and self.adventure_times:
+                _, done, _ = load_progress(ADVENTURE_PROGRESS_FILE, quiet=True)
+                quota_done = done >= self.adventure_times
+            elif key == 'hire_friend':
+                hf_q = self.hire_friend.cfg.hire_friend
+                if hf_q.times_per_day:
+                    _, done, _ = load_progress(HIRE_FRIEND_PROGRESS_FILE, quiet=True)
+                    quota_done = done >= hf_q.times_per_day
+            if quota_done:
+                nxt = (self._next_daily_time(cfg.daily_times, now)
+                       if cfg.trigger == 'daily' else None)
+                task_states[key] = {'state': 'done',
+                                    'next': nxt.strftime('%Y-%m-%d %H:%M:%S') if nxt else ''}
+                continue
+            # 场景级开关关闭（好友护理/雇佣好友模块开关）：显示"已禁用"而不是可执行
+            if key == 'friend_care':
+                fc = self.friend_care.cfg.friend_care
+                if not fc.enabled or not fc.friend_name.strip():
+                    task_states[key] = {'state': 'disabled', 'next': ''}
+                    continue
+            if key == 'hire_friend':
+                hf = self.hire_friend.cfg.hire_friend
+                if not hf.enabled or not hf.times_per_day or not hf.friend_name.strip():
+                    task_states[key] = {'state': 'disabled', 'next': ''}
+                    continue
             if self._eligible(task, now):
                 # 现在就能跑、在等调度器轮到 -> 等待中
                 waiting += 1

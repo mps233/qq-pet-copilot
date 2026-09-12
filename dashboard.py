@@ -643,6 +643,7 @@ main{padding:12px;max-width:560px;margin:0 auto;display:flex;flex-direction:colu
 .chip.ready{background:#eaf7ee;color:#15803d}
 .chip.wait{background:#f1efff;color:#533afd}
 .chip.off{background:#f4f4f5;color:#a1a1aa}
+.chip.done{background:#f0f1f4;color:#52525b}
 .logctl{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
 .logctl input{flex:1;min-width:110px;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px;background:#fafafa;color:var(--text)}
 .logctl button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 12px;font-size:12px;color:var(--sub)}
@@ -840,6 +841,7 @@ function hms(sec){sec=Math.max(0,Math.floor(sec));const h=Math.floor(sec/3600),m
 async function j(u){const r=await fetch(u,{cache:'no-store'});if(!r.ok)throw new Error(r.status);return await r.json()}
 
 function renderData(d){
+  const todayStr=(d.now||'').slice(0,10);
   // 头部
   const dot=$('#schedDot');
   dot.className='dot '+(d.scheduler.alive?'on':'off');
@@ -886,9 +888,11 @@ function renderData(d){
     const stt=v.state||'';
     const chip= stt==='ready'?'<span class="chip ready">可执行</span>'
               : stt==='waiting'?'<span class="chip wait">等待</span>'
+              : stt==='done'?'<span class="chip done">✓ 今日完成</span>'
+              : stt==='dead'?'<span class="chip done">✓ 今日完成</span>'
               : stt==='disabled'?'<span class="chip off">已禁用</span>'
               : '<span class="chip">'+stt+'</span>';
-    const nx=v.next?('→ '+v.next.slice(11)):'';
+    const nx=v.next?('→ '+(v.next.slice(0,10)===todayStr?'':'明 ')+v.next.slice(11,16)):'';
     rows+='<div class="row"><div class="t"><span>'+(TASKNAME[k]||k)+'</span>'+chip+'</div><div class="nx">'+nx+'</div></div>';
   }
   if(q.pending) rows+='<div class="row"><div class="t"><span>收尾队列</span><span class="chip ready">'+q.pending+' 待结算</span></div><div class="nx"></div></div>';
