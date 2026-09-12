@@ -996,7 +996,8 @@ function renderData(d){
   // 队列
   const q=d.queue||{}, qt=q.tasks||{};
   $('#qTop').textContent='待执行 '+(q.ready??'--')+' · 等待中 '+(q.waiting??'--')+(q.next?(' · 下个定时：'+(TASKNAME[q.next]||q.next)+' '+(q.next_at||'')):'');
-  $('#qUpd').textContent=q.updated?('更新 '+q.updated):'';
+  const qLive=(d.scheduler||{}).alive;
+  $('#qUpd').innerHTML=(q.updated?('更新 '+q.updated+' '):'')+(qLive?'':'<span style="color:#d97706">· 调度器未运行，为上次运行快照（启动后刷新）</span>');
   // 按执行顺序排：可执行在前（按任务执行顺序）、定时的居中（按时间升序）、已禁用/今日完成沉底
   const qOrder=(cfg.task_order||[]);
   const qRank=k=>{const i=qOrder.indexOf(k);return i<0?999:i;};
