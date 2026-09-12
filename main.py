@@ -255,6 +255,7 @@ TASK_SETTING_FIELDS = [
     ('school.attribute', '属性点课程', ['力量', '智力', '魅力']),
     ('school.times_per_day', '每天学习次数（0 不限）', 'int'),
     ('schedule.daily_hour_limit', '学习工作时长上限（小时，0 不限）', 'int'),
+    ('schedule.work_stop_hours', '打工停止时长（小时，0 不限）', 'int'),
     ('schedule.encourage_times', '鼓励次数（进行中页面快速点击）', 'int'),
     ('work.location', '打工地点', list(settings_io.WORK_LOCATIONS)),
     ('work.duration', '打工时长选择', ['10分钟', '45分钟', '2小时']),

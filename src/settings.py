@@ -34,6 +34,7 @@ DEFAULTS = {
     'work.hire_name': '',
     'schedule.coin_threshold': 2000,
     'schedule.daily_hour_limit': 8,
+    'schedule.work_stop_hours': 12,
     'schedule.check_interval': 8,
     'schedule.main_page_checks': 1,
     'schedule.back_method': '系统返回',
@@ -147,6 +148,12 @@ def validate_field(key: str, value):
         # 失败重试间隔至少 1 秒（0 会变成无间隔连续重试死循环）
         try:
             return (True, value) if int(value) >= 1 else (False, default)
+        except (TypeError, ValueError):
+            return False, default
+    if key == 'schedule.work_stop_hours':
+        # 0 = 不限；上限 24 小时（一天最长）
+        try:
+            return (True, value) if 0 <= int(value) <= 24 else (False, default)
         except (TypeError, ValueError):
             return False, default
     if key in ('schedule.check_interval', 'schedule.main_page_checks'):

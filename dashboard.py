@@ -108,7 +108,10 @@ def work_eta(lines: list[str]):
 
 
 def today_duration(lines: list[str]):
-    """最后一条“今日时长: 已学习 X 分钟 + 已打工 Y 分钟”的 X/Y。"""
+    """最后一条“今日时长: 已学习 X 分钟 + 已打工 Y 分钟”的 X/Y + 效率档。
+
+    效率档（游戏机制，与 scenarios/runner.py 的 EFFICIENCY_TIERS 一致）：
+    学习+打工合计 >12 小时 10%、>8 小时 25%、否则 100%。"""
     m = None
     for ln in lines[-400:]:
         mm = re.search(r'今日时长: 已学习 (\d+) 分钟 \+ 已打工 (\d+) 分钟', ln)
@@ -116,7 +119,10 @@ def today_duration(lines: list[str]):
             m = mm
     if not m:
         return None
-    return {'learn_min': int(m.group(1)), 'work_min': int(m.group(2))}
+    learn_min, work_min = int(m.group(1)), int(m.group(2))
+    total_min = learn_min + work_min
+    eff = 10 if total_min >= 12 * 60 else (25 if total_min >= 8 * 60 else 100)
+    return {'learn_min': learn_min, 'work_min': work_min, 'eff_pct': eff}
 
 
 def config_summary() -> dict:
@@ -148,6 +154,7 @@ def config_summary() -> dict:
         ['打工', f"{work.get('location', '')} · {work.get('duration', '')} · {n_per_day(work.get('times_per_day'))}"],
         ['金币阈值', f"{sched.get('coin_threshold', '-')}（低于优先打工）"],
         ['时长上限', f"{sched.get('daily_hour_limit', '-')} 小时/天"],
+        ['打工停止', f"{sched.get('work_stop_hours', '-')} 小时/天（避 10% 效率档）"],
         ['踩踩', f"{visit.get('times_per_day', '-')} 次/天 @ {visit.get('start_time', '')}"],
         ['PK', f"{pk.get('times_per_day', '-')} 次/天 @ {pk.get('start_time', '')}"],
         ['冒险', f"{adv.get('times_per_day', '-')} 次/天 @ {adv.get('start_time', '')}"],
@@ -512,6 +519,7 @@ def editable_snapshot() -> dict:
         'hire_name': str(work.get('hire_name') or ''),
         'coin_threshold': sched.get('coin_threshold', 2000),
         'daily_hour_limit': sched.get('daily_hour_limit', 8),
+        'work_stop_hours': sched.get('work_stop_hours', 12),
         'visit_times': visit.get('times_per_day', 10),
         'pk_times': pk.get('times_per_day', 15),
         'pk_only': str(pk.get('only_names') or ''),
@@ -538,6 +546,7 @@ def apply_settings(updates: dict) -> dict:
         'hire_name': ('work.hire_name', None),
         'coin_threshold': ('schedule.coin_threshold', 'int'),
         'daily_hour_limit': ('schedule.daily_hour_limit', 'int'),
+        'work_stop_hours': ('schedule.work_stop_hours', 'int'),
         'visit_times': ('visit.times_per_day', 'int'),
         'pk_times': ('pk.times_per_day', 'int'),
         'pk_only': ('pk.only_names', None),
@@ -861,7 +870,7 @@ function renderData(d){
     const wd=d.today_duration;
     $('#workBig').textContent='等待中';
     $('#workHint').textContent=d.last_line?d.last_line.replace(/^\[[\d:]+\]\s*/,'').slice(0,60):'';
-    $('#workSub').textContent=wd?('今日：学习 '+wd.learn_min+' 分 · 打工 '+wd.work_min+' 分'):'';
+    $('#workSub').innerHTML=wd?('今日：学习 '+wd.learn_min+' 分 · 打工 '+wd.work_min+' 分 · '+((wd.eff_pct!=null&&wd.eff_pct<100)?('<span style="color:#d97706">效率 '+wd.eff_pct+'%</span>'):'效率 100%')):'';
   }
   // 统计瓦片
   const pg=d.progress||{}, cfg=d.config||{};
@@ -1147,6 +1156,7 @@ function renderSettings(ed){
     '<div class="frow"><span class="k">优先雇佣</span><input type="text" id="txtHire" placeholder="宠物名/主人名，空=自动选收益最高" value="'+esc(ed.hire_name||'')+'"></div>'+
     '<div class="frow"><span class="k">金币阈值</span><input type="number" id="numCoin" min="0" step="100" value="'+(ed.coin_threshold??'')+'"></div>'+
     '<div class="frow"><span class="k">时长上限（小时）</span><input type="number" id="numHour" min="0" step="1" value="'+(ed.daily_hour_limit??'')+'"></div>'+
+    '<div class="frow"><span class="k">打工停止（小时）</span><input type="number" id="numWorkStop" min="0" max="24" step="1" title="学习+打工合计到该时长后今天不再打工（避开10%效率档），0=不限" value="'+(ed.work_stop_hours??'')+'"></div>'+
     '<div class="frow"><span class="k">踩踩次数/天</span><input type="number" id="numVisit" min="0" step="1" value="'+(ed.visit_times??'')+'"></div>'+
     '<div class="frow"><span class="k">PK 次数/天</span><input type="number" id="numPk" min="0" step="1" value="'+(ed.pk_times??'')+'"></div>'+
     '<div class="frow"><span class="k">PK 只打</span><input type="text" id="txtPkOnly" placeholder="昵称或宠物名，逗号分隔，空=不限" value="'+esc(ed.pk_only||'')+'"></div>'+
@@ -1172,7 +1182,7 @@ async function saveSettings(){
   const txtc=(id,key)=>{const v=getv(id); if(v!==(setInit[key]||'')) updates[key]=v;};
   selc('#selLoc','work_location'); selc('#selDur','work_duration'); selc('#selCare','care_method');
   txtc('#txtHire','hire_name');
-  num('#numCoin','coin_threshold'); num('#numHour','daily_hour_limit');
+  num('#numCoin','coin_threshold'); num('#numHour','daily_hour_limit'); num('#numWorkStop','work_stop_hours');
   num('#numVisit','visit_times'); num('#numPk','pk_times'); num('#numAdv','adventure_times');
   txtc('#txtPkOnly','pk_only'); txtc('#txtPkSkip','pk_skip'); num('#numPkLv','pk_max_level'); txtc('#txtPkHelper','pk_helper');
   num('#numEnergy','care_energy'); num('#numClean','care_clean');
