@@ -5,7 +5,7 @@
 
     GET /             手机页面（自动刷新）
     GET /api/data     汇总数据 JSON
-    GET /api/adventure 冒险实验数据 JSON（实时曲线）
+    GET /api/adventure 冒险记录 JSON（统一数据源，实时曲线）
     GET /api/logs     实时日志尾部 JSON（?tail=250）
     GET /files/<png>  异常截图
 
@@ -27,7 +27,7 @@ from urllib.parse import parse_qs, urlparse
 BASE = Path(__file__).resolve().parent
 RUNS = BASE / 'runs'
 LOGS = RUNS / 'logs'
-ADV_DIR = Path('/tmp/adventure_experiment')   # 冒险实验数据目录
+ADV_LIVE_FILE = RUNS / 'adventure_live.jsonl'   # 冒险统一记录（实验 300 把 + 日常实时）
 DEFAULT_PORT = 8787
 
 
@@ -189,154 +189,62 @@ def load_progress() -> dict:
     }
 
 
-def _adv_load(name: str) -> list[dict]:
-    out = []
-    try:
-        for line in (ADV_DIR / name).open(encoding='utf-8'):
-            line = line.strip()
-            if line:
-                try:
-                    out.append(json.loads(line))
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    return out
-
-
-_ADV_GAIN_RE = re.compile(r'(金币|点券|钻石|心情值?|体力值?|清洁值?)\s*[+＋]\s*(\d+)')
-
-
-def _adv_care_pairs(row: dict) -> list:
-    items = row.get('ledger_lines') or []
-    pairs = []
-    for t, y in items:
-        if '护理道具' in t:
-            for t2, y2 in items:
-                s2 = t2.strip()
-                if abs(y2 - y) <= 8 and s2.startswith('-') and s2[1:].isdigit():
-                    pairs.append((int(s2), y))
-    return pairs
-
-
 def adventure_data() -> dict:
-    """冒险实验实时数据（/tmp/adventure_experiment 的 results/stats）
-    + 调度器自动记录的今日实时（runs/adventure_live.jsonl）。"""
-    rows = _adv_load('results.jsonl')
-    stats = _adv_load('stats.jsonl')
-    live_rows = []
+    """冒险记录（统一数据源：runs/adventure_live.jsonl——实验期 300 把 + 日常实时，
+    由 src/scenario.record_adventure_live 在每把结算时记录）。"""
+    rows = []
     try:
-        for _line in (RUNS / 'adventure_live.jsonl').read_text('utf-8').splitlines()[-600:]:
+        for _line in ADV_LIVE_FILE.read_text('utf-8').splitlines()[-1500:]:
             try:
-                live_rows.append(json.loads(_line))
+                rows.append(json.loads(_line))
             except Exception:
                 pass
     except Exception:
         pass
-    _today = datetime.now().strftime('%Y-%m-%d')
-    _tl = [r for r in live_rows if str(r.get('ts') or '').startswith(_today)]
-    live = {'n': len(_tl),
-            'net': sum(int(r.get('coins') or 0) for r in _tl),
-            'win': sum(1 for r in _tl if int(r.get('coins') or 0) > 0),
-            'first': (_tl[0]['ts'][11:16] if _tl else None),
-            'last': (_tl[-1]['ts'][11:19] if _tl else None),
-            'rows': [[str(r.get('ts') or '')[11:19], int(r.get('coins') or 0),
-                      ' '.join(str(t).replace('值', '')
-                               for t in (r.get('settle') or [])
-                               if re.search(r'(心情|体力|清洁)值\+\d+', str(t)))]
-                     for r in _tl]}
-    if not rows and not stats:
-        return {'ok': False, 'live': live}
-    target = 100
-    try:
-        import json as _json
-        target = int(_json.loads((ADV_DIR / 'meta.json').read_text('utf-8')).get('target') or target)
-    except Exception:
-        pass
-    golds = [(r['i'], r['delta']) for r in rows if r.get('delta') is not None]
-    net = sum(d for _, d in golds)
-    cum, s = [], 0
-    for i, d in golds:
-        s += d
-        cum.append([i, s])
-    pts = [[i, d] for i, d in golds]
-    win = sum(1 for _, d in golds if d > 0)
-    zero = sum(1 for _, d in golds if d == 0)
-    loss = sum(1 for _, d in golds if d < 0)
+    if not rows:
+        return {'ok': False}
+    rows.sort(key=lambda d: str(d.get('ts') or ''))
+    coins = [int(r.get('coins') or 0) for r in rows]
+    n = len(coins)
+    net = sum(coins)
+    win = sum(1 for c in coins if c > 0)
+    zero = sum(1 for c in coins if c == 0)
     dist = {}
-    for _, d in golds:
-        dist[str(d)] = dist.get(str(d), 0) + 1
+    for c in coins:
+        dist[str(c)] = dist.get(str(c), 0) + 1
+    cum, s = [], 0
+    for i, c in enumerate(coins, 1):
+        s += c
+        cum.append([i, s])
+    pts = [[i, c] for i, c in enumerate(coins, 1)]
+    today = datetime.now().strftime('%Y-%m-%d')
+    tn = tnet = 0
     gains = {}
-    for r in rows:
-        for t in (r.get('settle') or []):
-            for m in _ADV_GAIN_RE.finditer(t):
-                kw = m.group(1).strip()
-                for k in ('心情', '体力', '清洁'):
-                    if kw.startswith(k):
-                        kw = k + '值'
-                if kw == '金币':
-                    continue
-                g = gains.setdefault(kw, [0, 0])
+    recent = []
+    for i, r in enumerate(rows, 1):
+        toks = [str(t).strip() for t in (r.get('settle') or [])]
+        gs = []
+        for t in toks:
+            m = re.fullmatch(r'(心情|体力|清洁)值\+(\d+)', t)
+            if m:
+                g = gains.setdefault(m.group(1), [0, 0])
                 g[0] += 1
                 g[1] += int(m.group(2))
-    # 护理事件与逐笔扣费
-    care_rows = [x for x in stats if (x.get('note') or '') == 'post_care']
-    rs = sorted(rows, key=lambda r: r.get('i') or 0)
-    care_costs = []
-    for ct in [x['i'] for x in care_rows]:
-        after = [r for r in rs if (r.get('i') or 0) > ct][:4]
-        before = [r for r in rs if (r.get('i') or 0) <= ct]
-        pre = _adv_care_pairs(before[-1]) if before else []
-        got = None
-        for r in after:
-            new = [amt for amt, y in _adv_care_pairs(r)
-                   if not any(amt == a2 and abs(y - y2) <= 260 for a2, y2 in pre)]
-            if new:
-                got = sorted(set(new))[0]
-                break
-        care_costs.append(got)
-    # 逐次明细（新→旧由前端反转；spend = 本次读数新出现的购买类扣费）
-    recent = []
-    prev_set = None
-    for r in rows:
-        items = r.get('ledger_lines') or []
-        spend = 0
-        if prev_set is not None:
-            for t, y in items:
-                s2 = t.strip()
-                if s2.startswith('-') and s2[1:].isdigit() and t not in prev_set:
-                    if any(abs(y3 - y) <= 8 and ('购买' in t3 or '护理' in t3 or '道具' in t3)
-                           for t3, y3 in items):
-                        spend += int(s2)
-        prev_set = {t for t, _ in items}
-        gs = []
-        for t in (r.get('settle') or []):
-            for m in _ADV_GAIN_RE.finditer(t):
-                kw = m.group(1).strip()
-                if kw == '金币':
-                    continue
-                for k in ('心情', '体力', '清洁'):
-                    if kw.startswith(k):
-                        kw = k + '值'
-                gs.append(f'{kw}+{m.group(2)}')
-        recent.append([r.get('i'), r.get('time'), r.get('delta'), ' '.join(gs), spend])
-    st_series = [[x.get('i'), x.get('体力'), x.get('清洁'), x.get('心情'),
-                  1 if (x.get('note') or '') == 'post_care' else 0] for x in stats]
-    latest = stats[-1] if stats else None
-    updated = (rows[-1].get('time') if rows else '') or (latest.get('t') if latest else '')
+                gs.append(f'{m.group(1)}+{m.group(2)}')
+        ts = str(r.get('ts') or '')
+        c = int(r.get('coins') or 0)
+        if ts.startswith(today):
+            tn += 1
+            tnet += c
+        recent.append([i, ts[5:16] or ts[:5], c, ' '.join(gs), 0])
     return {
-        'ok': True, 'n': len(rows), 'target': target,
-        'net': net, 'avg': round(net / len(golds), 2) if golds else 0,
-        'dist': dist, 'win': win, 'zero': zero, 'loss': loss,
+        'ok': True, 'n': n,
+        'net': net, 'avg': round(net / n, 2) if n else 0,
+        'dist': dist, 'win': win, 'zero': zero, 'loss': 0,
         'gains': [[k, v[0], v[1]] for k, v in sorted(gains.items())],
-        'care_n': len(care_rows),
-        'care_costs': [c for c in care_costs if c is not None],
-        'cum': cum, 'pts': pts, 'stats': st_series, 'recent': recent,
-        'latest': ({'i': latest.get('i'), 't': latest.get('t'),
-                    'e': latest.get('体力'), 'c': latest.get('清洁'),
-                    'm': latest.get('心情')} if latest else None),
-        'updated': updated,
-        'live': live,
+        'cum': cum, 'pts': pts, 'stats': [], 'recent': recent[-800:],
+        'today_n': tn, 'today_net': tnet,
+        'updated': str(rows[-1].get('ts') or '')[11:16],
     }
 
 
@@ -761,7 +669,7 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 .advlist{max-height:44vh;overflow:auto;margin-top:6px;border:1px solid var(--line);border-radius:8px;background:#fff;overscroll-behavior:contain}
 .advlist .arow{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:7px 10px;border-top:1px dashed var(--line);font-size:13px;font-variant-numeric:tabular-nums}
 .advlist .arow:first-child{border-top:0}
-.advlist .ai{color:var(--sub);font-size:12px;flex:none;width:76px}
+.advlist .ai{color:var(--sub);font-size:12px;flex:none;width:112px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .advlist .ag{color:var(--sub);font-size:11.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
 .advlist .av{font-weight:650;flex:none;min-width:44px;text-align:right}
 .advlist .pos{color:var(--ok)} .advlist .neg{color:#dc2626} .advlist .zero{color:#9ca3af}
@@ -813,24 +721,17 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
     <div class="subline" id="workSub"></div>
   </section>
 
-  <section class="card" data-page="adv">
-    <h2>今日实时冒险 <span id="advLiveMeta" style="font-weight:400;font-size:10.5px"></span></h2>
-    <div class="workline"><span class="big" id="advLiveNet">--</span><span class="hint" id="advLiveHint"></span></div>
-    <div class="advcap">逐把明细（新→旧；+N=金币，灰字=心情/体力/清洁奖励）</div>
-    <div class="advlist" id="advLiveList" style="max-height:380px;overflow:auto"></div>
-  </section>
-
   <section class="card" id="advCard" data-page="adv">
-    <h2>冒险实验 <span id="advMeta" style="font-weight:400;font-size:10.5px"></span></h2>
+    <h2>冒险记录 <span id="advMeta" style="font-weight:400;font-size:10.5px"></span></h2>
     <div class="workline"><span class="big" id="advNet">--</span><span class="hint" id="advNetHint"></span></div>
     <div class="subline" id="advSub"></div>
     <div class="advchips" id="advChips"></div>
     <div class="advtip" id="advTip">点 / 拖动图表上的点或线，查看当次数据</div>
-    <div class="advcap">累计净收益曲线</div>
+    <div class="advcap">累计收益曲线（金币）</div>
     <svg class="advchart" id="svgCum" viewBox="0 0 340 84"></svg>
     <div class="advcap">单次收益散点（橙虚线=平均）</div>
     <svg class="advchart" id="svgPts" viewBox="0 0 340 84"></svg>
-    <div class="advcap"><span style="color:#16a34a">体力</span> / <span style="color:#0891b2">清洁</span> / <span style="color:#d97706">心情</span>（红虚线=阈值60，红竖线=护理）</div>
+    <div class="advcap" id="capStats"><span style="color:#16a34a">体力</span> / <span style="color:#0891b2">清洁</span> / <span style="color:#d97706">心情</span>（红虚线=阈值60，红竖线=护理）</div>
     <svg class="advchart" id="svgStats" viewBox="0 0 340 84"></svg>
     <div class="advcap">逐次明细（新→旧） <button class="minibtn on" id="btnAdvAll" style="float:right;margin-top:-2px">全部</button></div>
     <div class="advlist" id="advList"></div>
@@ -998,7 +899,7 @@ async function refreshData(){
 function svgSet(id,inner){const el=document.getElementById(id);if(el)el.innerHTML=inner;}
 function drawAdv(){
   const d=window.__adv;if(!d)return;
-  const W=340,H=84,pad=8,tx=d.target||100;
+  const W=340,H=84,pad=8,tx=d.n||100;
   const sx=i=>pad+(Math.max(1,i)-1)/Math.max(1,(tx-1))*(W-2*pad);
   let inner='<line x1="0" y1="42" x2="'+W+'" y2="42" stroke="#e2e5ec" stroke-width="1" stroke-dasharray="4 4"/>';
   const ys0=(d.cum||[]).map(p=>p[1]);
@@ -1036,52 +937,34 @@ function drawAdv(){
 }
 function renderAdventure(d){
   window.__adv=d;
-  renderAdvLive(d&&d.live||null);
-  if(!d||!d.ok){const m=$('#advMeta');if(m)m.textContent='实验数据未找到';return}
-  window.__adv=d;
-  $('#advMeta').textContent=d.n+'/'+d.target+' 次 · 更新 '+(d.updated||'');
+  if(!d||!d.ok){const m=$('#advMeta');if(m)m.textContent='暂无数据';return}
+  $('#advMeta').textContent='共 '+d.n+' 把 · 今日 '+(d.today_n||0)+' 把（'+((d.today_net||0)>0?'+':'')+(d.today_net||0)+'） · 更新 '+(d.updated||'');
   const big=$('#advNet');big.textContent=(d.net>0?'+':'')+d.net;
   big.style.color=d.net>0?'var(--ok)':(d.net<0?'#dc2626':'');
-  $('#advNetHint').textContent='金币净变化（含护理扣费） · 平均 '+(d.avg>0?'+':'')+d.avg+'/次';
-  let sub='有收益 '+d.win+' · 零 '+d.zero+' · 负 '+d.loss+' 次 · 护理 '+d.care_n+' 次';
-  if(d.care_costs&&d.care_costs.length)sub+='（'+d.care_costs.join(' / ')+' 金币）';
-  $('#advSub').textContent=sub;
+  $('#advNetHint').textContent='金币收益合计（结算页口径） · 平均 '+(d.avg>0?'+':'')+d.avg+'/把';
+  $('#advSub').textContent='有收益 '+d.win+' 把 · 零收益 '+d.zero+' 把';
   let ch='';
   for(const g of (d.gains||[])){ch+='<span class="chip">'+esc(g[0])+' +'+g[2]+' ×'+g[1]+'</span>';}
-  if(d.latest){ch+='<span class="chip wait">体力 '+d.latest.e+' · 清洁 '+d.latest.c+' · 心情 '+d.latest.m+'</span>';}
   $('#advChips').innerHTML=ch;
+  const hasStats=!!((d.stats||[]).length);
+  const sv=$('#svgStats'); if(sv) sv.style.display=hasStats?'':'none';
+  const cp=$('#capStats'); if(cp) cp.style.display=hasStats?'':'none';
   drawAdv();
   renderAdvList(d);
 }
 let advShowAll=true;
 function renderAdvList(d){
   const list=$('#advList'); if(!list)return;
-  let arr=(d.recent||[]).slice().reverse();
+  let arr=(d.recent||[]).slice().reverse().slice(0,400);
   if(!advShowAll) arr=arr.filter(r=>r[2]!==0||r[4]);
   list.innerHTML=arr.map(r=>{
     const v=r[2]; const cls=v>0?'pos':(v<0?'neg':'zero');
     const vt=(v>0?'+':'')+(v==null?'?':v);
     let g=esc(r[3]||'');
     if(r[4]) g+=(g?' ':'')+'<span style="color:#dc2626">扣费'+r[4]+'</span>';
-    return '<div class="arow"><span class="ai">#'+r[0]+' '+(r[1]||'').slice(0,5)+'</span><span class="ag">'+g+'</span><span class="av '+cls+'">'+vt+'</span></div>';
+    return '<div class="arow"><span class="ai">#'+r[0]+' '+(r[1]||'').slice(0,11)+'</span><span class="ag">'+g+'</span><span class="av '+cls+'">'+vt+'</span></div>';
   }).join('')||'<div class="arow"><span class="ag">暂无记录</span></div>';
   const b=$('#btnAdvAll'); if(b){b.className='minibtn'+(advShowAll?' on':'');b.textContent=advShowAll?'全部':'仅变化';}
-}
-function renderAdvLive(l){
-  const meta=$('#advLiveMeta'), big=$('#advLiveNet'), hint=$('#advLiveHint'), list=$('#advLiveList');
-  if(!meta)return;
-  if(!l||!l.n){meta.textContent=''; big.textContent='--'; big.style.color='';
-    hint.textContent='从下一把起自动记录';
-    list.innerHTML='<div class="arow"><span class="ag">今天还没有记录</span></div>'; return;}
-  meta.textContent='记录自 '+l.first+' 起';
-  big.textContent=(l.net>0?'+':'')+l.net;
-  big.style.color=l.net>0?'var(--ok)':(l.net<0?'#dc2626':'');
-  hint.textContent='今日 '+l.n+' 把 · 有收益 '+l.win+' 次 · 最近 '+l.last;
-  const arr=(l.rows||[]).slice().reverse();
-  list.innerHTML=arr.slice(0,150).map(r=>{
-    const v=r[1]; const cls=v>0?'pos':(v<0?'neg':'zero');
-    return '<div class="arow"><span class="ai">'+esc(r[0])+'</span><span class="ag">'+esc(r[2]||'')+'</span><span class="av '+cls+'">'+(v>0?'+':'')+v+'</span></div>';
-  }).join('')||'<div class="arow"><span class="ag">暂无</span></div>';
 }
 const _advBtn=document.getElementById('btnAdvAll');
 if(_advBtn) _advBtn.onclick=()=>{advShowAll=!advShowAll; if(window.__adv)renderAdvList(window.__adv);};
@@ -1112,7 +995,7 @@ function advSelect(chart,k){
 }
 function advNearest(chart,x){
   const d=window.__adv;if(!d)return;
-  const pad=8,tx=d.target||100,W=340;
+  const pad=8,tx=d.n||100,W=340;
   const sx0=i=>pad+(Math.max(1,i)-1)/Math.max(1,(tx-1))*(W-2*pad);
   const arr=chart==='stats'?(d.stats||[]).map(r=>r[0]):(d.pts||[]).map(p=>p[0]);
   let best=null,bd=1e9;
