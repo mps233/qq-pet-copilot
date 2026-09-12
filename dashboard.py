@@ -8,6 +8,8 @@
     GET /api/adventure 冒险记录 JSON（统一数据源，实时曲线）
     GET /api/logs     实时日志尾部 JSON（?tail=250）
     GET /files/<png>  异常截图
+    POST /api/runner/start  启动调度器（独立后台进程）
+    POST /api/runner/stop   停止调度器（SIGINT 优雅收尾退出）
 
 启动:  python3 dashboard.py [--port 8787]
 访问:  http://<本机内网IP>:8787
@@ -15,7 +17,9 @@
 
 import io
 import json
+import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -65,6 +69,107 @@ def scheduler_info() -> dict:
         except Exception:
             pass
     return {'alive': bool(pids), 'pid': pids[0] if pids else None, 'uptime': uptime}
+
+
+def _runner_pids() -> list[int]:
+    """调度器进程 PID 列表：pgrep 匹配 + 命令行复核（防 grep/pgrep 自身误配）。"""
+    try:
+        out = subprocess.run(['pgrep', '-f', 'scenarios/runner.py'],
+                             capture_output=True, text=True, timeout=5).stdout
+        pids = [int(x) for x in out.split() if x.strip().isdigit()]
+    except Exception:
+        return []
+    alive = []
+    for pid in pids:
+        try:
+            cmd = subprocess.run(['ps', '-p', str(pid), '-o', 'command='],
+                                 capture_output=True, text=True, timeout=5).stdout
+        except Exception:
+            cmd = ''
+        if 'runner.py' in cmd and 'python' in cmd.lower():
+            alive.append(pid)
+    return alive
+
+
+def scheduler_start() -> dict:
+    """从仪表盘启动调度器：独立会话进程，输出追加到 runs/runner_console.log。
+
+    用项目 venv 的 python（保证 uiautomator2/rapidocr 等依赖可用），
+    已在运行时不重复启动（防多实例——曾踩过双开尾巴的坑）。
+    """
+    info = scheduler_info()
+    if info['alive']:
+        return {'ok': False, 'msg': f"调度器已在运行（PID {info['pid']}），不重复启动"}
+    venv_py = BASE / '.venv' / 'bin' / 'python'
+    python = str(venv_py) if venv_py.exists() else sys.executable
+    try:
+        RUNS.mkdir(exist_ok=True)
+        logf = open(RUNS / 'runner_console.log', 'ab')
+    except Exception as e:
+        return {'ok': False, 'msg': f'无法打开日志文件: {e}'}
+    logf.write(f'\n===== {datetime.now():%Y-%m-%d %H:%M:%S} '
+               f'由仪表盘启动调度器 =====\n'.encode('utf-8'))
+    logf.flush()
+    try:
+        subprocess.Popen([python, str(BASE / 'scenarios' / 'runner.py')],
+                         cwd=str(BASE), stdin=subprocess.DEVNULL,
+                         stdout=logf, stderr=subprocess.STDOUT,
+                         start_new_session=True)
+    except Exception as e:
+        logf.close()
+        return {'ok': False, 'msg': f'启动失败: {e}'}
+    logf.close()   # 父进程关句柄；子进程持有自己的副本继续写
+    deadline = time.time() + 8
+    while time.time() < deadline:
+        time.sleep(0.5)
+        info = scheduler_info()
+        if info['alive']:
+            audit('调度器启动（来自仪表盘）')
+            return {'ok': True, 'msg': f"已启动（PID {info['pid']}）", 'scheduler': info}
+    return {'ok': False, 'msg': '启动后 8 秒内未检测到进程，请看 runs/runner_console.log'}
+
+
+def scheduler_stop() -> dict:
+    """停止调度器：先 SIGINT 优雅退出（任务收尾），12 秒不退再 SIGTERM/SIGKILL 兜底。"""
+    pids = _runner_pids()
+    if not pids:
+        return {'ok': True, 'msg': '调度器本来就没有在运行', 'scheduler': scheduler_info()}
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGINT)
+        except Exception:
+            pass
+    deadline = time.time() + 12
+    while time.time() < deadline and _runner_pids():
+        time.sleep(0.5)
+    left = _runner_pids()
+    forced = False
+    if left:
+        for pid in left:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except Exception:
+                pass
+        deadline = time.time() + 4
+        while time.time() < deadline and _runner_pids():
+            time.sleep(0.4)
+        left = _runner_pids()
+    if left:
+        forced = True
+        for pid in left:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
+        time.sleep(1.0)
+        left = _runner_pids()
+    audit(f"调度器停止（来自仪表盘）: {pids} → 剩余 {left or '无'}"
+          f"{'（含强制）' if forced else ''}")
+    if left:
+        return {'ok': False, 'msg': f'仍有进程未退出：{left}', 'scheduler': scheduler_info()}
+    return {'ok': True,
+            'msg': f"已停止（PID {'、'.join(map(str, pids))}）" + ('，有进程被强制结束' if forced else ''),
+            'scheduler': scheduler_info()}
 
 
 def today_log_path():
@@ -723,6 +828,14 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
   </nav>
 </header>
 <main>
+  <section class="card" id="runnerCard" data-page="main">
+    <h2>调度器 <span id="runnerMeta" style="font-weight:400;font-size:10.5px"></span></h2>
+    <div class="workline"><span class="dot" id="runnerDot"></span><span class="big" id="runnerState" style="font-size:15px">--</span><span class="hint" id="runnerHint"></span></div>
+    <div class="subline" id="runnerSub"></div>
+    <div class="btnrow2"><button class="savebtn" id="btnRunnerStart">▶ 启动调度器</button><button class="savebtn ghost" id="btnRunnerStop">■ 停止调度器</button></div>
+    <div class="saveMsg" id="runnerMsg"></div>
+  </section>
+
   <section class="card" id="workCard" data-page="main">
     <h2>打工循环</h2>
     <div class="workline"><span class="big" id="workBig">--</span><span class="hint" id="workHint"></span></div>
@@ -836,6 +949,16 @@ function renderData(d){
   const dot=$('#schedDot');
   dot.className='dot '+(d.scheduler.alive?'on':'off');
   $('#schedTxt').textContent=d.scheduler.alive?('运行中 · 已跑 '+(d.scheduler.uptime||'')):'未运行';
+  // 调度器卡片
+  if($('#runnerState')){
+    const sch=d.scheduler||{};
+    $('#runnerDot').className='dot '+(sch.alive?'on':'off');
+    $('#runnerState').textContent=sch.alive?'运行中':'已停止';
+    $('#runnerHint').textContent=sch.alive?('PID '+sch.pid+(sch.uptime?(' · 已跑 '+sch.uptime):'')):'';
+    $('#runnerSub').textContent=sch.alive?'正在按任务队列自动跑（护理/踩踩/PK/打工/冒险…）':'已停止：手机不会被自动操作；随时可再启动';
+    $('#btnRunnerStart').disabled=!!sch.alive;
+    $('#btnRunnerStop').disabled=!sch.alive;
+  }
   // 金币
   const st=d.status||{};
   $('#coins').textContent=st.coins!=null?st.coins:'--';
@@ -1086,6 +1209,21 @@ if(_planSync) _planSync.onclick=async()=>{
   _planSync.disabled=false;
   _planSync.textContent=old;
 };
+async function runnerAction(kind){
+  const msg=$('#runnerMsg'); if(!msg)return;
+  msg.className='saveMsg';
+  msg.textContent=(kind==='start'?'正在启动调度器（连接设备约需几秒）…':'正在停止调度器（等当前任务收尾）…');
+  try{
+    const r=await fetch('/api/runner/'+kind,{method:'POST'});
+    const d=await r.json();
+    msg.textContent=d.msg||(d.ok?'完成':'失败');
+    if(!d.ok) msg.className='saveMsg err';
+  }catch(e){ msg.className='saveMsg err'; msg.textContent='请求失败：'+e.message; }
+  refreshData();
+}
+const _rbStart=$('#btnRunnerStart'), _rbStop=$('#btnRunnerStop');
+if(_rbStart) _rbStart.onclick=()=>runnerAction('start');
+if(_rbStop) _rbStop.onclick=()=>{ if(confirm('停止调度器？正在进行的任务会先收尾再退出（约几秒到十几秒）。')) runnerAction('stop'); };
 async function refreshAdventure(){
   try{ renderAdventure(await j('/api/adventure')); }catch(e){}
 }
@@ -1411,6 +1549,16 @@ class Handler(BaseHTTPRequestHandler):
                     body = json.dumps(result, ensure_ascii=False).encode('utf-8')
                     self._send(200 if result['ok'] else 400,
                                'application/json; charset=utf-8', body)
+            elif u.path == '/api/runner/start':
+                result = scheduler_start()
+                body = json.dumps(result, ensure_ascii=False).encode('utf-8')
+                self._send(200 if result.get('ok') else 400,
+                           'application/json; charset=utf-8', body)
+            elif u.path == '/api/runner/stop':
+                result = scheduler_stop()
+                body = json.dumps(result, ensure_ascii=False).encode('utf-8')
+                self._send(200 if result.get('ok') else 400,
+                           'application/json; charset=utf-8', body)
             else:
                 self._send(404, 'text/plain', b'not found')
         except Exception as e:
