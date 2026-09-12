@@ -376,7 +376,15 @@ pre#logbox{height:46vh;min-height:250px;overflow:auto;background:#0f1116;color:#
 .thumbs img{width:100%;display:block}
 .thumbs .cap{position:absolute;left:0;right:0;bottom:0;background:rgba(15,17,22,.72);color:#fff;font-size:10px;padding:2px 6px;text-align:center}
 footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;line-height:1.7}
-#phoneShot{display:block;margin:0 auto;max-height:46vh;max-width:100%;border-radius:8px;border:1px solid var(--line);background:#eef0f4;min-height:48px}
+.duo{display:flex;gap:10px;align-items:stretch}
+.duoshot{flex:0 0 46%;min-width:0}
+.duoque{flex:1;min-width:0}
+#phoneShot{display:block;width:100%;height:auto;border-radius:8px;border:1px solid var(--line);background:#eef0f4;min-height:48px}
+.duoshot .shotctl{flex-wrap:wrap;gap:4px 8px}
+.duoque .qhead{flex-wrap:wrap;gap:2px 8px;font-size:11.5px}
+.duoque .tasklist .row{font-size:13px;padding:7px 0;flex-wrap:wrap;gap:2px 6px}
+.duoque .tasklist .t{gap:5px}
+.duoque .chip{font-size:10.5px;padding:2px 7px}
 .shotctl{display:flex;justify-content:center;gap:10px;align-items:center;margin-top:8px}
 .shotctl button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 12px;font-size:12px;color:var(--sub)}
 .err{color:#b45309;font-size:12px}
@@ -424,16 +432,17 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
     <div class="tile"><div class="v" id="expTxt">--</div><div class="k">经验日常</div></div>
   </section>
 
-  <section class="card">
-    <h2>手机当前画面 <span id="shotMeta" style="font-weight:400"></span></h2>
-    <a id="shotLink" href="/api/screenshot" target="_blank" rel="noopener"><img id="phoneShot" alt="加载中…"></a>
-    <div class="shotctl"><button id="btnShot">立即刷新</button><span id="shotErr" class="err"></span></div>
-  </section>
-
-  <section class="card">
-    <h2>任务队列</h2>
-    <div class="qhead"><span id="qTop">--</span><span id="qUpd"></span></div>
-    <div class="tasklist" id="taskList"></div>
+  <section class="duo">
+    <div class="card duoshot">
+      <h2>手机画面 <span id="shotMeta" style="font-weight:400;font-size:10.5px"></span></h2>
+      <a id="shotLink" href="/api/screenshot" target="_blank" rel="noopener"><img id="phoneShot" alt="加载中…"></a>
+      <div class="shotctl"><button id="btnShot">刷新</button><span id="shotErr" class="err"></span></div>
+    </div>
+    <div class="card duoque">
+      <h2>任务队列</h2>
+      <div class="qhead"><span id="qTop">--</span><span id="qUpd"></span></div>
+      <div class="tasklist" id="taskList"></div>
+    </div>
   </section>
 
   <section class="card">
@@ -637,9 +646,9 @@ async function refreshShot(force){
     const b=await r.blob(); const u=URL.createObjectURL(b);
     const img=$('#phoneShot'); if(shotUrl) URL.revokeObjectURL(shotUrl);
     shotUrl=u; img.src=u;
-    $('#shotMeta').textContent='拍摄 '+(r.headers.get('X-Shot-At')||'');
+    $('#shotMeta').textContent='拍摄 '+((r.headers.get('X-Shot-At')||'').slice(0,5));
     $('#shotErr').textContent='';
-  }catch(e){ $('#shotErr').textContent='获取失败，点“立即刷新”重试'; }
+  }catch(e){ $('#shotErr').textContent='获取失败，点“刷新”重试'; }
   shotBusy=false;
 }
 $('#btnShot').onclick=()=>refreshShot(true);
