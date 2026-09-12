@@ -264,6 +264,15 @@ $PY build.py --emulator          # 模拟器版（内置 frida 客户端；frida
     `study_secs`/`work_secs`，`load_durations()` 读取（GUI 日志页“今日”显示
     `已学习/工作/总时长（小时）0.0/0.0/0.0` 1 位小数）；`_duration_over` 判断
     `schedule.daily_hour_limit`（小时，0=不限）达上限后**今天不再学习只打工**；
+    `schedule.work_stop_hours`（小时，0=不限，默认 12）判断 `_work_over`：学习+打工
+    合计 >= 该值后**今天连打工也停**——游戏效率档：合计 >8h 收益效率 25%、>12h 10%，
+    默认避开 10% 档（要连 25% 档也避开改 8）。两个上限都**实时求值不设死标记**，
+    跨天时长清零自然恢复；效率档写进日志（今日时长行/启动行）。**主任务结束后
+    `_sleep_until_next` 的"留守"分支**：只要还有"启用且未判死"的任务就按
+    `QUEUE_POLL_INTERVAL` 轮询留守（护理 60s/好友护理 120s/每日支线到点/次日打工
+    靠它接力），勿按 `task.next_at` 估等待点——interval 任务的 next_at 只是退避
+    下限，真实节奏还叠加任务 interval_seconds 与场景级节流（care_due/friend_care_due），
+    误判"没有等待点"会把调度器直接关停（work_stop 打满后该分支每天可达，已实测踩坑）；
     首次运行新版本时老进度只有次数（learned）没有时长字段，按旧版
     `schedule.school_factor`/`work_factor`（每节/每次的分钟数）自动迁移补上（只做一次）；
     旧版 `school_factor`/`work_factor`/`daily_point_limit` 仍留在 config.yaml 仅为
