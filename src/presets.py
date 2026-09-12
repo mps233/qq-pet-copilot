@@ -5,8 +5,9 @@
 - alt / 小号工具人：给「小号」跑托管时用——只保留供养大号相关的任务
   （护理自己 / 到好友家护理大号 / 定向送 PK / 福袋 / 踩踩 / 轻量打工），
   关掉学习、冒险、雇佣好友（不在 tasks.order 里 = 不调度）；
-  被雇佣处理设为「让利雇主（尽早召回）」——大号雇走小号宠物打工时，
-  小号发现被雇佣立即召回，把额外奖励大头留给大号。
+  被雇佣处理设为「让利雇主（不召回）」——大号雇走小号宠物打工时，小号不做任何
+  召回：宠物留在大号那儿继续打工（不掐断打工时间、不浪费），收益按规则归雇主方
+  （大号）；小号其它任务撞上被雇佣会自动延后重试。
   参数 main_name = 大号的主人昵称或宠物名（好友护理 / PK 目标都填它）。
 """
 from __future__ import annotations
@@ -14,7 +15,7 @@ from __future__ import annotations
 import src.settings as S
 
 ALT_TASK_ORDER = 'care>friend_care>pk>gift_bag>visit>work'
-EMPLOYED_ACTION_YIELD = '让利雇主（尽早召回）'
+EMPLOYED_ACTION_YIELD = '让利雇主（不召回）'
 
 
 def alt_preset(main_name: str) -> dict:
@@ -32,11 +33,12 @@ def alt_preset(main_name: str) -> dict:
         'friend_care.method': 'ocr检测',
         'friend_care.time_range': '08:00-23:59',
         'friend_care.interval_seconds': 600,
-        # 被雇佣托管：大号雇走小号宠物打工，小号尽早召回，大头留给大号
+        # 被雇佣托管：大号雇走小号宠物打工时不做召回——宠物留那边继续打工，
+        # 收益归雇主方（大号）；检查间隔只做监控日志（30 分钟一次足够）
         'employed.enabled': True,
         'employed.action': EMPLOYED_ACTION_YIELD,
         'employed.time_range': '00:01-23:59',
-        'employed.interval_seconds': 300,
+        'employed.interval_seconds': 1800,
         # 定向送 PK：只打大号（大号赢 +金币）
         'pk.only_names': name,
         'pk.skip_names': '',

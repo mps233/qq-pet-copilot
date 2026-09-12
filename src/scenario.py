@@ -32,6 +32,7 @@ LEAVE_HOME_ATTEMPTS = 3    # 点击出门失败（点完 main_sign 仍在主页�
 WAIT_LOG_INTERVAL = 300.0  # 长等待期间的心跳日志间隔（秒），避免每轮检测刷屏
 ENCOURAGE_LOG_INTERVAL = 300.0  # "鼓励宠物"点击日志节流间隔（秒）：按钮每 ~12s 出现，避免刷屏
 EMPLOYED_MAX_WAIT_MINUTES = 45  # 被雇佣"等到25/75（小于45min）"：面板剩余时间超过该值立即召回
+YIELD_DEFER_MINUTES = 30  # "让利雇主（不召回）"模式下其它任务撞上被雇佣：延后多少分钟重试
 DEFER_DETECTION_ATTEMPTS = 3    # 延时收尾模式判定进行中/结束状态的检测次数
 DEFER_FALLBACK_SECONDS = 15     # OCR 识别不到剩余时间时的兜底重估间隔（秒）：
 # 原本 60s 会让一开始的收尾预估多等近 1 分钟（用户实测收尾偏晚），
@@ -425,13 +426,13 @@ class DeviceScenario:
 
     def employed_recall_ready(self, screen) -> bool:
         """单次判定被雇佣是否到召回时机（不等待）：
-        让利雇主（尽早召回）发现被雇佣立即召回——小号工具人模式，额外奖励大头留给
-        雇佣方（大号）；立刻召回 总是召回；等到25/75（小于45min）剩余时间 >45 分钟
-        直接召回；其余方式都在分成比例到"雇佣者<=25% 被雇佣者>=75%"终态时召回。"""
+        让利雇主（不召回）小号工具人模式——主动不召回，宠物留在雇主（大号）那儿
+        继续打工、收益归雇主方（召回早了反而掐断这轮打工时间），永远不判定召回；
+        立刻召回 总是召回；等到25/75（小于45min）剩余时间 >45 分钟直接召回；
+        其余方式都在分成比例到"雇佣者<=25% 被雇佣者>=75%"终态时召回。"""
         action = getattr(self.cfg.employed, 'action', '等到25/75')
-        if action == '让利雇主（尽早召回）':
-            log('按配置"让利雇主"立即召回（小号工具人：额外奖励大头留给雇佣方）')
-            return True
+        if action == '让利雇主（不召回）':
+            return False
         if action == '立刻召回':
             log('按配置"立刻召回"被雇佣宠物')
             return True
@@ -497,13 +498,20 @@ class DeviceScenario:
 
         等到25/75：分成比例到"雇佣者<=25% 被雇佣者>=75%"（宠物分成最高终态）
         才点 employed_come_back 提前召回；
-        让利雇主（尽早召回）：小号工具人模式，发现被雇佣立即召回（大头留给雇佣方）；
+        让利雇主（不召回）：小号工具人模式，不做任何召回（宠物继续打工、收益归雇主方），
+        撞上被雇佣的其它任务直接延后重试（raise TaskDeferred）；
         等到25/75（小于45min）：同左，但面板剩余时间 > EMPLOYED_MAX_WAIT_MINUTES
         分钟时不等比例直接召回（剩余 <=45 分钟才继续等到25/75）；
         立刻召回：进面板直接点"现在召回"。
         召回后点 employed_come_back_confirm 确认，等 employed_end 出现点 quit 退出并计数。
         check_interval=None 时用统一配置 schedule.check_interval。
         """
+        if getattr(self.cfg.employed, 'action', '') == '让利雇主（不召回）':
+            # 让利模式不召回：宠物要留在雇主（大号）那儿继续打工——其它任务撞上
+            # 被雇佣时不能阻塞等待（等召回 = 永不满足），直接延后重试
+            raise TaskDeferred(
+                datetime.now() + timedelta(minutes=YIELD_DEFER_MINUTES),
+                f'宠物被雇佣中（让利模式不召回），{YIELD_DEFER_MINUTES} 分钟后再试')
         if check_interval is None:
             check_interval = self.check_interval
         last_log_at = 0.0

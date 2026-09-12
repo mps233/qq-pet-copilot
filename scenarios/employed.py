@@ -38,6 +38,8 @@ class EmployedScenario(DeviceScenario):
             if self.see('employed_in', screen):
                 if self.employed_recall_ready(screen):
                     self._recall_employed()
+                elif getattr(self.cfg.employed, 'action', '') == '让利雇主（不召回）':
+                    log('被雇佣中（让利模式：不召回，宠物继续为雇主打工）')
                 else:
                     log('仍在被雇佣中，未到召回时机，回主页面（间隔后再检查）')
                 self.ensure_main_page()
