@@ -49,6 +49,9 @@ from scenarios.care import ONE_CLICK_PAY_RETRIES
 
 FRIEND_ITEM_XPATH = LOCATORS['visit_friend_item']['xpath'][0]
 STEP_RETRIES = 5  # 切换好友后踩踩按钮有几秒加载延迟，重试次数
+# 非好友标志文字区（右上角，1080×2412 基准）：好友页="点亮中1/3"，
+# 非好友/系统推荐="加好友"（与 gift_bag.FRIEND_MARK_REGION 同区同判据，实测稳定互斥）
+FRIEND_MARK_REGION = (700, 160, 980, 280)
 
 PROGRESS_FILE = VISIT_PROGRESS_FILE
 
@@ -136,6 +139,20 @@ class VisitScenario(DeviceScenario):
             + (f'（新增: {", ".join(new)}）' if new else ''))
         return visible
 
+    def is_non_friend_page(self, screen=None) -> bool:
+        """当前好友宠物页的主人不是好友（系统推荐）：右上角出现"加好友"。
+
+        好友页该位置显示"点亮中1/3"（实测稳定互斥，位置约 (800,210)，
+        与 gift_bag 的非好友判据同源）。只认读到"加好友"字样为准；
+        区域什么都没读到返回 False（页面未加载完不判，避免误停）。
+        """
+        img = screen if screen is not None else self.screen()
+        x1, y1, x2, y2 = FRIEND_MARK_REGION
+        h, w = img.shape[:2]
+        rx1, ry1 = int(x1 * w / 1080), int(y1 * h / 2412)
+        rx2, ry2 = int(x2 * w / 1080), int(y2 * h / 2412)
+        return any('加好友' in t for t, *_ in ocr_texts(img[ry1:ry2, rx1:rx2]))
+
     def next_friend(self) -> bool:
         """切换到下一个好友：按累积名单顺序点下一个。
 
@@ -154,6 +171,15 @@ class VisitScenario(DeviceScenario):
                 log(f'切换第 {self._friend_index + 1} 个好友: {target} ({x}, {y})')
                 self.click(x, y)
                 time.sleep(CLICK_INTERVAL)
+                # 进入新好友页后看右上角：出现"加好友"=非好友（系统推荐）——
+                # 好友都排在轮播前面，后面的都不是好友，立即停止切换
+                # （复读一次再确认，防页面半加载误判）
+                if self.is_non_friend_page():
+                    time.sleep(1.0)
+                    if self.is_non_friend_page():
+                        log(f'遇到非好友/系统推荐（右上角"加好友"）：{target}，'
+                            '后面的都不是好友，停止切换')
+                        return False
                 return True
         log(f'下一个好友 {target} 当前不可见，停止切换')
         return False
@@ -180,6 +206,11 @@ class VisitScenario(DeviceScenario):
         self._friend_index = 0    # 访问进入时默认第一个好友
         self._exp_handled = False  # 本轮是否处理过经验照顾（点击/判定完成）
         self.goto_first_friend()
+        if self.is_non_friend_page():
+            time.sleep(1.0)
+            if self.is_non_friend_page():
+                log('好友列表第一个就是非好友（系统推荐），没有可访问的好友')
+                return done
         exp_today, exp_done, exp_history = load_exp_daily(quiet=True)
         while True:
             if not max_times or done < max_times:

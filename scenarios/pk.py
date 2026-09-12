@@ -481,6 +481,11 @@ class PKScenario(VisitScenario):
         self._helper_checked = False  # 打手管理本轮只做一次
         self.goto_first_friend()
         self._accumulate_friends()  # 记录第一个好友（当前停在名单第 0 个）
+        if self.is_non_friend_page():
+            time.sleep(1.0)
+            if self.is_non_friend_page():
+                log('好友列表第一个就是非好友（系统推荐），没有可 PK 的好友')
+                return done
         while not max_times or done < max_times:
             desc = self._friends[self._friend_index] if self._friend_index < len(self._friends) else ''
             if self._friend_allowed(desc):
