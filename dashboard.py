@@ -930,6 +930,7 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
       <h2>任务队列</h2>
       <div class="qhead"><span id="qTop">--</span><span id="qUpd"></span></div>
       <div class="tasklist" id="taskList"></div>
+      <div id="qHidden" style="display:none;font-size:10.5px;color:var(--sub);margin-top:5px"></div>
       <div style="font-size:10.5px;color:var(--sub);margin-top:7px;line-height:1.5">每轮从上往下扫描、执行第一个到点的任务；学习 / 雇佣好友 / 冒险 / 打工 互斥，按「主任务优先级」取一个（执行时占各自位置）</div>
     </div>
   </section>
@@ -1046,41 +1047,48 @@ function renderData(d){
   const qOrder=(cfg.task_order||[]);
   const qRank=k=>{const i=qOrder.indexOf(k);return i<0?999:i;};
   let rows='';
+  let hiddenQ=[];
   if(qLive){
     $('#qTop').textContent='待执行 '+(q.ready??'--')+' · 等待中 '+(q.waiting??'--')+(q.next?(' · 下个定时：'+(TASKNAME[q.next]||q.next)+' '+(q.next_at||'')):'');
     $('#qUpd').textContent=q.updated?('更新 '+q.updated):'';
-    // 按执行顺序排：可执行在前（按任务执行顺序）、定时的居中（按时间升序）、已禁用/今日完成沉底
+    // 按执行顺序排：可执行在前、定时的居中（按时间）、今日完成沉底；未启用的不显示（列表下方灰字标注）
     const qStatRank=s=> s==='ready'?0 : s==='waiting'?1 : 2;
     const qItems=Object.entries(qt).map(([k,v])=>({k,v,st:v.state||'',sr:qStatRank(v.state||'')}));
     qItems.sort((a,b)=> (a.sr-b.sr)
         || (a.sr===1 ? String(a.v.next||'~').localeCompare(String(b.v.next||'~')) : (qRank(a.k)-qRank(b.k))));
+    hiddenQ=qItems.filter(o=>o.st==='disabled').map(o=>TASKNAME[o.k]||o.k);
     if(q.pending) rows+='<div class="row"><div class="t"><span>收尾队列</span><span class="chip ready">'+q.pending+' 待结算</span></div><div class="nx"></div></div>';
     for(const o of qItems){
+      if(o.st==='disabled') continue;
       const stt=o.st;
       const chip= stt==='ready'?'<span class="chip ready">可执行</span>'
                 : stt==='waiting'?'<span class="chip wait">等待</span>'
                 : stt==='done'?'<span class="chip done">✓ 今日完成</span>'
                 : stt==='dead'?'<span class="chip done">✓ 今日完成</span>'
-                : stt==='disabled'?'<span class="chip off">已禁用</span>'
                 : '<span class="chip">'+stt+'</span>';
       const nx=o.v.next?('→ '+(o.v.next.slice(0,10)===todayStr?'':'明 ')+o.v.next.slice(11,16)):'';
       rows+='<div class="row"><div class="t"><span>'+(TASKNAME[o.k]||o.k)+'</span>'+chip+'</div><div class="nx">'+nx+'</div></div>';
     }
   }else{
-    // 调度器未运行：不用旧快照（曾残留"学习 已禁用"误导），按当前配置逐任务算启用状态
+    // 调度器未运行：不用旧快照（曾残留"学习 已禁用"误导），按当前配置逐任务算启用状态；
+    // 未启用的任务不显示（列表下方灰字标注）
     const te=cfg.tasks_enabled||{};
     const keys=qOrder.length?qOrder:Object.keys(te);
     $('#qTop').textContent='调度器未运行 · 按当前配置显示';
     $('#qUpd').innerHTML='<span style="color:#d97706">启动后显示实时队列（可执行/等待/今日完成）</span>';
+    hiddenQ=keys.filter(k=>te[k]===false).map(k=>TASKNAME[k]||k);
     for(const k of keys){
-      const en=te[k];
-      const chip= en===false?'<span class="chip off">已禁用</span>'
-                : en===true?'<span class="chip ready">已启用</span>'
-                : '<span class="chip">—</span>';
+      if(te[k]===false) continue;
+      const chip= te[k]===true?'<span class="chip ready">已启用</span>' : '<span class="chip">—</span>';
       rows+='<div class="row"><div class="t"><span>'+(TASKNAME[k]||k)+'</span>'+chip+'</div><div class="nx"></div></div>';
     }
   }
   $('#taskList').innerHTML=rows||'<div class="row">无数据</div>';
+  const qh=document.getElementById('qHidden');
+  if(qh){
+    if(hiddenQ.length){ qh.style.display=''; qh.textContent='未启用：'+hiddenQ.join('、')+'（不参与调度）'; }
+    else { qh.style.display='none'; qh.textContent=''; }
+  }
   // 截图
   const shots=d.shots||[];
   if(shots.length){
