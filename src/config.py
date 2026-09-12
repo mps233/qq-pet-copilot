@@ -193,6 +193,9 @@ class PkConfig:
     max_level: int = 0
     # PK 打手（保镖）：只雇这些好友的宠物代打（宠物名/主人名，逗号分隔，按优先级）；空 = 不自动管理
     helper_names: str = ""
+    # PK 打手兜底：名单里的都不可雇（被雇佣中/不可雇佣/已达上限）时，
+    # 自动雇「宠友列表」里战力最高的可雇宠物
+    helper_fallback: bool = False
 
 
 @dataclass

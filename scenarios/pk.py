@@ -32,6 +32,7 @@
       python scenarios/pk.py --times 5 （覆盖配置的每天 PK 次数，0 为不限）
 """
 
+import json
 import os
 import re
 import sys
@@ -87,6 +88,8 @@ HELPER_CLOSE_POINT = (976, 736)
 # 注：自己主页的 ⭐ 等级徽章与好友页同区域（FRIEND_LEVEL_REGION），不单独定义
 
 PROGRESS_FILE = PK_PROGRESS_FILE
+# 打手雇佣状态（谁在任、是不是兜底雇的）——兜底雇的人靠它跨 run 保持，不被当"不在名单"解雇
+HELPER_STATE_FILE = PROGRESS_FILE.parent / 'pk_helper_state.json'
 
 
 def read_level_from_image(screen) -> int | None:
@@ -122,6 +125,30 @@ def read_level_from_image(screen) -> int | None:
     return None
 
 
+def pick_fallback_row(items, w: int = 1080) -> dict | None:
+    """从宠友列表 OCR 结果挑「战力最高的可雇行」（列表按战力降序 → 最靠上可雇行）。
+
+    items = [(文字, x, y, 置信度)]。可雇 = 行右侧有金币按钮（纯数字文本，x>0.8w）
+    且同行没有不可雇状态（不可雇佣/被雇佣中/已达上限）。
+    返回 {'name', 'label', 'x', 'y'}（x/y=按钮点击点）；没有可雇的返回 None。
+    """
+    btns = sorted((y, x) for t, x, y, _ in items
+                  if t.strip().isdigit() and x > int(w * 0.8) and 800 < y < 2080)
+    bad = ('不可雇佣', '被雇佣中', '已达上限')
+    skip = ('上次雇佣', '宠友列表', '被雇次数')
+    for by, bx in btns:
+        near = [(t2.strip(), ty) for t2, _, ty, _ in items if abs(ty - by) <= 120]
+        if any(any(k in t2 for k in bad) for t2, _ in near):
+            continue
+        names = sorted((ty, t2) for t2, ty in near
+                       if t2 and '主人' not in t2 and not t2.isdigit()
+                       and '型' not in t2 and not any(k in t2 for k in skip))
+        labels = [t2 for t2, ty in near if '型' in t2 and any(c.isdigit() for c in t2)]
+        return {'name': names[0][1] if names else '',
+                'label': labels[0] if labels else '', 'x': bx, 'y': by}
+    return None
+
+
 class PKDeferred(Exception):
     """PK 结果连续超时：临时推迟 PK 任务（调度器延后重试，不做重启恢复）。"""
 
@@ -135,7 +162,9 @@ class PKScenario(VisitScenario):
         self.skip_names = str(getattr(self.cfg.pk, 'skip_names', '') or '').strip()
         self.max_level = int(getattr(self.cfg.pk, 'max_level', 0) or 0)
         self.helper_names = str(getattr(self.cfg.pk, 'helper_names', '') or '').strip()
+        self.helper_fallback = bool(getattr(self.cfg.pk, 'helper_fallback', False))
         self._own_level = None        # 自己等级（max_level=-1 时从主页读取）
+        self._helper_read_name = None  # 上次 read_helper_level 用的打手名（日志用）
         self._helper_level = None     # 打手等级（max_level=-2 时从打手主页读取）
         self._level_any = False       # 兜底轮：没有"比我低"的可打时放宽为任意等级
         self._helper_checked = False  # 打手管理每次 run 只做一次
@@ -146,7 +175,9 @@ class PKScenario(VisitScenario):
             + (f'，只打等级≤{self.max_level}' if self.max_level > 0
                else ('，只打等级比打手低' if self.max_level == -2
                      else ('，只打等级比自己低' if self.max_level < 0 else '')))
-            + (f'，打手: {self.helper_names}' if self.helper_names else ''))
+            + (f'，打手: {self.helper_names}'
+               + ('（含兜底）' if self.helper_fallback else '')
+               if self.helper_names else ''))
 
     def sync_filters(self) -> None:
         """把只打/跳过名单字符串解析为列表（初始化与配置热加载共用）。
@@ -201,16 +232,21 @@ class PKScenario(VisitScenario):
         """
         return self.read_friend_level(attempts)
 
-    def read_helper_level(self) -> int | None:
-        """读打手（helper_names 第一个）的等级：进其主页读 ⭐ 徽章，失败返回 None。
+    def read_helper_level(self, name: str | None = None) -> int | None:
+        """读打手等级：默认取状态文件里记录的当前打手（可能是兜底雇的），
+        其次 helper_names 第一个。进其主页读 ⭐ 徽章，失败返回 None。
 
         用于 max_level=-2（只打比打手低的）。按名字在好友列表里找其主页
         （主人昵称 content-desc 或顶部宠物名匹配）；找不到/读不到按 fail-open
         处理（本轮不做等级过滤）。结束时收起好友页面（后续流程照常从主页面开始）。
         """
-        name = self._helper_list[0] if self._helper_list else ''
+        if not name:
+            name = str(self._load_helper_state().get('name') or '')
+        if not name:
+            name = self._helper_list[0] if self._helper_list else ''
         if not name:
             return None
+        self._helper_read_name = name
         try:
             self._friends = []
             self._friend_index = 0
@@ -301,8 +337,36 @@ class PKScenario(VisitScenario):
 
     # ---- 打手（保镖）管理 ----
 
+    def _load_helper_state(self) -> dict:
+        """读打手雇佣状态（runs/pk_helper_state.json）：{name, source, at}。"""
+        try:
+            with open(HELPER_STATE_FILE, encoding='utf-8') as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _save_helper_state(self, name: str, source: str) -> None:
+        """记住当前打手——兜底雇的人靠它跨 run 保持，不被当"不在名单"解雇。"""
+        try:
+            HELPER_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with open(HELPER_STATE_FILE, 'w', encoding='utf-8') as f:
+                json.dump({'name': name, 'source': source,
+                           'at': time.strftime('%Y-%m-%d %H:%M:%S')},
+                          f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            log(f'PK 打手: 状态写入失败（忽略）: {e}')
+
+    def _clear_helper_state(self) -> None:
+        """清掉打手状态（解雇后调用）。"""
+        try:
+            HELPER_STATE_FILE.unlink(missing_ok=True)
+        except Exception:
+            pass
+
     def _helper_ensure(self) -> None:
-        """在准备页管理打手（保镖）：不在名单里的解雇、空位雇名单里的宠物。
+        """在准备页管理打手（保镖）：名单内保持；名单外但为本工具兜底雇的保持；
+        其余解雇后重雇（名单优先；名单都不可雇且开启兜底时取战力最高的可雇宠物）。
 
         只在名单非空时执行；任何失败只记日志，不影响 PK 主流程。
         """
@@ -311,20 +375,33 @@ class PKScenario(VisitScenario):
         try:
             texts = [t for t, _, _, _ in ocr_fullscreen(self.screen())]
             joined = ' '.join(texts)
-            if any(any(s in t for s in self._helper_list) for t in texts):
-                log(f'PK 打手: 当前保镖已在名单（{self.helper_names}），保持')
+            for n in self._helper_list:
+                if any(n in t for t in texts):
+                    log(f'PK 打手: 当前保镖已在名单（{n}），保持')
+                    self._save_helper_state(n, 'configured')
+                    return
+            st = self._load_helper_state()
+            if st.get('name') and any(st['name'] in t for t in texts):
+                log(f'PK 打手: 当前保镖 {st["name"]} 是上次兜底雇佣的，保持')
+                self._save_helper_state(st['name'], str(st.get('source') or 'fallback'))
                 return
-            if '剩余保护时间' in joined or '代打' in joined:
+            # 只有「剩余保护时间」能证明有人被雇（空位占位文案本身就含"代打"三个字，
+            # 不能拿"代打"当判据——曾因此把空位误判成有保镖，跑去点解雇后中断，永远雇不上）
+            if '剩余保护时间' in joined:
                 log('PK 打手: 当前保镖不在名单，解雇')
                 if not self._helper_cancel():
                     return
+                self._clear_helper_state()
                 time.sleep(1.0)
                 texts = [t for t, _, _, _ in ocr_fullscreen(self.screen())]
                 joined = ' '.join(texts)
             if '雇佣保镖' not in joined and '保镖' not in joined:
                 log('PK 打手: 未识别到保镖行，跳过')
                 return
-            self._helper_hire()
+            hired = self._helper_hire()
+            if hired:
+                src = 'configured' if hired in self._helper_list else 'fallback'
+                self._save_helper_state(hired, src)
             self._ensure_prep_ready()
         except Exception as e:
             log(f'PK 打手: 管理异常（跳过）: {e}')
@@ -350,8 +427,12 @@ class PKScenario(VisitScenario):
         log('PK 打手: 已解雇旧保镖')
         return True
 
-    def _helper_hire(self) -> bool:
-        """点 ➕ 打开宠友列表，雇名单里第一个可雇的宠物；成功返回 True。"""
+    def _helper_hire(self) -> str | None:
+        """点 ➕ 打开宠友列表雇人：名单里第一个可雇的优先；都不可雇且开了兜底时，
+        雇列表里战力最高的可雇宠物（列表按战力降序 = 可雇行里最靠上的）。
+
+        返回雇到的人名；没雇到返回 None。
+        """
         screen = self.screen()
         h, w = screen.shape[:2]
         x, y = HELPER_ADD_POINT
@@ -360,7 +441,7 @@ class PKScenario(VisitScenario):
         res = ocr_fullscreen(self.screen())
         if '宠友列表' not in ' '.join(t for t, _, _, _ in res):
             log('PK 打手: 宠友列表未打开')
-            return False
+            return None
         for name in self._helper_list:
             item = None
             for t, ix, iy, _ in res:
@@ -371,9 +452,9 @@ class PKScenario(VisitScenario):
                 log(f'PK 打手: 列表里没有 {name}')
                 continue
             _, nx, ny = item
-            if any(('不可雇佣' in t or '被雇佣中' in t) and abs(iy2 - ny) <= 120
-                   for t, _, iy2, _ in res):
-                log(f'PK 打手: {name} 当前不可雇（不可雇佣/被雇佣中）')
+            if any(('不可雇佣' in t or '被雇佣中' in t or '已达上限' in t)
+                   and abs(iy2 - ny) <= 120 for t, _, iy2, _ in res):
+                log(f'PK 打手: {name} 当前不可雇（不可雇佣/被雇佣中/已达上限）')
                 continue
             btn = None
             for t, ix2, iy2, _ in res:
@@ -381,23 +462,40 @@ class PKScenario(VisitScenario):
                     btn = (ix2, iy2)
             if not btn:
                 btn = (int(920 * w / 1080), ny)
-            self.click(btn[0], btn[1])
-            time.sleep(1.5)
-            res2 = ocr_fullscreen(self.screen())
-            j2 = ' '.join(t for t, _, _, _ in res2)
-            if '宠友列表' in j2 and any(k in j2 for k in ('确认雇佣', '确认', '确定')):
-                c = find_text(res2, '确认雇佣') or find_text(res2, '确认') or find_text(res2, '确定')
-                if c:
-                    self.click(c[0], c[1])
-                    time.sleep(1.5)
-            j3 = ' '.join(t for t, _, _, _ in ocr_fullscreen(self.screen()))
-            if '剩余保护时间' in j3 or '代打' in j3:
-                log(f'PK 打手: 已雇佣 {name} ✅')
-                return True
-            log(f'PK 打手: 点雇 {name} 后未确认成功')
-            return False
+            return name if self._helper_click_hire(btn, name) else None
+        if self.helper_fallback:
+            pick = pick_fallback_row(res, w)
+            if pick:
+                who = pick['name'] or '列表最上可雇行'
+                tag = f'{who}（{pick["label"]}）' if pick['label'] else who
+                log(f'PK 打手: 名单里的都不可雇，兜底雇战力最高的可雇宠物: {tag}')
+                if self._helper_click_hire((pick['x'], pick['y']), who):
+                    return pick['name']
+                return None
         log('PK 打手: 名单里没有可雇的宠物')
         self._helper_close_picker()
+        return None
+
+    def _helper_click_hire(self, btn: tuple[int, int], name: str) -> bool:
+        """点雇佣按钮 → 确认弹框 → 验证生效；成功返回 True。"""
+        self.click(btn[0], btn[1])
+        time.sleep(1.5)
+        res2 = ocr_fullscreen(self.screen())
+        j2 = ' '.join(t for t, _, _, _ in res2)
+        if '宠友列表' in j2 and any(k in j2 for k in ('确认雇佣', '确认', '确定')):
+            c = find_text(res2, '确认雇佣') or find_text(res2, '确认') or find_text(res2, '确定')
+            if c:
+                self.click(c[0], c[1])
+                time.sleep(1.5)
+        j3 = ' '.join(t for t, _, _, _ in ocr_fullscreen(self.screen()))
+        if '剩余保护时间' in j3:
+            log(f'PK 打手: 已雇佣 {name} ✅')
+            return True
+        if '雇佣保镖代打' not in j3 and name and name in j3:
+            # 保镖已就位但佣金未付：真正扣费在首次点"支付350开始"（pk_start 已兼容该文案）
+            log(f'PK 打手: 已雇佣 {name} ✅（佣金 350 首次开打时支付）')
+            return True
+        log(f'PK 打手: 点雇 {name} 后未确认成功')
         return False
 
     def _helper_close_picker(self) -> None:
@@ -661,7 +759,7 @@ class PKScenario(VisitScenario):
             # 只打比打手低：先读打手等级（fail-open：读不到本轮不过滤）
             self._helper_level = self.read_helper_level()
             if self._helper_level is not None:
-                log(f'PK 打手等级: {self._helper_level}'
+                log(f'PK 打手: {self._helper_read_name} 等级 {self._helper_level}'
                     f'（只打等级低于 {self._helper_level} 的好友）')
             else:
                 log('PK 打手等级读取失败：本轮不做等级过滤')

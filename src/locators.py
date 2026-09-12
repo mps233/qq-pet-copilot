@@ -235,7 +235,9 @@ LOCATORS: dict[str, dict] = {
     # ---- PK（好友对战） ----
     'pk': {'xpath': ['//*[@content-desc="PK"]']},
     'pk_in': {'ocr': ['正在PK']},  # 进行中状态：全屏 OCR 关键词（PK 页 canvas 自绘）
-    'pk_start': {'xpath': ['//*[@content-desc="开始"]']},
+    # "开始"精确匹配；雇了保镖后按钮变"支付350开始"（首局支付佣金），contains 兜底
+    'pk_start': {'xpath': ['//*[@content-desc="开始"]',
+                           '//*[contains(@content-desc, "开始")]']},
     'pk_end': {'xpath': ['//*[@content-desc="分享"]']},
     'pk_again': {'xpath': ['//*[@content-desc="再来一局"]']},
 

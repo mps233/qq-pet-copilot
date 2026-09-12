@@ -52,6 +52,7 @@ DEFAULTS = {
     'pk.skip_names': '',
     'pk.max_level': 0,
     'pk.helper_names': '',
+    'pk.helper_fallback': False,
     'friend_care.enabled': False,
     'friend_care.time_range': '14:00-19:30',
     'friend_care.friend_name': '',
@@ -129,7 +130,8 @@ def validate_field(key: str, value):
             return (True, value) if int(value) >= -2 else (False, default)
         except (TypeError, ValueError):
             return False, default
-    if key in ('friend_care.enabled', 'hire_friend.enabled', 'employed.enabled'):
+    if key in ('friend_care.enabled', 'hire_friend.enabled', 'employed.enabled',
+               'pk.helper_fallback'):
         return (True, value) if isinstance(value, bool) else (False, default)
     if key == 'runner.engine':
         return (True, value) if value in ('task_queue', 'legacy') else (False, default)

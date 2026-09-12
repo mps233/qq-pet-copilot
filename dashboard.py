@@ -637,6 +637,7 @@ def editable_snapshot() -> dict:
         'pk_skip': str(pk.get('skip_names') or ''),
         'pk_max_level': pk.get('max_level', 0) or 0,
         'pk_helper': str(pk.get('helper_names') or ''),
+        'pk_helper_fallback': bool(pk.get('helper_fallback', False)),
         'adventure_times': adv.get('times_per_day', 1),
         'care_energy': care.get('energy_threshold', 60),
         'care_clean': care.get('clean_threshold', 60),
@@ -681,6 +682,7 @@ def apply_settings(updates: dict) -> dict:
         'pk_skip': ('pk.skip_names', None),
         'pk_max_level': ('pk.max_level', 'int'),
         'pk_helper': ('pk.helper_names', None),
+        'pk_helper_fallback': ('pk.helper_fallback', 'bool'),
         'adventure_times': ('adventure.times_per_day', 'int'),
         'care_energy': ('care.energy_threshold', 'int'),
         'care_clean': ('care.clean_threshold', 'int'),
@@ -1425,6 +1427,7 @@ function renderSettings(ed){
     '<div class="frow"><span class="k">PK 只打</span><input type="text" id="txtPkOnly" placeholder="昵称或宠物名，逗号分隔，空=不限" value="'+esc(ed.pk_only||'')+'"></div>',
     '<div class="frow"><span class="k">PK 跳过</span><input type="text" id="txtPkSkip" placeholder="昵称或宠物名，逗号分隔，空=不跳过" value="'+esc(ed.pk_skip||'')+'"></div>',
     '<div class="frow"><span class="k">PK 打手</span><input type="text" id="txtPkHelper" placeholder="只雇这些宠物代打（逗号分隔，按优先序）" value="'+esc(ed.pk_helper||'')+'"></div>',
+    '<div class="frow"><span class="k">打手兜底</span><button class="sw'+(ed.pk_helper_fallback?' on':'')+'" id="swPkHf" title="开=名单里的打手都不可雇（被雇佣中/不可雇佣/已达上限）时，自动雇战力最高的可雇宠物"></button></div>',
     '<div class="frow"><span class="k">PK 等级上限</span><input type="number" id="numPkLv" min="-2" step="1" title="-1=只打比我低；-2=只打比打手低" value="'+(ed.pk_max_level??0)+'"></div>',
     '<div class="frow"><span class="k">等级过滤说明</span><span style="color:var(--sub);font-size:12px">0=不限；-1=只打比我低的；-2=只打比打手低的</span></div>',
     ])+
@@ -1462,6 +1465,7 @@ function renderSettings(ed){
   $('#swGiftBag').onclick=()=>{ $('#swGiftBag').classList.toggle('on'); setDirty=true; };
   $('#swCareer').onclick=()=>{ $('#swCareer').classList.toggle('on'); setDirty=true; };
   $('#swCareerStop').onclick=()=>{ $('#swCareerStop').classList.toggle('on'); setDirty=true; };
+  $('#swPkHf').onclick=()=>{ $('#swPkHf').classList.toggle('on'); setDirty=true; };
 }
 
 async function saveSettings(){
@@ -1481,6 +1485,8 @@ async function saveSettings(){
   if(!!cwNew !== !!setInit.career_watch) updates.career_watch=cwNew;
   const csNew = $('#swCareerStop').classList.contains('on');
   if(!!csNew !== !!setInit.career_stop_study) updates.career_stop_study=csNew;
+  const hfNew = $('#swPkHf').classList.contains('on');
+  if(!!hfNew !== !!setInit.pk_helper_fallback) updates.pk_helper_fallback=hfNew;
   const getv=id=>($(id)?$(id).value.trim():'');
   const num=(id,key)=>{const v=getv(id); if(v==='')return; const n=parseInt(v,10); if(!isNaN(n)&&n!==setInit[key]) updates[key]=n;};
   const selc=(id,key)=>{const v=getv(id); if(v&&v!==setInit[key]) updates[key]=v;};
