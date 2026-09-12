@@ -963,7 +963,7 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 const $=s=>document.querySelector(s);
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 const TASKNAME={care:'护理',school:'学习',friend_care:'好友护理',gift_bag:'福袋',hire_friend:'雇佣好友',adventure:'冒险',visit:'踩踩',pk:'PK',work:'打工'};
-let etaRemain=null, etaClock='';
+let etaRemain=null, etaClock='', schedOn=false;
 let logAuto=true, logFilter='';
 try{ logAuto = localStorage.getItem('qpet_logAuto')!=='0'; }catch(e){}
 
@@ -995,15 +995,21 @@ function renderData(d){
   // 打工卡片
   etaRemain=(d.work_eta&&d.work_eta.remaining!=null)?d.work_eta.remaining:null;
   etaClock=d.work_eta?d.work_eta.eta_clock:'';
-  if(etaRemain!=null){
+  schedOn=(d.scheduler||{}).alive;
+  const wdHtml=d.today_duration?('今日：学习 '+d.today_duration.learn_min+' 分 · 打工 '+d.today_duration.work_min+' 分 · '+(((d.today_duration.eff_pct!=null)&&(d.today_duration.eff_pct<100))?('<span style="color:#d97706">效率 '+d.today_duration.eff_pct+'%</span>'):'效率 100%')):'';
+  if(!schedOn){
+    // 调度器未运行：不引用日志里的旧“预计结算”行（会残留“进行中 剩余00:00”误导）
+    $('#workBig').textContent='未托管';
+    $('#workHint').textContent='调度器未运行（启动后恢复实时状态）';
+    $('#workSub').innerHTML=wdHtml;
+  }else if(etaRemain!=null){
     $('#workBig').textContent='进行中';
     $('#workHint').textContent='预计 '+etaClock+' 结算';
-    $('#workSub').textContent='剩余 '+hms(etaRemain)+' · 结算后自动开启下一轮';
+    $('#workSub').textContent=(etaRemain>0?('剩余 '+hms(etaRemain)):'结算中…')+' · 结算后自动开启下一轮';
   }else{
-    const wd=d.today_duration;
     $('#workBig').textContent='等待中';
     $('#workHint').textContent=d.last_line?d.last_line.replace(/^\[[\d:]+\]\s*/,'').slice(0,60):'';
-    $('#workSub').innerHTML=wd?('今日：学习 '+wd.learn_min+' 分 · 打工 '+wd.work_min+' 分 · '+((wd.eff_pct!=null&&wd.eff_pct<100)?('<span style="color:#d97706">效率 '+wd.eff_pct+'%</span>'):'效率 100%')):'';
+    $('#workSub').innerHTML=wdHtml;
   }
   // 统计瓦片
   const pg=d.progress||{}, cfg=d.config||{};
@@ -1018,7 +1024,7 @@ function renderData(d){
   const av=pg.adventure&&pg.adventure.learned!=null?pg.adventure.learned:0;
   $('#advTxt').textContent=av+'/'+(cfg.adventure_times||1);
   const wk=pg.work&&pg.work.learned!=null?pg.work.learned:0;
-  $('#workCnt').textContent=etaRemain!=null?wk+'+1':wk;
+  $('#workCnt').textContent=(schedOn&&etaRemain!=null)?wk+'+1':wk;
   const ed=(pg.exp_daily&&pg.exp_daily.done)?'✓ 完成':'未完成';
   $('#expTxt').textContent=ed;
   // 队列：运行中=实时快照（按执行顺序排）；停止=按当前配置显示启用状态（旧快照会误导，不用）
@@ -1297,7 +1303,7 @@ async function refreshLogs(){
 setInterval(()=>{
   const n=new Date();
   $('#clock').textContent=pad(n.getHours())+':'+pad(n.getMinutes())+':'+pad(n.getSeconds());
-  if(etaRemain!=null){
+  if(etaRemain!=null && schedOn){
     etaRemain-=1;
     const sub= etaRemain>0? ('剩余 '+hms(etaRemain)+' · 结算后自动开启下一轮') : '结算中…';
     const el=$('#workSub'); if(el) el.textContent=sub;
