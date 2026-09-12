@@ -544,8 +544,9 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 .saveMsg{font-size:12px;text-align:center;margin-top:6px;min-height:16px;color:var(--ok)}
 .saveMsg.err{color:#b45309}
 .subh{font-size:11px;color:var(--sub);margin:14px 0 4px;letter-spacing:.03em}
-.advchart{width:100%;height:auto;display:block;margin:6px 0 0;border:1px solid var(--line);border-radius:8px;background:#fcfcfd}
+.advchart{width:100%;height:auto;display:block;margin:6px 0 0;border:1px solid var(--line);border-radius:8px;background:#fcfcfd;cursor:crosshair;touch-action:pan-y}
 .advcap{font-size:11px;color:var(--sub);margin:8px 0 0;letter-spacing:.03em}
+.advtip{font-size:12.5px;color:var(--text);background:#f8f9fb;border:1px solid var(--line);border-radius:8px;padding:7px 10px;margin-top:8px;font-variant-numeric:tabular-nums;min-height:18px}
 .advchips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .advlist{max-height:44vh;overflow:auto;margin-top:6px;border:1px solid var(--line);border-radius:8px;background:#fff;overscroll-behavior:contain}
 .advlist .arow{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:7px 10px;border-top:1px dashed var(--line);font-size:13px;font-variant-numeric:tabular-nums}
@@ -576,6 +577,7 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
     <div class="workline"><span class="big" id="advNet">--</span><span class="hint" id="advNetHint"></span></div>
     <div class="subline" id="advSub"></div>
     <div class="advchips" id="advChips"></div>
+    <div class="advtip" id="advTip">点 / 拖动图表上的点或线，查看当次数据</div>
     <div class="advcap">累计净收益曲线</div>
     <svg class="advchart" id="svgCum" viewBox="0 0 340 84"></svg>
     <div class="advcap">单次收益散点（橙虚线=平均）</div>
@@ -734,6 +736,7 @@ function drawAdv(){
     const lp=d.cum[d.cum.length-1];
     inner+='<circle cx="'+sx(lp[0]).toFixed(1)+'" cy="'+sy0(lp[1]).toFixed(1)+'" r="3" fill="#533afd"/>';
   }
+  if(window.__advSel&&window.__advSel.chart==='cum'){const cm={};(d.cum||[]).forEach(p=>cm[p[0]]=p[1]);const k=window.__advSel.k;if(k in cm){const xx=sx(k).toFixed(1);inner+='<line x1="'+xx+'" y1="4" x2="'+xx+'" y2="80" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3 3"/><circle cx="'+xx+'" cy="'+sy0(cm[k]).toFixed(1)+'" r="4" fill="#533afd" stroke="#fff" stroke-width="1.5"/>';}}
   svgSet('svgCum',inner);
   let inner2='<line x1="0" y1="42" x2="'+W+'" y2="42" stroke="#e2e5ec" stroke-width="1" stroke-dasharray="4 4"/>';
   const ys1=(d.pts||[]).map(p=>p[1]);
@@ -741,6 +744,7 @@ function drawAdv(){
   const sy1=v=>42-v/mx1*34;
   if(d.avg!=null){const y=sy1(d.avg);inner2+='<line x1="0" y1="'+y.toFixed(1)+'" x2="'+W+'" y2="'+y.toFixed(1)+'" stroke="#f59e0b" stroke-width="1" stroke-dasharray="5 4"/>';}
   for(const p of (d.pts||[])){inner2+='<circle cx="'+sx(p[0]).toFixed(1)+'" cy="'+sy1(p[1]).toFixed(1)+'" r="2.2" fill="#0ea5e9" opacity=".85"/>';}
+  if(window.__advSel&&window.__advSel.chart==='pts'){const dm={};(d.pts||[]).forEach(p=>dm[p[0]]=p[1]);const k=window.__advSel.k;if(k in dm){const xx=sx(k).toFixed(1);inner2+='<line x1="'+xx+'" y1="4" x2="'+xx+'" y2="80" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3 3"/><circle cx="'+xx+'" cy="'+sy1(dm[k]).toFixed(1)+'" r="4" fill="#0ea5e9" stroke="#fff" stroke-width="1.5"/>';}}
   svgSet('svgPts',inner2);
   const st=d.stats||[];
   const sy2=v=>H-pad-(Math.max(0,Math.min(100,v))/100)*(H-2*pad);
@@ -754,6 +758,7 @@ function drawAdv(){
     inner3+='<circle cx="'+sx(lp[0]).toFixed(1)+'" cy="'+sy2(lp[df[1]]).toFixed(1)+'" r="2.6" fill="'+df[2]+'"/>';
   }
   for(const r of st){if(r[4]===1){inner3+='<line x1="'+sx(r[0]).toFixed(1)+'" y1="'+pad+'" x2="'+sx(r[0]).toFixed(1)+'" y2="'+(H-pad)+'" stroke="#ef4444" stroke-width="1" stroke-dasharray="2 3" opacity=".6"/>';}}
+  if(window.__advSel&&window.__advSel.chart==='stats'){const k=window.__advSel.k;const rw=st.filter(r=>r[0]===k);if(rw.length){const xx=sx(k).toFixed(1);inner3+='<line x1="'+xx+'" y1="4" x2="'+xx+'" y2="80" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3 3"/>';for(const rr of rw){if(rr[1]!=null)inner3+='<circle cx="'+xx+'" cy="'+sy2(rr[1]).toFixed(1)+'" r="3" fill="#16a34a" stroke="#fff"/>';if(rr[2]!=null)inner3+='<circle cx="'+xx+'" cy="'+sy2(rr[2]).toFixed(1)+'" r="3" fill="#0891b2" stroke="#fff"/>';if(rr[3]!=null)inner3+='<circle cx="'+xx+'" cy="'+sy2(rr[3]).toFixed(1)+'" r="3" fill="#d97706" stroke="#fff"/>';}}}
   svgSet('svgStats',inner3);
 }
 function renderAdventure(d){
@@ -789,6 +794,50 @@ function renderAdvList(d){
 }
 const _advBtn=document.getElementById('btnAdvAll');
 if(_advBtn) _advBtn.onclick=()=>{advShowAll=!advShowAll; if(window.__adv)renderAdvList(window.__adv);};
+window.__advSel=null;
+function advMaps(d){
+  const m={cum:{},dl:{},gn:{},tm:{},st:{}};
+  for(const p of (d.cum||[]))m.cum[p[0]]=p[1];
+  for(const p of (d.pts||[]))m.dl[p[0]]=p[1];
+  for(const r of (d.recent||[])){m.gn[r[0]]=r[3]||'';m.tm[r[0]]=r[1]||'';}
+  for(const r of (d.stats||[])){const k=r[0];if(!(k in m.st)||r[4]===1)m.st[k]=r;}
+  return m;
+}
+function advSelect(chart,k){
+  if(!window.__adv)return;
+  window.__advSel={chart:chart,k:k};
+  drawAdv();
+  const m=advMaps(window.__adv);
+  const tip=$('#advTip');if(!tip)return;
+  if(chart==='stats'){
+    const r=m.st[k];
+    if(r)tip.innerHTML='#'+k+(m.tm[k]?(' '+m.tm[k].slice(0,5)):'')+' · 体力 <b>'+(r[1]==null?'-':r[1])+'</b> · 清洁 <b>'+(r[2]==null?'-':r[2])+'</b> · 心情 <b>'+(r[3]==null?'-':r[3])+'</b>'+(r[4]===1?'（护理后）':'');
+  }else{
+    const v=m.dl[k];
+    let s='#'+k+(m.tm[k]?(' '+m.tm[k].slice(0,5)):'')+' · 累计 '+((m.cum[k]||0)>0?'+':'')+(m.cum[k]||0)+' · 本趟 '+((v>0?'+':'')+(v==null?'?':v));
+    if(m.gn[k])s+=' · '+esc(m.gn[k]);
+    tip.innerHTML=s;
+  }
+}
+function advNearest(chart,x){
+  const d=window.__adv;if(!d)return;
+  const pad=8,tx=d.target||100,W=340;
+  const sx0=i=>pad+(Math.max(1,i)-1)/Math.max(1,(tx-1))*(W-2*pad);
+  const arr=chart==='stats'?(d.stats||[]).map(r=>r[0]):(d.pts||[]).map(p=>p[0]);
+  let best=null,bd=1e9;
+  for(const i of arr){const dd=Math.abs(sx0(i)-x);if(dd<bd){bd=dd;best=i;}}
+  if(best!=null)advSelect(chart,best);
+}
+function bindAdvChart(id,chart){
+  const el=document.getElementById(id);if(!el||el.__b)return;el.__b=true;
+  let down=false;
+  const pos=e=>{const rect=el.getBoundingClientRect();return (e.clientX-rect.left)*(340/Math.max(1,rect.width));};
+  el.addEventListener('pointerdown',e=>{down=true;advNearest(chart,pos(e));});
+  el.addEventListener('pointermove',e=>{if(down)advNearest(chart,pos(e));});
+  const up=()=>{down=false;};
+  el.addEventListener('pointerup',up);el.addEventListener('pointercancel',up);el.addEventListener('pointerleave',up);
+}
+bindAdvChart('svgCum','cum');bindAdvChart('svgPts','pts');bindAdvChart('svgStats','stats');
 async function refreshAdventure(){
   try{ renderAdventure(await j('/api/adventure')); }catch(e){}
 }
