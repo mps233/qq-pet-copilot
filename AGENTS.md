@@ -231,7 +231,16 @@ $PY build.py --emulator          # 模拟器版（内置 frida 客户端；frida
   好友的体力/库存不写自己的状态缓存；好友家有概率卡顿（喂食/洗澡面板打不开、
   页面卡死），场景内失败后回主页面重新进指定好友家再试（`FRIEND_CARE_RETRIES` 次），
   仍失败才抛给调度器走恢复链路。
-- **好友雇佣调度**：`hire_friend.enabled` 开启且配置了 `friend_name` 时，主循环在
+- **福袋调度**：`gift_bag.enabled` 开启时按 `gift_bag.time_range` + `gift_bag.interval_seconds`
+  调度（`gift_bag_due()`，距上次扫描完成起算）：遍历好友轮播，只领好友的系绳福袋——
+  好友都排在轮播前几位，**遇到非好友（右上角"加好友"文字区 OCR，好友页同位置=点亮中1/3）
+  即刻结束本轮**；袋子=宠物左侧槽位但位置随房间浮动（**按模板命中位置点击**，别用固定
+  坐标），系绳/敞口用两个颈口模板多尺度匹配区分（阈值 0.62，模板图
+  `scenarios/assets/gift_bag_{tied,open}_neck.png`）；领取公告弹窗**只点小号关闭按钮**——
+  全屏遮罩节点重心落在公告列表好友行上，点它会误触跳转；非好友不点不领。单轮上限
+  `MAX_SWEEP`=45 家防死循环；仅接入 task_queue 引擎（legacy 未接）；袋口是 canvas
+  自绘（无控件 desc），检测只能走截图模板匹配。
+- **好友雇佣调度**：`hire_friend.enabled` 开启且配置了好友名称时，在
   `hire_friend.time_range`（HH:MM-HH:MM，支持跨零点）时间段内按
   `hire_friend.interval_seconds`（默认 5 秒，距上次执行起算，`last_hire_at` 在执行处记录，
   `hire_friend_due()` 保持纯查询无副作用——`_main_choice` 每轮被主任务组内多个任务的
