@@ -27,6 +27,7 @@ DEFAULTS = {
     'emulator.path': '',
     'emulator.device_spoof': False,
     'school.attribute': '力量',
+    'school.duration': '10分钟',
     'school.times_per_day': 0,
     'work.location': '风铃旅社',
     'work.times_per_day': 0,
@@ -95,6 +96,8 @@ def validate_field(key: str, value):
         return (True, value) if value in WORK_LOCATIONS else (False, default)
     if key == 'school.attribute':
         return (True, value) if value in ('力量', '智力', '魅力') else (False, default)
+    if key == 'school.duration':
+        return (True, value) if value in ('10分钟', '30分钟') else (False, default)
     if key == 'work.duration':
         return (True, value) if value in ('10分钟', '45分钟', '2小时') else (False, default)
     if key == 'care.method' or key == 'friend_care.method':

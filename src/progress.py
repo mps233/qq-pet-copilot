@@ -142,8 +142,14 @@ def count_cross(finished: str) -> None:
         record_work_finish()
 
 
-# ---- 学习/工作时长累计（替代旧"每日点数"规则，按学园/打工时长结算） ----
-# 各学园一节课对应的学习时长（秒）
+# ---- 学习/工作时长累计（替代旧"每日点数"规则，按课时/打工时长结算） ----
+# 课时时长（school.duration：10分钟课 / 30分钟课）对应的学习时长（秒）
+SCHOOL_COURSE_SECONDS = {
+    '10分钟': 10 * 60,
+    '30分钟': 30 * 60,
+}
+# 旧会话兼容：没有"课时时长"记录时，回退按学园阶段估算（新版学园每阶段都有
+# 10/30 分钟两类课，此表仅用于升级前开始、还未收尾的旧会话）
 SCHOOL_DURATION_SECONDS = {
     '初级学园': 10 * 60,
     '中级学园': 20 * 60,
@@ -168,6 +174,16 @@ def set_current_school(school: str) -> None:
     progress_store.set_daily_field(SCHOOL_PROGRESS_FILE, 'school', school)
 
 
+def get_current_school_duration() -> str | None:
+    """school_progress.json 里持久化的本次课时时长（school.duration：10分钟/30分钟）。"""
+    return progress_store.get_daily_field(SCHOOL_PROGRESS_FILE, 'duration')
+
+
+def set_current_school_duration(duration: str) -> None:
+    """学习开始时记录本次课时时长（school.duration）：跨天时总是落盘，否则值变化才写。"""
+    progress_store.set_daily_field(SCHOOL_PROGRESS_FILE, 'duration', duration)
+
+
 def get_current_work_duration() -> str | None:
     """work_progress.json 里持久化的本次打工时长（work.duration）。"""
     return progress_store.get_daily_field(WORK_PROGRESS_FILE, 'duration')
@@ -187,13 +203,17 @@ def _add_seconds(progress_file: Path, key: str, seconds: int) -> int:
 
 
 def record_study_finish() -> int | None:
-    """一节课结算：按持久化的学园累计学习时长（秒），返回当天累计或 None（学园未知）。"""
-    school = get_current_school()
-    secs = SCHOOL_DURATION_SECONDS.get(school or '')
+    """一节课结算：优先按本次课时时长（school.duration）累计学习时长（秒）；
+    没有时长记录（旧会话）时回退按学园阶段估算。返回当天累计或 None（未知）。"""
+    desc = get_current_school_duration()
+    secs = SCHOOL_COURSE_SECONDS.get(desc or '')
+    if not secs:
+        desc = get_current_school()
+        secs = SCHOOL_DURATION_SECONDS.get(desc or '')
     if not secs:
         return None
     total = _add_seconds(SCHOOL_PROGRESS_FILE, 'study_secs', secs)
-    log(f'学习结算: {school} +{secs // 60} 分钟，今日已学习 {total // 60} 分钟')
+    log(f'学习结算: {desc} +{secs // 60} 分钟，今日已学习 {total // 60} 分钟')
     return total
 
 

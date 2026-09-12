@@ -94,6 +94,8 @@ class ControlConfig:
 class SchoolConfig:
     # 属性点课程：力量 / 智力 / 魅力
     attribute: str = "力量"
+    # 课时时长：10分钟 / 30分钟（学园每阶段两类课都有；10分钟课单位消耗收益更高）
+    duration: str = "10分钟"
     # 每天学习次数上限，0 为不限
     times_per_day: int = 0
 

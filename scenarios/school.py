@@ -9,8 +9,10 @@
    若出现毕业标志（"去找同学玩"——毕业时学校面板没有"去上课"），
    点"关闭"再点两次 back 回主页面，重新进学校选择下一阶段课程
 4. 选课：先 OCR 上半屏识别学园阶段（初级/中级学园课程顺序固定为
-   力量/智力/魅力；高级学园/进修学院固定为 魅力/力量/智力，
-   每次上课前重新判断），再把第一框拖到第三框归位（两次），点击对应选择框
+   力量/智力/魅力；高级学园/进修学院固定为 魅力/力量/智力，每次上课前重新判断），
+   再把轮播归位到第一页，按 school.duration 选课：10分钟课直接点对应框；
+   30分钟课小步扫描卡名（COURSE30_NAMES）点击，点后按详情面板"奖励<属性>+N"
+   核对（10分+2 / 30分+5），不通过归位重试一次
 5. 点击 school_start，直到页面出现 school_in 标志（进入上课）
 6. 上课中：按配置的检查间隔（schedule.check_interval）检查，直到出现 school_end 标志
 7. 点击 quit 结束，当天已学次数 +1 并持久化到 runs/school_progress.json
@@ -38,6 +40,7 @@ from src.progress import (
     record_study_finish,
     save_progress,
     set_current_school,
+    set_current_school_duration,
 )
 from src.scenario import CLICK_INTERVAL, DeviceScenario, NAV_TIMEOUT
 
@@ -62,6 +65,15 @@ INSTITUTE_ATTRIBUTE_COURSES = {
     '智力': 'select_box_3',
 }
 ADVANCED_STAGES = ('高级学园', '进修学院')
+
+# 课时时长（school.duration）：学园课程轮播 = 3 张 10 分钟课 + 3 张 30 分钟课
+# （个别阶段另有第 7 张），卡序：初级学园 = [10分:力量/智力/魅力] + [30分:力量/智力/魅力]
+DURATION_CHOICES = ('10分钟', '30分钟')
+# 30 分钟课卡名表（2026-09 初级学园实测，用于翻页后按卡名点击；未知阶段按
+# "用时:30分钟"标签位置兜底）。中级/高级/进修学院的名字待毕业后实测补充。
+COURSE30_NAMES = {
+    '初级学园': {'力量': '田径运动课', '智力': '世界地理课', '魅力': '演说表达课'},
+}
 # 面板标题识别规则（在选课页检测，页面只有一个学园标题，不需要靠编号/后缀防误判）：
 # - 初级/中级/高级学园：形如"初级学园 5年级"（年级可省略）
 # - 进修学院：形如"进修学院 研修生12" / "进修学院 研修生Ⅰ"，真实 OCR 常把编号
@@ -83,11 +95,20 @@ class SchoolScenario(DeviceScenario):
                 f'config.yaml 中 school.attribute 配置无效: {self.attribute!r}，'
                 f'可选: {"/".join(ATTRIBUTE_COURSES)}'
             )
+        self.duration = self.cfg.school.duration
+        if self.duration not in DURATION_CHOICES:
+            raise ValueError(
+                f'config.yaml 中 school.duration 配置无效: {self.duration!r}，'
+                f'可选: {"/".join(DURATION_CHOICES)}'
+            )
+        # 最近一次选课前识别到的学园阶段（resolve_course_box 里更新，供 30 分钟
+        # 课按阶段名字表找卡）
+        self._stage: str | None = None
         self.times_per_day = self.cfg.school.times_per_day
         # 毕业处理防循环标志：关闭毕业面板后重新进学校仍出现毕业标志时抛异常，
         # 走重试链而不是无限"毕业->回主页面->再进"空转；成功看到 school_start 时重置
         self._graduated_once = False
-        log(f'属性点: {self.attribute}，每天学习次数: '
+        log(f'属性点: {self.attribute}，课时时长: {self.duration}，每天学习次数: '
             f'{self.times_per_day if self.times_per_day else "不限"}')
 
     # ---- 各阶段 ----
@@ -157,16 +178,129 @@ class SchoolScenario(DeviceScenario):
             time.sleep(CLICK_INTERVAL)
 
     def select_course(self) -> None:
-        """选课：先 OCR 上半屏识别学园阶段决定点哪个框，
-        再把第一框拖到第三框归位（两次）后点选。"""
+        """选课：先 OCR 上半屏识别学园阶段（决定属性对应第几张卡），把轮播归位到
+        第一页；10 分钟课直接点框，30 分钟课前拖翻页后按卡名点选。
+
+        选完把课时时长写入 school_progress.json 的 duration 字段：一节课结算时
+        按它累计学习时长（10分钟=600s / 30分钟=1800s，见 record_study_finish）。
+        """
         box = self.resolve_course_box()
         self.reset_select_boxes(drags=3)
+        if self.duration == '30分钟':
+            name = COURSE30_NAMES.get(self._stage or '', {}).get(self.attribute, '')
+            for attempt in (1, 2):
+                clicked = bool(name) and self._click_card_by_name(name)
+                if not clicked:
+                    clicked = self._click_nth_30min(box)
+                if clicked and self.verify_course_selected():
+                    set_current_school_duration(self.duration)
+                    return
+                log('点选未通过核对，归位重试' if attempt == 1 else '点选仍未通过核对')
+                self.reset_select_boxes(drags=3)
+            raise RuntimeError(
+                f'30分钟课未定位或未选中（阶段 {self._stage!r}，{self.attribute}），本轮放弃')
         log(f'选择课程: {self.attribute} ({box})')
         hit = self.see(box)
         if not hit:
             raise RuntimeError(f'未定位到课程选择框: {box}')
         time.sleep(CLICK_INTERVAL)
         self.click(hit[0], hit[1])
+        if not self.verify_course_selected():
+            log('选课核对未通过，重试一次')
+            time.sleep(0.5)
+            hit = self.see(box)
+            if hit:
+                self.click(hit[0], hit[1])
+            if not self.verify_course_selected():
+                raise RuntimeError(
+                    f'选课核对未通过（{self.duration} {self.attribute}），本轮放弃')
+        set_current_school_duration(self.duration)
+
+    def _drag_card_step(self) -> None:
+        """慢速小步前滑约 1 张卡（332px；慢拖惯性小、步进稳定，实测 1 步 1 张）。"""
+        self.dev.drag(920, 1336, 588, 1336, 0.8)
+
+    def _card_row_results(self) -> list[tuple[str, int, int, float]]:
+        """卡片行区域 OCR：等待惯性滑动结束（连续两帧一致）再返回，避免点空。"""
+        prev = None
+        results = []
+        for _ in range(5):
+            results = ocr_texts(self.screen())
+            row = tuple(sorted((t, x, y) for t, x, y, _ in results
+                               if 1300 < y < 1570))
+            if row == prev:
+                return results
+            prev = row
+            time.sleep(0.35)
+        return results
+
+    def _click_card_by_name(self, name: str, max_steps: int = 6) -> bool:
+        """在课程轮播里小步前滑扫描，找到卡名含 name 的卡就点击。
+
+        每步只滑约 1 张卡（慢拖，惯性小、步进稳定）；两次检测画面不变说明
+        已到轮播尽头，放弃返回 False（说明卡名表与游戏不一致，需更新）。
+        """
+        prev = None
+        for i in range(max_steps + 1):
+            results = self._card_row_results()
+            hits = [(x, y) for t, x, y, _ in results
+                    if name in t and 1300 < y < 1570]
+            if hits:
+                x, y = hits[0]
+                log(f'点击课程卡「{name}」({x}, {y + 30})')
+                self.click(x, y + 30)
+                return True
+            sig = tuple(sorted((t, x) for t, x, y, _ in results if 1300 < y < 1570))
+            if sig == prev:
+                log(f'已滑到轮播尽头仍未见到「{name}」')
+                return False
+            prev = sig
+            log(f'当前页未见「{name}」，小步前滑继续找 ({i + 1})')
+            self._drag_card_step()
+        return False
+
+    def verify_course_selected(self) -> bool:
+        """核对详情面板：奖励<属性>+N 与配置一致（10分钟课+2 / 30分钟课+5）。
+
+        详情面板点选后即时刷新；OCR 会把末尾"+5点"读成"+50/③"等，
+        所以只取奖励后的第一位数字比对；偶尔拆行，按相邻行合并后再匹配。
+        """
+        want = {'10分钟': '2', '30分钟': '5'}[self.duration]
+        time.sleep(0.5)
+        results = ocr_texts(self.screen())
+        for t, x, y, _ in results:
+            if '奖励' not in t or not (1400 < y < 2200):
+                continue
+            band = ''.join(tt.replace(' ', '') for tt, xx, yy, _ in results
+                           if abs(yy - y) <= 70)
+            m = re.search(r'奖励(力量|智力|魅力)[+＋]?(\d)', band)
+            if m and m.group(1) == self.attribute and m.group(2) == want:
+                return True
+            log(f'选课核对: 详情显示 {band[:60]!r}，与 {self.attribute}+{want} 不符')
+            return False
+        log('选课核对: 详情面板未找到"奖励"行')
+        return False
+
+    def _click_nth_30min(self, box: str) -> bool:
+        """未知学园兜底：小步滑到轮播尽头，按"用时:30分钟"标签位置点第 N 张。"""
+        n = int(box.rsplit('_', 1)[-1])  # select_box_2 -> 2
+        prev = None
+        for _ in range(8):
+            row = self._card_row_results()
+            sig = tuple(sorted((t, x) for t, x, y, _ in row if 1300 < y < 1570))
+            if sig == prev:
+                break
+            prev = sig
+            self._drag_card_step()
+        results = self._card_row_results()
+        labels = sorted((x, y) for t, x, y, _ in results
+                        if '30分钟' in t and 1300 < y < 1570)
+        if len(labels) >= n:
+            x, y = labels[n - 1]
+            log(f'按 30 分钟标签点第 {n} 张 ({x}, {y - 40})')
+            self.click(x, y - 40)
+            return True
+        return False
 
 
     def resolve_course_box(self) -> str:
@@ -179,9 +313,10 @@ class SchoolScenario(DeviceScenario):
         screen = self.screen()
         results = ocr_texts(screen[: screen.shape[0] // 2])
         stage = self._detect_stage(results)
+        self._stage = stage
         if stage:
-            # 学习开始时把当前学园持久化到 school_progress.json（不一致才更新，
-            # 结算时按它累计学习时长：初级10/中级20/高级30/进修45 分钟）
+            # 学习开始时把当前学园持久化到 school_progress.json（不一致才更新；
+            # 结算时长以"课时时长"（duration 字段）为准，学园仅作旧会话兜底）
             set_current_school(stage)
         if stage == '进修学院':
             box = INSTITUTE_ATTRIBUTE_COURSES[self.attribute]
