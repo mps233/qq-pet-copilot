@@ -5,6 +5,7 @@
 
     GET /             手机页面（自动刷新）
     GET /api/data     汇总数据 JSON
+    GET /api/adventure 冒险实验数据 JSON（实时曲线）
     GET /api/logs     实时日志尾部 JSON（?tail=250）
     GET /files/<png>  异常截图
 
@@ -26,6 +27,7 @@ from urllib.parse import parse_qs, urlparse
 BASE = Path(__file__).resolve().parent
 RUNS = BASE / 'runs'
 LOGS = RUNS / 'logs'
+ADV_DIR = Path('/tmp/adventure_experiment')   # 冒险实验数据目录
 DEFAULT_PORT = 8787
 
 
@@ -175,6 +177,104 @@ def load_progress() -> dict:
         'work': read_json('work_progress.json'),
         'adventure': read_json('adventure_progress.json'),
         'exp_daily': read_json('exp_daily_progress.json'),
+    }
+
+
+def _adv_load(name: str) -> list[dict]:
+    out = []
+    try:
+        for line in (ADV_DIR / name).open(encoding='utf-8'):
+            line = line.strip()
+            if line:
+                try:
+                    out.append(json.loads(line))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return out
+
+
+_ADV_GAIN_RE = re.compile(r'(金币|点券|钻石|心情值?|体力值?|清洁值?)\s*[+＋]\s*(\d+)')
+
+
+def _adv_care_pairs(row: dict) -> list:
+    items = row.get('ledger_lines') or []
+    pairs = []
+    for t, y in items:
+        if '护理道具' in t:
+            for t2, y2 in items:
+                s2 = t2.strip()
+                if abs(y2 - y) <= 8 and s2.startswith('-') and s2[1:].isdigit():
+                    pairs.append((int(s2), y))
+    return pairs
+
+
+def adventure_data() -> dict:
+    """冒险实验实时数据（读 /tmp/adventure_experiment 的 results/stats）。"""
+    rows = _adv_load('results.jsonl')
+    stats = _adv_load('stats.jsonl')
+    if not rows and not stats:
+        return {'ok': False}
+    target = 100
+    golds = [(r['i'], r['delta']) for r in rows if r.get('delta') is not None]
+    net = sum(d for _, d in golds)
+    cum, s = [], 0
+    for i, d in golds:
+        s += d
+        cum.append([i, s])
+    pts = [[i, d] for i, d in golds]
+    win = sum(1 for _, d in golds if d > 0)
+    zero = sum(1 for _, d in golds if d == 0)
+    loss = sum(1 for _, d in golds if d < 0)
+    dist = {}
+    for _, d in golds:
+        dist[str(d)] = dist.get(str(d), 0) + 1
+    gains = {}
+    for r in rows:
+        for t in (r.get('settle') or []):
+            for m in _ADV_GAIN_RE.finditer(t):
+                kw = m.group(1).strip()
+                for k in ('心情', '体力', '清洁'):
+                    if kw.startswith(k):
+                        kw = k + '值'
+                if kw == '金币':
+                    continue
+                g = gains.setdefault(kw, [0, 0])
+                g[0] += 1
+                g[1] += int(m.group(2))
+    # 护理事件与逐笔扣费
+    care_rows = [x for x in stats if (x.get('note') or '') == 'post_care']
+    rs = sorted(rows, key=lambda r: r.get('i') or 0)
+    care_costs = []
+    for ct in [x['i'] for x in care_rows]:
+        after = [r for r in rs if (r.get('i') or 0) > ct][:4]
+        before = [r for r in rs if (r.get('i') or 0) <= ct]
+        pre = _adv_care_pairs(before[-1]) if before else []
+        got = None
+        for r in after:
+            new = [amt for amt, y in _adv_care_pairs(r)
+                   if not any(amt == a2 and abs(y - y2) <= 260 for a2, y2 in pre)]
+            if new:
+                got = sorted(set(new))[0]
+                break
+        care_costs.append(got)
+    st_series = [[x.get('i'), x.get('体力'), x.get('清洁'), x.get('心情'),
+                  1 if (x.get('note') or '') == 'post_care' else 0] for x in stats]
+    latest = stats[-1] if stats else None
+    updated = (rows[-1].get('time') if rows else '') or (latest.get('t') if latest else '')
+    return {
+        'ok': True, 'n': len(rows), 'target': target,
+        'net': net, 'avg': round(net / len(golds), 2) if golds else 0,
+        'dist': dist, 'win': win, 'zero': zero, 'loss': loss,
+        'gains': [[k, v[0], v[1]] for k, v in sorted(gains.items())],
+        'care_n': len(care_rows),
+        'care_costs': [c for c in care_costs if c is not None],
+        'cum': cum, 'pts': pts, 'stats': st_series,
+        'latest': ({'i': latest.get('i'), 't': latest.get('t'),
+                    'e': latest.get('体力'), 'c': latest.get('清洁'),
+                    'm': latest.get('心情')} if latest else None),
+        'updated': updated,
     }
 
 
@@ -419,6 +519,9 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 .saveMsg{font-size:12px;text-align:center;margin-top:6px;min-height:16px;color:var(--ok)}
 .saveMsg.err{color:#b45309}
 .subh{font-size:11px;color:var(--sub);margin:14px 0 4px;letter-spacing:.03em}
+.advchart{width:100%;height:auto;display:block;margin:6px 0 0;border:1px solid var(--line);border-radius:8px;background:#fcfcfd}
+.advcap{font-size:11px;color:var(--sub);margin:8px 0 0;letter-spacing:.03em}
+.advchips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .hide{display:none!important}
 </style>
 </head>
@@ -432,6 +535,19 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
     <h2>打工循环</h2>
     <div class="workline"><span class="big" id="workBig">--</span><span class="hint" id="workHint"></span></div>
     <div class="subline" id="workSub"></div>
+  </section>
+
+  <section class="card" id="advCard">
+    <h2>冒险实验 <span id="advMeta" style="font-weight:400;font-size:10.5px"></span></h2>
+    <div class="workline"><span class="big" id="advNet">--</span><span class="hint" id="advNetHint"></span></div>
+    <div class="subline" id="advSub"></div>
+    <div class="advchips" id="advChips"></div>
+    <div class="advcap">累计净收益曲线</div>
+    <svg class="advchart" id="svgCum" viewBox="0 0 340 84"></svg>
+    <div class="advcap">单次收益散点（橙虚线=平均）</div>
+    <svg class="advchart" id="svgPts" viewBox="0 0 340 84"></svg>
+    <div class="advcap"><span style="color:#16a34a">体力</span> / <span style="color:#0891b2">清洁</span> / <span style="color:#d97706">心情</span>（红虚线=阈值60，红竖线=护理）</div>
+    <svg class="advchart" id="svgStats" viewBox="0 0 340 84"></svg>
   </section>
 
   <section class="grid">
@@ -481,7 +597,7 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 </main>
 <footer>
   <div id="footStrategy"></div>
-  <div>设置保存后下一轮生效 · 日志 3s / 数据 6s / 截图 15s</div>
+  <div>设置保存后下一轮生效 · 日志 3s / 数据 6s / 冒险 10s / 截图 15s</div>
 </footer>
 
 <script>
@@ -566,6 +682,62 @@ function renderData(d){
 async function refreshData(){
   try{ renderData(await j('/api/data')); }
   catch(e){ $('#schedDot').className='dot off'; $('#schedTxt').textContent='连接失败'; }
+}
+
+function svgSet(id,inner){const el=document.getElementById(id);if(el)el.innerHTML=inner;}
+function drawAdv(){
+  const d=window.__adv;if(!d)return;
+  const W=340,H=84,pad=8,tx=d.target||100;
+  const sx=i=>pad+(Math.max(1,i)-1)/Math.max(1,(tx-1))*(W-2*pad);
+  let inner='<line x1="0" y1="42" x2="'+W+'" y2="42" stroke="#e2e5ec" stroke-width="1" stroke-dasharray="4 4"/>';
+  const ys0=(d.cum||[]).map(p=>p[1]);
+  let mx=Math.max(10,...ys0.map(v=>Math.abs(v)))*1.15;
+  const sy0=v=>42-v/mx*34;
+  if((d.cum||[]).length>1){
+    inner+='<polyline points="'+d.cum.map(p=>sx(p[0]).toFixed(1)+','+sy0(p[1]).toFixed(1)).join(' ')+'" fill="none" stroke="#533afd" stroke-width="2" stroke-linejoin="round"/>';
+    const lp=d.cum[d.cum.length-1];
+    inner+='<circle cx="'+sx(lp[0]).toFixed(1)+'" cy="'+sy0(lp[1]).toFixed(1)+'" r="3" fill="#533afd"/>';
+  }
+  svgSet('svgCum',inner);
+  let inner2='<line x1="0" y1="42" x2="'+W+'" y2="42" stroke="#e2e5ec" stroke-width="1" stroke-dasharray="4 4"/>';
+  const ys1=(d.pts||[]).map(p=>p[1]);
+  let mx1=Math.max(10,...ys1.map(v=>Math.abs(v)))*1.2;
+  const sy1=v=>42-v/mx1*34;
+  if(d.avg!=null){const y=sy1(d.avg);inner2+='<line x1="0" y1="'+y.toFixed(1)+'" x2="'+W+'" y2="'+y.toFixed(1)+'" stroke="#f59e0b" stroke-width="1" stroke-dasharray="5 4"/>';}
+  for(const p of (d.pts||[])){inner2+='<circle cx="'+sx(p[0]).toFixed(1)+'" cy="'+sy1(p[1]).toFixed(1)+'" r="2.2" fill="#0ea5e9" opacity=".85"/>';}
+  svgSet('svgPts',inner2);
+  const st=d.stats||[];
+  const sy2=v=>H-pad-(Math.max(0,Math.min(100,v))/100)*(H-2*pad);
+  let inner3='<line x1="0" y1="'+sy2(60).toFixed(1)+'" x2="'+W+'" y2="'+sy2(60).toFixed(1)+'" stroke="#ef4444" stroke-width="1" stroke-dasharray="5 4" opacity=".7"/>';
+  const defs=[['e',1,'#16a34a'],['c',2,'#0891b2'],['m',3,'#d97706']];
+  for(const df of defs){
+    const pts=st.filter(r=>r[df[1]]!=null);
+    if(pts.length<2)continue;
+    inner3+='<polyline points="'+pts.map(r=>sx(r[0]).toFixed(1)+','+sy2(r[df[1]]).toFixed(1)).join(' ')+'" fill="none" stroke="'+df[2]+'" stroke-width="1.8"/>';
+    const lp=pts[pts.length-1];
+    inner3+='<circle cx="'+sx(lp[0]).toFixed(1)+'" cy="'+sy2(lp[df[1]]).toFixed(1)+'" r="2.6" fill="'+df[2]+'"/>';
+  }
+  for(const r of st){if(r[4]===1){inner3+='<line x1="'+sx(r[0]).toFixed(1)+'" y1="'+pad+'" x2="'+sx(r[0]).toFixed(1)+'" y2="'+(H-pad)+'" stroke="#ef4444" stroke-width="1" stroke-dasharray="2 3" opacity=".6"/>';}}
+  svgSet('svgStats',inner3);
+}
+function renderAdventure(d){
+  if(!d||!d.ok){const m=$('#advMeta');if(m)m.textContent='实验数据未找到';return}
+  window.__adv=d;
+  $('#advMeta').textContent=d.n+'/'+d.target+' 次 · 更新 '+(d.updated||'');
+  const big=$('#advNet');big.textContent=(d.net>0?'+':'')+d.net;
+  big.style.color=d.net>0?'var(--ok)':(d.net<0?'#dc2626':'');
+  $('#advNetHint').textContent='金币净变化（含护理扣费） · 平均 '+(d.avg>0?'+':'')+d.avg+'/次';
+  let sub='有收益 '+d.win+' · 零 '+d.zero+' · 负 '+d.loss+' 次 · 护理 '+d.care_n+' 次';
+  if(d.care_costs&&d.care_costs.length)sub+='（'+d.care_costs.join(' / ')+' 金币）';
+  $('#advSub').textContent=sub;
+  let ch='';
+  for(const g of (d.gains||[])){ch+='<span class="chip">'+esc(g[0])+' +'+g[2]+' ×'+g[1]+'</span>';}
+  if(d.latest){ch+='<span class="chip wait">体力 '+d.latest.e+' · 清洁 '+d.latest.c+' · 心情 '+d.latest.m+'</span>';}
+  $('#advChips').innerHTML=ch;
+  drawAdv();
+}
+async function refreshAdventure(){
+  try{ renderAdventure(await j('/api/adventure')); }catch(e){}
 }
 
 async function refreshLogs(){
@@ -675,9 +847,10 @@ $('#btnShot').onclick=()=>refreshShot(true);
 
 setInterval(()=>{if(!document.hidden)refreshLogs()},3000);
 setInterval(()=>{if(!document.hidden)refreshData()},6000);
+setInterval(()=>{if(!document.hidden)refreshAdventure()},10000);
 setInterval(()=>{if(!document.hidden)refreshShot(false)},15000);
-refreshData();refreshLogs();refreshShot(false);
-document.addEventListener('visibilitychange',()=>{if(!document.hidden){refreshData();refreshLogs();refreshShot(false)}});
+refreshData();refreshLogs();refreshAdventure();refreshShot(false);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){refreshData();refreshLogs();refreshAdventure();refreshShot(false)}});
 </script>
 </body>
 </html>
@@ -704,6 +877,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, 'text/html; charset=utf-8', HTML.encode('utf-8'))
             elif path == '/api/data':
                 body = json.dumps(build_data(), ensure_ascii=False).encode('utf-8')
+                self._send(200, 'application/json; charset=utf-8', body)
+            elif path == '/api/adventure':
+                body = json.dumps(adventure_data(), ensure_ascii=False).encode('utf-8')
                 self._send(200, 'application/json; charset=utf-8', body)
             elif path == '/api/logs':
                 q = parse_qs(u.query)
