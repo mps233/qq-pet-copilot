@@ -177,7 +177,8 @@ $PY build.py --emulator          # 模拟器版（内置 frida 客户端；frida
   任务返回 False，下一个时间点重开窗口并清除当天不可继续标记）；没有任务可执行时
   睡到最近等待点（上限 `QUEUE_POLL_INTERVAL` 轮询热加载配置）；冒险/学习/打工/雇佣好友
   互斥（不能同时做），作为**主任务组**统一调度（`_main_choice`）：组内优先级由
-  `tasks.main_order` 配置（默认 `school>hire_friend>adventure>work`，> 分隔越靠前越优先，
+  `tasks.main_order` 配置（代码默认 `school>hire_friend>adventure>work`；本机现配
+  `school>hire_friend>work>adventure`，主号策略「打工到 8h 疲劳档 → 之后全冒险」；> 分隔越靠前越优先，
   没列出的按默认顺序兜底；`MAIN_TASK_KEYS` 在 `src/config.py`），先过 `_eligible`
   （退避/时间窗未到点的任务跳过，否则幻影命中会把排它后面的主任务卡住——如雇佣好友
   CD 复测退避 60 秒但 hire_friend_due 的调度间隔只有几秒），再按配置顺序逐个判定——
@@ -273,9 +274,11 @@ $PY build.py --emulator          # 模拟器版（内置 frida 客户端；frida
     `study_secs`/`work_secs`，`load_durations()` 读取（GUI 日志页“今日”显示
     `已学习/工作/总时长（小时）0.0/0.0/0.0` 1 位小数）；`_duration_over` 判断
     `schedule.daily_hour_limit`（小时，0=不限）达上限后**今天不再学习只打工**；
-    `schedule.work_stop_hours`（小时，0=不限，默认 12）判断 `_work_over`：学习+打工
-    合计 >= 该值后**今天连打工也停**——游戏效率档：合计 >8h 收益效率 25%、>12h 10%，
-    默认避开 10% 档（要连 25% 档也避开改 8）。两个上限都**实时求值不设死标记**，
+    `schedule.work_stop_hours`（小时，0=不限）判断 `_work_over`：学习+打工
+    合计 >= 该值后**今天连打工也停**——游戏效率档：合计 >8h 收益效率 25%、>12h 10%。
+    **本机现配 8**（主号「疲劳后全冒险」：打满 8h 停打工全转冒险；依据：疲劳档后打工
+    ~20/~8 金每小时 vs 冒险 ~500 金每小时，且实测 12h+ 下冒险收益不受疲劳档影响）。
+    两个上限都**实时求值不设死标记**，
     跨天时长清零自然恢复；效率档写进日志（今日时长行/启动行）。**主任务结束后
     `_sleep_until_next` 的"留守"分支**：只要还有"启用且未判死"的任务就按
     `QUEUE_POLL_INTERVAL` 轮询留守（护理 60s/好友护理 120s/每日支线到点/次日打工
