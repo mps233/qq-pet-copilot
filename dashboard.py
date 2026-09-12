@@ -317,12 +317,20 @@ def config_summary() -> dict:
 
 
 def load_progress() -> dict:
+    """今日进度：按进度文件里的 date 过滤——不是今天的（调度器停跑时残留的昨天数据）
+    按 0 / 未完成显示，避免把昨天的次数当成今天（用户曾问"今日PK为什么显示 15/15 明明一次没打"）。"""
+    today = datetime.now().strftime('%Y-%m-%d')
+
+    def today_of(name: str, zero: dict) -> dict:
+        d = read_json(name)
+        return d if d.get('date') == today else zero
+
     return {
-        'visit': read_json('visit_progress.json'),
-        'pk': read_json('pk_progress.json'),
-        'work': read_json('work_progress.json'),
-        'adventure': read_json('adventure_progress.json'),
-        'exp_daily': read_json('exp_daily_progress.json'),
+        'visit': today_of('visit_progress.json', {'learned': 0}),
+        'pk': today_of('pk_progress.json', {'learned': 0}),
+        'work': today_of('work_progress.json', {'learned': 0}),
+        'adventure': today_of('adventure_progress.json', {'learned': 0}),
+        'exp_daily': today_of('exp_daily_progress.json', {'done': False}),
     }
 
 
