@@ -260,7 +260,7 @@ TASK_SETTING_FIELDS = [
     ('work.duration', '打工时长选择', ['10分钟', '45分钟', '2小时']),
     ('work.times_per_day', '每天打工次数（0 不限）', 'int'),
     ('work.employ_scroll_limit', '雇佣拖动上限', 'int'),
-    ('work.hire_name', '打工优先雇佣（宠物名/主人名，空=列表最上面）', 'str'),
+    ('work.hire_name', '打工优先雇佣（宠物名/主人名，空=自动选收益最高）', 'str'),
     ('adventure.times_per_day', '每天冒险次数（0 不冒险）', 'int'),
     ('adventure.start_time', '冒险调度时间', 'str'),
     ('adventure.skip_bad_weather', '冒险跳过"天色不对"', 'bool'),

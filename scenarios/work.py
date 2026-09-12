@@ -11,8 +11,9 @@
 5. 把第一框拖到第三框归位（两次），按配置 work.duration 点击对应工作选择框
    （10分钟/45分钟/2小时 -> select_box_1/2/3）
 6. 点击 work_outworker 进入雇佣好友界面（OCR 标题确认弹出）：
-   - 配置了 work.hire_name（宠物名/主人名，部分匹配）时优先雇该名字所在行的按钮，
-     不可雇/不在列表时回落最上面一个；未配置则雇最上面一个（排除"被雇佣中"状态标签），
+   - 默认自动选收益最高：读每行"金币+N%"挑加成最大的可雇行（列表不按加成排序，
+     必须逐行读）；配置了 work.hire_name（宠物名/主人名，部分匹配）时优先雇该名字，
+     不可雇时同样回落"收益最高"，加成都没读出才回落最上面一个（排除"被雇佣中"状态标签），
      点击日志附该行文字（谁被雇了一目了然）
    - 没有可点按钮（当前页好友不可雇佣时不渲染按钮）-> 点工作面板顶部"智力"坐标
      关闭雇佣面板并确认弹层已关，回到打工面板由下一步点 work_start 直接开工（不雇佣）
@@ -26,6 +27,7 @@
 """
 
 import os
+import re
 import sys
 import time
 
@@ -62,11 +64,12 @@ def pick_employ_button(items, width, prefer_name: str = ''):
     """从雇佣面板的整屏 OCR 结果里挑要点的"雇佣"按钮。
 
     items: [(text, x, y, score)] 整屏 OCR；width: 屏宽。
-    prefer_name: 优先雇佣的名字（宠物名或主人名，去空格部分匹配）；空 = 雇最上面一个。
+    prefer_name: 优先雇佣的名字（宠物名或主人名，去空格部分匹配）；空 = 自动选收益最高。
 
-    返回 (button_x, button_y, row_text, prefer_used) 或 None：
-    - 配了名字且名字所在行内有按钮 → 该按钮（多个命中取最上面一行）；
-    - 其余（没配/名字行不可雇）回落最上面一个可点按钮（prefer_used=False）；
+    返回 (button_x, button_y, row_text, mode, bonus) 或 None：
+    - mode='name' ：配了名字且该行可雇（bonus 为 None）；
+    - mode='bonus'：自动挑金币加成最高的可雇行（bonus = N）；并列取最上面一行；
+    - mode='top'  ：加成都没读出来，回落最上面一个（bonus 为 None）；
     - 没有任何可点按钮 → None（调用方关闭面板直接开工）。
     """
     prefer = (prefer_name or '').replace(' ', '').lower()
@@ -91,15 +94,40 @@ def pick_employ_button(items, width, prefer_name: str = ''):
             near = [b for b in buttons if abs(b[1] - ny) <= EMPLOY_ROW_TOL]
             if near:
                 b = min(near, key=lambda m: abs(m[1] - ny))
-                return b[0], b[1], _employ_row_text(items, b[1], width), True
+                return b[0], b[1], _employ_row_text(items, b[1], width), 'name', None
+    # 自动选收益最高：逐按钮读同行"金币+N%"，挑最大；加成都读不出才回落最上面
+    scored = []
+    for b in buttons:
+        bonus = _employ_row_bonus(_employ_row_text(items, b[1], width))
+        if bonus is not None:
+            scored.append((bonus, b))
+    if scored:
+        bonus, b = max(scored, key=lambda m: (m[0], -m[1][1]))
+        return b[0], b[1], _employ_row_text(items, b[1], width), 'bonus', bonus
     b = buttons[0]
-    return b[0], b[1], _employ_row_text(items, b[1], width), False
+    return b[0], b[1], _employ_row_text(items, b[1], width), 'top', None
+
+
+EMPLOY_BONUS_RE = re.compile(r'金币\s*[+＋]?\s*(\d{1,3})\s*%')
+EMPLOY_ANY_BONUS_RE = re.compile(r'[+＋]\s*(\d{1,3})\s*%')
+
+
+def _employ_row_bonus(row_text: str) -> int | None:
+    """从雇佣行文字里解析金币加成 N（如"金币+22%"）；读不到返回 None。"""
+    m = EMPLOY_BONUS_RE.search(row_text or '')
+    if not m:
+        m = EMPLOY_ANY_BONUS_RE.search(row_text or '')
+    return int(m.group(1)) if m else None
 
 
 def _employ_row_text(items, btn_y: int, width: int) -> str:
-    """"雇佣"按钮同排的左侧文字拼接（名字/职业/加成/主人），日志里看雇的是谁。"""
+    """"雇佣"按钮同排、按钮左侧的文字拼接（名字/职业/金币+N%/主人），日志里看雇的是谁。
+
+    "金币+N%"徽章在屏幕中右侧（x > width/2），所以采集窗口放宽到按钮左边
+    （按钮和"出门中/很累了"等状态文字在更右侧，不会被带上）。
+    """
     parts = sorted(((y, x, text.strip()) for text, x, y, score in items
-                    if x < width / 2 and abs(y - btn_y) <= EMPLOY_ROW_TOL
+                    if x < int(width * 0.85) and abs(y - btn_y) <= EMPLOY_ROW_TOL
                     and score >= OCR_MIN_SCORE and text.strip()),
                    key=lambda m: (m[0], m[1]))
     out, seen = [], set()
@@ -125,11 +153,11 @@ class WorkScenario(DeviceScenario):
         # employ_scroll_limit 保留配置兼容（旧流程下滑找雇佣按钮已移除，
         # 当前页没有雇佣按钮时直接关闭面板开工），runner 仍会赋值
         self.employ_scroll_limit = self.cfg.work.employ_scroll_limit
-        # 优先雇佣的名字（宠物名/主人名，部分匹配）；空 = 雇列表最上面一个
+        # 优先雇佣的名字（宠物名/主人名，部分匹配）；空 = 自动选金币加成最高的可雇行
         self.hire_name = str(getattr(self.cfg.work, 'hire_name', '') or '').strip()
         log(f'打工地点: {self.location}，打工时长: {self.duration}，每天打工次数: '
             f'{self.times_per_day if self.times_per_day else "不限"}'
-            + (f'，优先雇佣: {self.hire_name}' if self.hire_name else ''))
+            + (f'，优先雇佣: {self.hire_name}' if self.hire_name else '，雇佣策略: 自动选收益最高'))
 
     # ---- 各阶段 ----
 
@@ -263,8 +291,8 @@ class WorkScenario(DeviceScenario):
         raise RuntimeError('点击雇佣好友后雇佣面板未弹出')
 
     def hire_friend(self) -> None:
-        """雇佣好友：优先 work.hire_name 指定名字（宠物名/主人名）所在行的按钮，
-        不可雇/没配时回落列表最上面一个；都没有则关闭雇佣页面直接开工。
+        """雇佣好友：自动选金币加成最高的可雇行（配了 work.hire_name 则优先该名字，
+        不可雇时回落收益最高），加成都读不出才回落最上面一个；都没有则关闭雇佣页面直接开工。
 
         当前页好友不可雇佣时列表不渲染雇佣按钮（纯图片/无按钮）：OCR 检测一次
         没有可点按钮就直接关闭雇佣面板，由 run() 点 work_start 直接开工。
@@ -276,13 +304,15 @@ class WorkScenario(DeviceScenario):
             log('未找到雇佣按钮，直接关闭雇佣页面')
             self._close_employ_panel()
             return
-        bx, by, row_text, prefer_used = picked
-        if not self.hire_name:
-            prefix = '找到雇佣按钮'
-        elif prefer_used:
+        bx, by, row_text, mode, bonus = picked
+        if mode == 'name':
             prefix = f'优先雇佣「{self.hire_name}」'
-        else:
+        elif mode == 'bonus':
+            prefix = f'自动选收益最高（金币+{bonus}%）'
+        elif self.hire_name:
             prefix = f'优先雇佣「{self.hire_name}」不可雇，回落最上面'
+        else:
+            prefix = '加成未读出，回落最上面'
         desc = f' ({bx}, {by})' + (f' [{row_text}]' if row_text else '')
         log(f'{prefix}，点击{desc}')
         self.click(bx, by)
