@@ -4,7 +4,7 @@
 1. 点击 pet_status（宠物状态按钮，xpath 定位）展开宠物状态
 2. OCR 状态面板区域（xpath 定范围）识别 体力/清洁/心情 三个数值及 账号名称/宠物名称
 3. 体力低于阈值 -> 喂食：点 feed -> 反复点 feed_10 并复测体力，直到达标；
-   没有 feed_10（饼干不足）时先点"兑换食物"金币兑换 99 个（弹窗数量改 99 -> 支付）再继续
+   没有 feed_10（饼干不足）时先点"兑换食物"金币兑换 20 个（弹窗数量改 20 -> 支付）再继续
 4. 清洁低于阈值 -> 洗澡：点 shower -> 按住肥皂（shower_10 控件中心）不松手
    （d.touch down/move/up）拖到 (50%, 40%)，再在 (50%, 67%) 和 (50%, 40%)
    之间来回搓洗，直到清洁达标后抬手（点位按当前分辨率百分比换算）
@@ -41,7 +41,7 @@ STATUS_COL_TOL = 80  # 名字下方同列数字的横向容差
 FEED_RESULT_WAIT = 1.5  # 喂食后等数值刷新的时间（秒）
 FEED_PANEL_RETRIES = 4  # 点 feed 后等喂食面板加载（feed_10 或"兑换食物"出现）的重试次数
 MAX_FEED_ATTEMPTS = 10    # 喂食最多次数，超过认为异常
-EXCHANGE_FOOD_COUNT = 99  # 饼干不足时金币兑换食物的数量（弹窗输入框默认 5）
+EXCHANGE_FOOD_COUNT = 20  # 饼干/香皂不足时金币购买的数量（兑换食物弹窗默认 5 / 购买洗澡道具弹窗默认 10，两处共用），弹窗里改成该数量
 EXCHANGE_POPUP_RETRIES = 3  # 等兑换食物弹窗（数量输入框）出现的重试次数
 MAX_SHOWER_ATTEMPTS = 25  # 搓洗最多回合数，超过认为异常
 # 清洁连续多少回合不提升判定按压失效（minitouch 会话静默中断，touch_move 全丢，
@@ -273,7 +273,7 @@ class CareScenario(DeviceScenario):
 
     def _exchange_food(self, source=None) -> None:
         """饼干不足（无 feed_10）时用金币兑换食物：同一控件树里点"兑换食物" ->
-        兑换弹窗数量输入框（默认 5）改 99 -> 支付，回喂食面板后继续喂食。"""
+        兑换弹窗数量输入框（默认 5）改 20 -> 支付，回喂食面板后继续喂食。"""
         hit = self.see('exchange_food', source=source)
         if not hit:
             raise RuntimeError('喂食界面未找到 feed_10 按钮，也没有"兑换食物"')
@@ -284,7 +284,7 @@ class CareScenario(DeviceScenario):
 
     def _buy_soap(self, source=None) -> None:
         """香皂不足（无 shower_10）时用金币购买洗澡道具：同一控件树里点"购买洗澡道具" ->
-        购买弹窗数量输入框（默认 10）改 99 -> 支付，回洗澡面板后继续洗澡。"""
+        购买弹窗数量输入框（默认 10）改 20 -> 支付，回洗澡面板后继续洗澡。"""
         hit = self.see('buy_soap', source=source)
         if not hit:
             raise RuntimeError('洗澡界面未找到 shower_10 肥皂，也没有"购买洗澡道具"')
@@ -310,7 +310,7 @@ class CareScenario(DeviceScenario):
             log(f'等待喂食面板加载 ({attempt}/{FEED_PANEL_RETRIES})')
             time.sleep(CLICK_INTERVAL)
             source = self.dev.hierarchy()
-        exchanged = False  # 每次喂食最多兑换一次（99 个足够），防兑换后仍无 feed_10 死循环
+        exchanged = False  # 每次喂食最多兑换一次（一次少量补货），防兑换后仍无 feed_10 死循环
         for attempt in range(1, MAX_FEED_ATTEMPTS + 1):
             btn = self.see('feed_10', source=source)
             if not btn:
@@ -371,7 +371,7 @@ class CareScenario(DeviceScenario):
         source = self.dev.hierarchy()
         soap = self.see('shower_10', source=source)
         if not soap:
-            # 香皂不足：金币购买一次（99 个足够，只买一次防死循环）后重新找
+            # 香皂不足：金币购买一次（20 个，只买一次防死循环）后重新找
             self._buy_soap(source)
             source = self.dev.hierarchy()
             soap = self.see('shower_10', source=source)
