@@ -931,7 +931,6 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
       <div class="qhead"><span id="qTop">--</span><span id="qUpd"></span></div>
       <div class="tasklist" id="taskList"></div>
       <div id="qHidden" style="display:none;font-size:10.5px;color:var(--sub);margin-top:5px"></div>
-      <div style="font-size:10.5px;color:var(--sub);margin-top:7px;line-height:1.5">每轮从上往下扫描、执行第一个到点的任务；学习 / 雇佣好友 / 冒险 / 打工 互斥，按「主任务优先级」取一个（执行时占各自位置）</div>
     </div>
   </section>
 
