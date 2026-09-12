@@ -31,6 +31,7 @@ DEFAULTS = {
     'work.location': '风铃旅社',
     'work.times_per_day': 0,
     'work.employ_scroll_limit': 5,
+    'work.hire_name': '',
     'schedule.coin_threshold': 2000,
     'schedule.daily_hour_limit': 8,
     'schedule.check_interval': 8,
@@ -101,7 +102,7 @@ def validate_field(key: str, value):
             return True, DoubleQuotedScalarString(str(value))
         except ValueError:
             return False, DoubleQuotedScalarString(str(default))
-    if key == 'friend_care.friend_name' or key == 'hire_friend.friend_name':
+    if key in ('friend_care.friend_name', 'hire_friend.friend_name', 'work.hire_name'):
         return True, str(value).strip()
     if key in ('friend_care.enabled', 'hire_friend.enabled', 'employed.enabled'):
         return (True, value) if isinstance(value, bool) else (False, default)

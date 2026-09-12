@@ -246,6 +246,7 @@ def editable_snapshot() -> dict:
         'work_location': work.get('location'),
         'work_locations': locations,
         'work_duration': work.get('duration'),
+        'hire_name': str(work.get('hire_name') or ''),
         'coin_threshold': sched.get('coin_threshold', 2000),
         'daily_hour_limit': sched.get('daily_hour_limit', 8),
         'visit_times': visit.get('times_per_day', 10),
@@ -267,6 +268,7 @@ def apply_settings(updates: dict) -> dict:
         'school_enabled': ('tasks.school.enabled', 'bool'),
         'work_location': ('work.location', None),
         'work_duration': ('work.duration', None),
+        'hire_name': ('work.hire_name', None),
         'coin_threshold': ('schedule.coin_threshold', 'int'),
         'daily_hour_limit': ('schedule.daily_hour_limit', 'int'),
         'visit_times': ('visit.times_per_day', 'int'),
@@ -395,8 +397,9 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 .form .frow{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-top:1px dashed var(--line)}
 .form .frow:first-child{border-top:0}
 .form .k{color:var(--sub);font-size:13.5px;flex:none}
-.form select,.form input[type=number]{border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:13px;background:#fafafa;color:var(--text);max-width:58%}
+.form select,.form input[type=number],.form input[type=text]{border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:13px;background:#fafafa;color:var(--text);max-width:58%}
 .form input[type=number]{width:86px;text-align:right}
+.form input[type=text]{width:150px;text-align:right}
 .form .two{display:flex;gap:6px}
 .form .two input{width:64px}
 .sw{position:relative;width:46px;height:26px;border-radius:13px;background:#d9dce3;border:none;transition:.2s;flex:none;cursor:pointer}
@@ -475,6 +478,7 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 
 <script>
 const $=s=>document.querySelector(s);
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 const TASKNAME={care:'护理',school:'学习',friend_care:'好友护理',hire_friend:'雇佣好友',adventure:'冒险',visit:'踩踩',pk:'PK',work:'打工'};
 let etaRemain=null, etaClock='';
 let logAuto=true, logFilter='';
@@ -600,6 +604,7 @@ function renderSettings(ed){
     '<div class="frow"><span class="k">只打工不学习</span><button class="sw'+(ed.school_enabled?'':' on')+'" id="swSchool" title="开=只打工；关=学习+打工"></button></div>'+
     '<div class="frow"><span class="k">打工地点</span>'+sel('selLoc', ed.work_locations||[], ed.work_location)+'</div>'+
     '<div class="frow"><span class="k">打工时长</span>'+sel('selDur', ['10分钟','45分钟','2小时'], ed.work_duration)+'</div>'+
+    '<div class="frow"><span class="k">优先雇佣</span><input type="text" id="txtHire" placeholder="宠物名/主人名，空=最上面" value="'+esc(ed.hire_name||'')+'"></div>'+
     '<div class="frow"><span class="k">金币阈值</span><input type="number" id="numCoin" min="0" step="100" value="'+(ed.coin_threshold??'')+'"></div>'+
     '<div class="frow"><span class="k">时长上限（小时）</span><input type="number" id="numHour" min="0" step="1" value="'+(ed.daily_hour_limit??'')+'"></div>'+
     '<div class="frow"><span class="k">踩踩次数/天</span><input type="number" id="numVisit" min="0" step="1" value="'+(ed.visit_times??'')+'"></div>'+
@@ -620,7 +625,9 @@ async function saveSettings(){
   const getv=id=>($(id)?$(id).value.trim():'');
   const num=(id,key)=>{const v=getv(id); if(v==='')return; const n=parseInt(v,10); if(!isNaN(n)&&n!==setInit[key]) updates[key]=n;};
   const selc=(id,key)=>{const v=getv(id); if(v&&v!==setInit[key]) updates[key]=v;};
+  const txtc=(id,key)=>{const v=getv(id); if(v!==(setInit[key]||'')) updates[key]=v;};
   selc('#selLoc','work_location'); selc('#selDur','work_duration'); selc('#selCare','care_method');
+  txtc('#txtHire','hire_name');
   num('#numCoin','coin_threshold'); num('#numHour','daily_hour_limit');
   num('#numVisit','visit_times'); num('#numPk','pk_times'); num('#numAdv','adventure_times');
   num('#numEnergy','care_energy'); num('#numClean','care_clean');

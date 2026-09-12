@@ -110,6 +110,8 @@ class WorkConfig:
     # 已不再使用：旧流程"下滑找雇佣按钮"已移除（当前页没有雇佣按钮时直接关闭面板开工），
     # 保留字段仅为兼容已有 config.yaml
     employ_scroll_limit: int = 5
+    # 打工时优先雇佣的名字（宠物名/主人名，部分匹配）；空 = 雇佣列表最上面一个
+    hire_name: str = ""
 
 
 @dataclass

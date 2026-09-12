@@ -593,6 +593,7 @@ class Runner:
         self.hire_friend.cfg.work = cfg.work
         self.work.times_per_day = cfg.work.times_per_day
         self.work.employ_scroll_limit = cfg.work.employ_scroll_limit
+        self.work.hire_name = str(getattr(cfg.work, 'hire_name', '') or '').strip()
         self.visit.times_per_day = cfg.visit.times_per_day
         self.visit_times = cfg.visit.times_per_day
         try:

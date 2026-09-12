@@ -11,8 +11,10 @@
 5. 把第一框拖到第三框归位（两次），按配置 work.duration 点击对应工作选择框
    （10分钟/45分钟/2小时 -> select_box_1/2/3）
 6. 点击 work_outworker 进入雇佣好友界面（OCR 标题确认弹出）：
-   - 识别到雇佣按钮（OCR 右侧第一个，排除"被雇佣中"状态标签）-> 点击最上方的一个
-   - 没有（当前页好友不可雇佣时不渲染按钮）-> 点工作面板顶部"智力"坐标
+   - 配置了 work.hire_name（宠物名/主人名，部分匹配）时优先雇该名字所在行的按钮，
+     不可雇/不在列表时回落最上面一个；未配置则雇最上面一个（排除"被雇佣中"状态标签），
+     点击日志附该行文字（谁被雇了一目了然）
+   - 没有可点按钮（当前页好友不可雇佣时不渲染按钮）-> 点工作面板顶部"智力"坐标
      关闭雇佣面板并确认弹层已关，回到打工面板由下一步点 work_start 直接开工（不雇佣）
 7. 点击 work_start 开始工作，直到出现 work_in
 8. 工作中按配置的检查间隔（schedule.check_interval）检查，直到出现 work_end，点击 quit 退出
@@ -52,6 +54,61 @@ WORK_PLACE_ATTEMPTS = 3
 # 打工时长选择 -> 工作选择框（打工与雇佣好友共用，配置 work.duration）
 DURATION_BOXES = {'10分钟': 'select_box_1', '45分钟': 'select_box_2', '2小时': 'select_box_3'}
 
+# 雇佣面板"雇佣"按钮定位（按钮在每行右侧 x >= 屏宽一半）
+EMPLOY_ROW_TOL = 90  # 同行文字（名字/主人）与"雇佣"按钮的最大 y 偏差，像素（实测行距约 195）
+
+
+def pick_employ_button(items, width, prefer_name: str = ''):
+    """从雇佣面板的整屏 OCR 结果里挑要点的"雇佣"按钮。
+
+    items: [(text, x, y, score)] 整屏 OCR；width: 屏宽。
+    prefer_name: 优先雇佣的名字（宠物名或主人名，去空格部分匹配）；空 = 雇最上面一个。
+
+    返回 (button_x, button_y, row_text, prefer_used) 或 None：
+    - 配了名字且名字所在行内有按钮 → 该按钮（多个命中取最上面一行）；
+    - 其余（没配/名字行不可雇）回落最上面一个可点按钮（prefer_used=False）；
+    - 没有任何可点按钮 → None（调用方关闭面板直接开工）。
+    """
+    prefer = (prefer_name or '').replace(' ', '').lower()
+    exact, fuzzy, name_hits = [], [], []
+    for text, x, y, score in items:
+        t = text.replace(' ', '')
+        if score < OCR_MIN_SCORE:
+            continue
+        if prefer and x < width / 2 and prefer in t.lower():
+            name_hits.append((x, y))
+        if x < width / 2 or '雇佣' not in t:
+            continue
+        if '被雇佣' in t or '雇佣中' in t:
+            continue  # "被雇佣中"状态标签，不是雇佣按钮
+        (exact if t == '雇佣' else fuzzy).append((x, y, score))
+    buttons = exact or fuzzy
+    if not buttons:
+        return None
+    buttons.sort(key=lambda m: (m[1], m[0]))
+    if name_hits:
+        for _nx, ny in sorted(name_hits, key=lambda m: m[1]):
+            near = [b for b in buttons if abs(b[1] - ny) <= EMPLOY_ROW_TOL]
+            if near:
+                b = min(near, key=lambda m: abs(m[1] - ny))
+                return b[0], b[1], _employ_row_text(items, b[1], width), True
+    b = buttons[0]
+    return b[0], b[1], _employ_row_text(items, b[1], width), False
+
+
+def _employ_row_text(items, btn_y: int, width: int) -> str:
+    """"雇佣"按钮同排的左侧文字拼接（名字/职业/加成/主人），日志里看雇的是谁。"""
+    parts = sorted(((y, x, text.strip()) for text, x, y, score in items
+                    if x < width / 2 and abs(y - btn_y) <= EMPLOY_ROW_TOL
+                    and score >= OCR_MIN_SCORE and text.strip()),
+                   key=lambda m: (m[0], m[1]))
+    out, seen = [], set()
+    for _y, _x, t in parts:
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return ' '.join(out)
+
 
 class WorkScenario(DeviceScenario):
     def __init__(self, dev=None):
@@ -68,8 +125,11 @@ class WorkScenario(DeviceScenario):
         # employ_scroll_limit 保留配置兼容（旧流程下滑找雇佣按钮已移除，
         # 当前页没有雇佣按钮时直接关闭面板开工），runner 仍会赋值
         self.employ_scroll_limit = self.cfg.work.employ_scroll_limit
+        # 优先雇佣的名字（宠物名/主人名，部分匹配）；空 = 雇列表最上面一个
+        self.hire_name = str(getattr(self.cfg.work, 'hire_name', '') or '').strip()
         log(f'打工地点: {self.location}，打工时长: {self.duration}，每天打工次数: '
-            f'{self.times_per_day if self.times_per_day else "不限"}')
+            f'{self.times_per_day if self.times_per_day else "不限"}'
+            + (f'，优先雇佣: {self.hire_name}' if self.hire_name else ''))
 
     # ---- 各阶段 ----
 
@@ -202,46 +262,31 @@ class WorkScenario(DeviceScenario):
                 return
         raise RuntimeError('点击雇佣好友后雇佣面板未弹出')
 
-    def _find_employ_button(self) -> tuple[int, int, float] | None:
-        """雇佣面板好友列表的"雇佣"按钮：整屏 OCR 取右侧从上到下第一个。
+    def hire_friend(self) -> None:
+        """雇佣好友：优先 work.hire_name 指定名字（宠物名/主人名）所在行的按钮，
+        不可雇/没配时回落列表最上面一个；都没有则关闭雇佣页面直接开工。
 
-        面板标题"宠友雇佣加成排行榜（实时刷新）"也含"雇佣"，但它在左侧；
-        雇佣按钮在每行右侧（x >= 屏宽一半），按 x 排除标题后取最上面一个。
-        右侧的"被雇佣中"状态标签同样含"雇佣"：剔除含"被雇佣"/"雇佣中"的文本，
-        并优先取文字恰好是"雇佣"的命中（按钮文案就是两个字）。
-        整屏 OCR 约 0.5s，比 dump 控件树（4s+）快得多。
+        当前页好友不可雇佣时列表不渲染雇佣按钮（纯图片/无按钮）：OCR 检测一次
+        没有可点按钮就直接关闭雇佣面板，由 run() 点 work_start 直接开工。
+        点击时日志附该行文字（谁被雇了一目了然）。
         """
         screen = self.screen()
-        w = screen.shape[1]
-        exact = []   # 文字恰好是"雇佣"（按钮）
-        fuzzy = []   # 含"雇佣"的其他文本（OCR 碎片兜底）
-        for text, x, y, score in ocr_fullscreen(screen):
-            t = text.replace(' ', '')
-            if x < w / 2 or score < OCR_MIN_SCORE or '雇佣' not in t:
-                continue
-            if '被雇佣' in t or '雇佣中' in t:
-                continue  # "被雇佣中"状态标签，不是雇佣按钮
-            (exact if t == '雇佣' else fuzzy).append((x, y, score))
-        candidates = exact or fuzzy
-        if not candidates:
-            return None
-        candidates.sort(key=lambda m: (m[1], m[0]))
-        return candidates[0]
-
-    def hire_friend(self) -> None:
-        """雇佣好友：有雇佣按钮就点；没有则直接关闭雇佣页面去开工。
-
-        当前页好友不可雇佣时列表不渲染雇佣按钮（纯图片/无按钮）：
-        OCR 检测一次没有就直接关闭雇佣面板，由 run() 点 work_start 直接开工。
-        """
-        btn = self._find_employ_button()
-        if btn:
-            log(f'找到雇佣按钮，点击 ({btn[0]}, {btn[1]})')
-            self.click(btn[0], btn[1])
-            time.sleep(CLICK_INTERVAL)
+        picked = pick_employ_button(ocr_fullscreen(screen), screen.shape[1], self.hire_name)
+        if not picked:
+            log('未找到雇佣按钮，直接关闭雇佣页面')
+            self._close_employ_panel()
             return
-        log('未找到雇佣按钮，直接关闭雇佣页面')
-        self._close_employ_panel()
+        bx, by, row_text, prefer_used = picked
+        if not self.hire_name:
+            prefix = '找到雇佣按钮'
+        elif prefer_used:
+            prefix = f'优先雇佣「{self.hire_name}」'
+        else:
+            prefix = f'优先雇佣「{self.hire_name}」不可雇，回落最上面'
+        desc = f' ({bx}, {by})' + (f' [{row_text}]' if row_text else '')
+        log(f'{prefix}，点击{desc}')
+        self.click(bx, by)
+        time.sleep(CLICK_INTERVAL)
 
     def _employ_panel_open(self) -> bool:
         """雇佣排行榜面板是否还开着：整屏 OCR 检测标题"宠友雇佣加成排行榜"。
