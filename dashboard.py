@@ -194,22 +194,25 @@ def tail_lines(path, n: int = 250) -> list[str]:
 
 
 def work_eta(lines: list[str]):
-    """从日志里找最后一次“预计 N 秒后结束（HH:MM:SS 收尾）”，换算剩余秒数。"""
+    """从日志里找最后一次“……: 进行中，预计 N 秒后结束（HH:MM:SS 收尾）”——
+    学习（上课）/打工/冒险都走这个模板，换算剩余秒数 + 场景名（kind）。"""
     m = None
     for ln in lines[-400:]:
-        mm = re.search(r'预计 (\d+) 秒后结束（(\d{2}):(\d{2}):(\d{2}) 收尾）', ln)
+        mm = re.search(r'([^\[\]:：]{1,8})[:：]\s*进行中，预计 (\d+) 秒后结束'
+                       r'（(\d{2}):(\d{2}):(\d{2}) 收尾）', ln)
         if mm:
             m = mm
     if not m:
         return None
     now = datetime.now()
-    target = now.replace(hour=int(m.group(2)), minute=int(m.group(3)),
-                         second=int(m.group(4)), microsecond=0)
+    target = now.replace(hour=int(m.group(3)), minute=int(m.group(4)),
+                         second=int(m.group(5)), microsecond=0)
     rem = int((target - now).total_seconds())
     if rem < -600:
         return None
-    return {'eta_clock': f'{m.group(2)}:{m.group(3)}:{m.group(4)}',
-            'remaining': max(0, rem)}
+    return {'eta_clock': f'{m.group(3)}:{m.group(4)}:{m.group(5)}',
+            'remaining': max(0, rem),
+            'kind': m.group(1).strip()}
 
 
 def today_duration(lines: list[str]):
@@ -866,7 +869,7 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
   </section>
 
   <section class="card" id="workCard" data-page="main">
-    <h2>打工循环</h2>
+    <h2>主任务 <span style="font-weight:400;font-size:10.5px">学习 · 打工 · 冒险</span></h2>
     <div class="workline"><span class="big" id="workBig">--</span><span class="hint" id="workHint"></span></div>
     <div class="subline" id="workSub"></div>
   </section>
@@ -1003,9 +1006,10 @@ function renderData(d){
     $('#workHint').textContent='调度器未运行（启动后恢复实时状态）';
     $('#workSub').innerHTML=wdHtml;
   }else if(etaRemain!=null){
-    $('#workBig').textContent='进行中';
-    $('#workHint').textContent='预计 '+etaClock+' 结算';
-    $('#workSub').textContent=(etaRemain>0?('剩余 '+hms(etaRemain)):'结算中…')+' · 结算后自动开启下一轮';
+    const kind=(d.work_eta&&d.work_eta.kind)?d.work_eta.kind:'';
+    $('#workBig').textContent=kind?(kind+'中'):'进行中';
+    $('#workHint').textContent='预计 '+etaClock+' 结束';
+    $('#workSub').textContent=(etaRemain>0?('剩余 '+hms(etaRemain)):'收尾中…')+' · 结束后自动开启下一项';
   }else{
     $('#workBig').textContent='等待中';
     $('#workHint').textContent=d.last_line?d.last_line.replace(/^\[[\d:]+\]\s*/,'').slice(0,60):'';
@@ -1305,7 +1309,7 @@ setInterval(()=>{
   $('#clock').textContent=pad(n.getHours())+':'+pad(n.getMinutes())+':'+pad(n.getSeconds());
   if(etaRemain!=null && schedOn){
     etaRemain-=1;
-    const sub= etaRemain>0? ('剩余 '+hms(etaRemain)+' · 结算后自动开启下一轮') : '结算中…';
+    const sub= etaRemain>0? ('剩余 '+hms(etaRemain)+' · 结束后自动开启下一项') : '收尾中…';
     const el=$('#workSub'); if(el) el.textContent=sub;
   }
 },1000);
