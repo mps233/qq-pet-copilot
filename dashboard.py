@@ -431,6 +431,17 @@ def plan_data() -> dict:
     def ratio_ok(axis):
         return V[axis] >= 24 and V[axis] >= 2.5 * (sum(V) - V[axis])
 
+    # 职业树实测状态（career_unlock.json 的 lines 段，哨兵每节课后写回）
+    ud0 = read_json('career_unlock.json') or {}
+    tree_lines = (ud0.get('lines') or {}) if isinstance(ud0, dict) else {}
+
+    def jr_state(name, fallback_numeric: bool) -> bool:
+        """见习状态：职业树实测优先；没测到过的隐藏线按未解锁（宁可不勾），普通线按数值兜底。"""
+        st = tree_lines.get(name) or {}
+        if 'unlocked' in st:
+            return bool(st.get('unlocked'))
+        return fallback_numeric
+
     gates = {'工分': int(v['工分']) >= 360, '金币': int(v['金币']) >= 1000,
              '初级毕业': bool(v['初级毕业']), '中级毕业': bool(v['中级毕业'])}
     gates_ok = gates['工分'] and gates['金币'] and gates['初级毕业']
@@ -439,21 +450,31 @@ def plan_data() -> dict:
         if jr is None and ch is None:
             lines.append({'name': name, 'jr': True, 'ch': False})
             continue
-        jr_ok = ratio_ok(jr) if isinstance(jr, int) else _triple_ok(V, jr)
+        jr_num = ratio_ok(jr) if isinstance(jr, int) else _triple_ok(V, jr)
+        hidden = isinstance(jr, int)  # 隐藏线（单属性）：解锁有概率性，不能按数字勾
+        jr_ok = jr_state(name, False if hidden else jr_num)
         ch_attr = _triple_ok(V, ch)
-        lines.append({'name': name, 'jr': jr_ok, 'ch': ch_attr and gates_ok,
+        lines.append({'name': name, 'jr': jr_ok, 'ch': ch_attr and gates_ok and jr_ok,
                       'ch_attr': ch_attr})
     # 阶梯路线（2026-09-13 调整：先解锁浅梦行者——智力专修最先，魅力/力量按 ×2.5 链递增）
+    # 隐藏线三步的"完成"以职业树实测为准（解锁有概率性：数值达标≠已解锁）
     r_mind = max(24, int(2.5 * (V[0] + V[2])))
     r_char = max(24, int(2.5 * (V[0] + V[1])))
     r_force = max(24, int(2.5 * (V[1] + V[2])))
+
+    def hidden_step(line: str, axis: int, need: int):
+        num_ok = V[axis] >= 24 and V[axis] >= 2.5 * (sum(V) - V[axis])
+        done = jr_state(line, False)
+        pr = f'{V[axis]}（需≥{need}）' if (done or not num_ok) else f'{V[axis]} 达标·待触发'
+        return done, pr
+
+    s1_done, s1_pr = hidden_step('梦境旅人', 1, r_mind)
+    s2_done, s2_pr = hidden_step('大明星', 2, r_char)
+    s3_done, s3_pr = hidden_step('武术家', 0, r_force)
     steps = [
-        ('S1', '智力专修，解锁 浅梦行者（≥其余两和的2.5倍）',
-         V[1] >= 24 and V[1] >= 2.5 * (V[0] + V[2]), f'{V[1]}（需≥{r_mind}）'),
-        ('S2', '魅力专修，解锁 偶像练习生',
-         V[2] >= 24 and V[2] >= 2.5 * (V[0] + V[1]), f'{V[2]}（需≥{r_char}）'),
-        ('S3', '力量专修，解锁 习武小童',
-         V[0] >= 24 and V[0] >= 2.5 * (V[1] + V[2]), f'{V[0]}（需≥{r_force}）'),
+        ('S1', '智力专修，解锁 浅梦行者（≥其余两和的2.5倍）', s1_done, s1_pr),
+        ('S2', '魅力专修，解锁 偶像练习生', s2_done, s2_pr),
+        ('S3', '力量专修，解锁 习武小童', s3_done, s3_pr),
         ('S4', '补 力11·智11，解锁 侦探/法师/画家/大厨（三维覆盖自动达成）',
          V[0] >= 11 and V[1] >= 11 and V[2] >= 24, f'{V[0]}/11 · {V[1]}/11'),
         ('S5', '魅力补到 225（混合线初级前置）', V[2] >= 225, f'{V[2]}/225'),
@@ -482,12 +503,15 @@ def plan_data() -> dict:
                    for e in (ud.get('events') or [])[-6:]],
     }
     total = sum(V)
+    last_at = max((str((st or {}).get('at') or '') for st in tree_lines.values()), default='')
+    lines_meta = f'职业树实测 · {last_at[5:16]}' if last_at else ''
     return {
         'ok': True, 'values': v, 'total': total, 'total_target': 2250,
         'jr_n': sum(1 for l in lines if l['jr']),
         'ch_n': sum(1 for l in lines if l['ch']),
         'lines': lines,
         'steps': [[s[0], s[1], s[2], s[3]] for s in steps],
+        'lines_meta': lines_meta,
         'gates': gates,
         'updated': datetime.now().strftime('%H:%M:%S'),
         'watch': watch,
@@ -871,6 +895,7 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 .plansteps .st.done .tx{color:var(--sub)}
 .plansteps .st.done .pr{color:#9ca3af}
 .plansteps .st.cur{background:#f6f4ff;border-radius:8px;padding-left:6px;padding-right:6px}
+.plannote{font-size:11px;color:var(--sub);margin-top:6px;line-height:1.5}
 .watchbox .wrow{display:flex;justify-content:space-between;gap:8px;font-size:12.5px;padding:6px 0;border-top:1px dashed var(--line);align-items:baseline}
 .watchbox .wrow:first-child{border-top:0}
 .watchbox .wstate{font-size:12px;color:var(--sub);padding:2px 0 4px}
@@ -945,7 +970,8 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
     <div class="saveMsg" id="planMsg"></div>
     <div class="subh">阶梯路线</div>
     <div class="plansteps" id="planSteps"></div>
-    <div class="subh">8 线解锁状态（见习 / 初级）</div>
+    <div class="plannote">隐藏线解锁有概率性：数值达标只进入候选，实际以职业树实测为准（哨兵每节课后检测）。</div>
+    <div class="subh">8 线解锁状态（见习 / 初级）<span id="planLinesMeta" style="font-weight:400;font-size:10.5px"></span></div>
     <div class="planlines" id="planLines"></div>
   </section>
 
@@ -1289,6 +1315,7 @@ function renderPlan(d){
     else if(!firstOpen){cls+=' cur';dot='▶';firstOpen=true;}
     return '<div class="'+cls+'"><span class="dot2">'+dot+'</span><span class="tx">'+esc(s[0]+' · '+s[1])+'</span><span class="pr">'+esc(s[3])+'</span></div>';
   }).join('');
+  if($('#planLinesMeta')) $('#planLinesMeta').textContent=d.lines_meta||'';
   $('#planLines').innerHTML=(d.lines||[]).map(l=>'<div class="ln"><span>'+esc(l.name)+'</span><span><span class="chipx'+(l.jr?' ok':'')+'">见习</span><span class="chipx'+(l.ch?' ok':'')+'">初级</span></span></div>').join('');
   const w=d.watch||{};
   if($('#watchMeta')) $('#watchMeta').textContent=w.last_check?('上次检查 '+String(w.last_check).slice(11,16)):'';

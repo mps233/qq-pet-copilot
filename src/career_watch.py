@@ -35,6 +35,11 @@ UNLOCK_FILE = RUNS / 'career_unlock.json'
 LAST_TREE_SHOT = RUNS / 'career_tree_last.png'
 
 TARGETS_DEFAULT = ('武术家', '梦境旅人', '大明星')
+# 树页 8 列顺序（左→右）：状态一律以职业树实测为准——数字阈值只是粗略近似，
+# 实测存在「数值达标但未解锁」（浅梦行者@智88）与「数值不达标却已解锁」（大厨）并存。
+ALL_LINES = ('流浪散人', '画家', '侦探', '法师', '大厨', '武术家', '梦境旅人', '大明星')
+# 树页左侧的层级标签（位置可能落进最左列判定窗口，需排除，防误判"已解锁"）
+TIER_LABELS = ('见习', '初级', '中级', '高级', '大师')
 # 三条隐藏线「见习」级的已知名字（调研口径；解锁时列格出现该名字）
 FIRST_TIER_NAMES = {'武术家': '习武小童', '梦境旅人': '浅梦行者', '大明星': '偶像练习生'}
 # 截图文件名用 ASCII slug（仪表盘 /files/ 只放行 ASCII 文件名）
@@ -87,7 +92,8 @@ def eval_tree_items(items, targets, win: int, h: int) -> dict:
         hx, hy = hdr
         found = None
         for t, x, y, s in items:
-            if abs(x - hx) <= win and (hy + y_lo_off) <= y <= (hy + y_hi_off) and has_cjk(t):
+            if (abs(x - hx) <= win and (hy + y_lo_off) <= y <= (hy + y_hi_off)
+                    and has_cjk(t) and t.replace(' ', '').strip() not in TIER_LABELS):
                 found = t.strip()
                 break
         states[tgt] = ({'state': 'unlocked', 'name': found} if found
@@ -178,7 +184,8 @@ def check_career_tree(scen, targets=None, log=None) -> dict:
            unlocks: {线: 名字}（两遍确认过的）, shot, w, h}
     """
     log = log or _log
-    targets = list(targets or TARGETS_DEFAULT)
+    event_targets = list(targets or TARGETS_DEFAULT)  # 报事件/通知的线（默认隐藏三线）
+    watch = list(ALL_LINES)  # 实际判定与写回的线：全 8 线（仪表盘板子用）
     result = {'ok': False, 'reason': '', 'attrs': {}, 'states': {},
               'unlocks': {}, 'shot': None}
     started = time.time()
@@ -226,9 +233,10 @@ def check_career_tree(scen, targets=None, log=None) -> dict:
             time.sleep(1.0)
             items = ocr_fullscreen(scen.screen())
 
-        # 两屏横滑拍下隐藏线区域（一屏 4 列，隐藏线在右侧）
+        # 横滑拍两屏（一屏 4 列）：初始左屏（流浪散人~法师）+ 右滑后的右屏（大厨~大明星）
         y = int(0.62 * h)
         view_imgs, views = [], []
+        views.append(items)  # 初始左屏（进树页时已 OCR）
         for _ in range(2):
             scen.dev.d.swipe(int(0.83 * w), y, int(0.24 * w), y, 0.5)
             time.sleep(1.0)
@@ -236,34 +244,52 @@ def check_career_tree(scen, targets=None, log=None) -> dict:
             view_imgs.append(vimg)
             views.append(ocr_fullscreen(vimg))
 
-        states = merge_views(views, targets, win, h)
+        states = merge_views(views, watch, win, h)
 
-        # 候选解锁：滑回再滑过来复读一遍，两遍一致才算数（防 OCR 抖动）
+        # 复读确认（防 OCR 抖动）：滑回左端再滑过来，两遍一致才算数
         if any(v['state'] == 'unlocked' for v in states.values()):
             for _ in range(2):
                 scen.dev.d.swipe(int(0.24 * w), y, int(0.83 * w), y, 0.5)
                 time.sleep(0.8)
-            views2 = []
+            views2 = [ocr_fullscreen(scen.screen())]  # 左屏复读
             for _ in range(2):
                 scen.dev.d.swipe(int(0.83 * w), y, int(0.24 * w), y, 0.5)
                 time.sleep(1.0)
                 views2.append(ocr_fullscreen(scen.screen()))
-            states2 = merge_views(views2, targets, win, h)
-            for tgt in targets:
+            states2 = merge_views(views2, watch, win, h)
+            for tgt in watch:
                 if states[tgt]['state'] == 'unlocked' and states2[tgt]['state'] != 'unlocked':
                     states[tgt] = {'state': 'unknown', 'name': None}  # 两遍不一致，下轮复查
             log('职业哨兵: 复读确认完成: '
                 + '、'.join(f"{t}={'已解锁' if states[t]['state'] == 'unlocked' else states[t]['state']}"
-                           for t in targets))
+                           for t in watch))
+
+        # 8 线状态写回（树实测为准；解锁永久——不因单次读不到而回退）
+        try:
+            udata = load_unlock_data()
+            lines_db = udata.get('lines') or {}
+            now_s = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            for tgt in watch:
+                st = states.get(tgt) or {}
+                if st.get('state') not in ('unlocked', 'locked'):
+                    continue
+                old = lines_db.get(tgt) or {}
+                unlocked = bool(old.get('unlocked')) or st['state'] == 'unlocked'
+                name = st.get('name') or (old.get('name') if old.get('unlocked') else None)
+                lines_db[tgt] = {'unlocked': unlocked, 'name': name, 'at': now_s}
+            udata['lines'] = lines_db
+            save_unlock_data(udata)
+        except Exception as e:
+            log(f'职业哨兵: 8线状态写回失败: {e}')
 
         # 保存最近树页截图
         if view_imgs and _save_img(view_imgs[-1], LAST_TREE_SHOT):
             result['shot'] = LAST_TREE_SHOT.name
 
-        # 汇总结论 + 解锁截图存档
+        # 汇总结论 + 解锁截图存档（事件只报隐藏三线；普通线状态在仪表盘 8 线格子里看）
         unlocks = {}
-        for tgt in targets:
-            if states[tgt]['state'] == 'unlocked':
+        for tgt in event_targets:
+            if tgt in states and states[tgt]['state'] == 'unlocked':
                 name = states[tgt]['name'] or FIRST_TIER_NAMES.get(tgt)
                 unlocks[tgt] = name
                 slug = SHOT_SLUG.get(tgt, 'unlock')
@@ -273,7 +299,7 @@ def check_career_tree(scen, targets=None, log=None) -> dict:
                     unlocks['_shots'][tgt] = shot_name
         result['attrs'] = attrs
         result['states'] = {t: {'state': states[t]['state'], 'name': states[t]['name']}
-                            for t in targets}
+                            for t in watch}
         result['unlocks'] = {k: v for k, v in unlocks.items() if k != '_shots'}
         if '_shots' in unlocks:
             result['unlock_shots'] = unlocks['_shots']
