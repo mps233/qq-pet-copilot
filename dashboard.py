@@ -912,6 +912,20 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 .btnrow2 .savebtn{margin-top:0}
 .savebtn.ghost{background:#fff;color:var(--accent);border:1.5px solid var(--accent)}
 .hide{display:none!important}
+/* 桌面/网页版（≥920px）：手机布局原样保留，宽屏下加宽 + 多列 */
+@media(min-width:920px){
+  header{padding:12px 20px}
+  .hrow,.tabs{max-width:1120px;margin-left:auto;margin-right:auto}
+  .tabs{gap:8px}
+  .tabs button{flex:0 0 auto;padding:7px 22px;font-size:13px}
+  main{max-width:1120px;padding:16px 20px 30px}
+  .grid{grid-template-columns:repeat(6,minmax(0,1fr))}
+  .duoshot{flex:0 0 300px}
+  .thumbs{grid-template-columns:repeat(4,minmax(0,1fr))}
+  #setForm{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 34px;align-items:start}
+  #setForm .fsec:nth-child(1),#setForm .fsec:nth-child(2){margin-top:0}
+  pre#logbox{height:58vh}
+}
 </style>
 </head>
 <body>
