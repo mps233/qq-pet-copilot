@@ -350,8 +350,20 @@ def config_summary() -> dict:
     def n_per_day(n):
         return '不限次' if not n else f'{n} 次/天'
 
+    # 今日策略：按**配额**判断，而不是只看 school_enabled——配额才是当天实际安排
+    # （work_quota=0 就是"今天不打工"，此时不该再写"学习 + 打工"）
+    sq = sched.get('study_quota_hours', 0) or 0
+    wq = sched.get('work_quota_hours', 0) or 0
+    work_on = bool((tasks.get('work') or {}).get('enabled', True))
+    if wq <= 0 or not work_on:
+        strategy = '只学习' if (sq > 0 and school_enabled) else '不学习不打工'
+    elif sq <= 0 or not school_enabled:
+        strategy = '只打工'
+    else:
+        strategy = f'学习 {sq}h + 打工 {wq}h'
+
     rows = [
-        ['调度策略', '只打工不学习' if not school_enabled else '学习 + 打工'],
+        ['调度策略', strategy],
         ['调度引擎', str(runner.get('engine', 'task_queue'))],
         ['打工', f"{work.get('location', '')} · {work.get('duration', '')} · {n_per_day(work.get('times_per_day'))}"],
         ['金币阈值', f"{sched.get('coin_threshold', '-')}（低于优先打工）"],
@@ -368,8 +380,9 @@ def config_summary() -> dict:
         ['通知', 'macOS 桌面通知' + (' + OnePush' if str(notify.get('onepush_config', '')).strip() else '')],
     ]
     return {
-        'strategy': '只打工不学习' if not school_enabled else '学习+打工',
+        'strategy': strategy,
         'school_enabled': school_enabled,
+        'work_enabled': work_on,
         'work_location': work.get('location'),
         'work_duration': work.get('duration'),
         'coin_threshold': sched.get('coin_threshold'),
@@ -960,6 +973,15 @@ main{padding:12px;max-width:560px;margin:0 auto;display:flex;flex-direction:colu
 .tile .k{font-size:11px;color:var(--sub);margin-top:2px}
 .bar{height:4px;background:#eef0f4;border-radius:2px;overflow:hidden;margin-top:7px}
 .bar>i{display:block;height:100%;background:var(--accent);width:0;border-radius:2px}
+/* 学习/打工合并瓦片：普通 1 格（内容很少，双宽会破坏栅格节奏）；
+   进度条分两段叠加——学习段（橙）在左、打工段（蓝）紧随其后，共同表示已用/总预算。
+   用默认的 row 方向（不要 row-reverse：那会让起点翻到右侧，进度从右往左长）。
+   类名用 bar-split（不能用 sw——.sw 是设置页开关的类名，会把进度条
+   渲染成 46x26 圆角灰底带白点的开关形状）。 */
+.bar.bar-split{display:flex}
+.bar.bar-split>i{flex:none}
+.bar.bar-split>i#swBarSchool{background:var(--accent)}
+.bar.bar-split>i#swBarWork{background:#0ea5e9}
 .qhead{display:flex;justify-content:space-between;font-size:12px;color:var(--sub);margin-bottom:6px;font-variant-numeric:tabular-nums}
 .qgrp{font-size:10.5px;color:var(--sub);letter-spacing:.06em;margin:10px 0 2px}
 .mrow{display:flex;gap:10px;padding:9px 2px;border-top:1px solid var(--line);align-items:center}
@@ -1001,12 +1023,23 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 .duo{display:flex;gap:10px;align-items:stretch}
 .duoshot{flex:0 0 46%;min-width:0}
 .duoque{flex:1;min-width:0}
-#shotLink{display:block;position:relative}
-#phoneShot{display:block;width:100%;height:auto;border-radius:8px;border:1px solid var(--line);background:#eef0f4;min-height:48px;color:transparent}
-#shotLink.loading::before{content:"画面加载中…";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--sub);background:#eef0f4;border:1px solid var(--line);border-radius:8px;min-height:64px}
+/* 手机画面卡：图片左右贴到卡片边缘（full-bleed）、下方不留占位。
+   标题行改成 flex：左"手机画面 + 拍摄时间"、右"刷新"按钮 —— 按钮**在标题行内**
+   （不用绝对定位，否则会浮到画面上遮住画面）。卡片只保留标题行内边距。 */
+.duoshot.card{padding:0;overflow:hidden;position:relative;display:flex;flex-direction:column}
+.duoshot>h2{padding:12px 14px 8px;margin:0;display:flex;align-items:center;gap:8px;flex-wrap:nowrap}
+.duoshot>h2 .shotttl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.duoshot>h2 .shotctl{margin-left:auto}
+#shotLink{display:block;position:relative;line-height:0}
+/* 画面贴满：无圆角、无边框（截图比例与设备一致、无黑边） */
+#phoneShot{display:block;width:100%;height:auto;border-radius:0;background:#eef0f4;min-height:48px;color:transparent}
+#shotLink.loading::before{content:"画面加载中…";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--sub);background:#eef0f4;min-height:64px}
 #shotLink.loading.failed::before{content:"获取失败，稍后自动重试…";color:#b45309}
 #shotLink.loading #phoneShot{visibility:hidden}
-.duoshot .shotctl{flex-wrap:wrap;gap:4px 8px}
+/* 标题行内的刷新按钮（常规控件样式，跟随主题；不像浮层那样遮挡画面） */
+.duoshot .shotctl{flex-wrap:nowrap;gap:6px;margin:0;padding:0;justify-content:flex-end}
+.duoshot .shotctl button{padding:4px 10px;font-size:11.5px}
+.duoshot .shotctl .err{font-size:11px}
 .duoque .qhead{flex-wrap:wrap;gap:2px 8px;font-size:11.5px}
 .duoque .tasklist .row{font-size:13px;padding:7px 0;flex-wrap:wrap;gap:2px 6px}
 .duoque .tasklist .t{gap:5px}
@@ -1101,7 +1134,7 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
 /* 平板/中窗（640–919px）：比手机版用更宽的版心和更多列 */
 @media(min-width:640px){
   main{max-width:720px}
-  .grid{grid-template-columns:repeat(7,minmax(0,1fr))}
+  .grid{grid-template-columns:repeat(6,minmax(0,1fr))}
   .thumbs{grid-template-columns:repeat(4,minmax(0,1fr))}
   .duoshot{flex:0 0 240px}
   #setForm{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 28px;align-items:start}
@@ -1131,7 +1164,7 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
   .tabs{gap:8px}
   .tabs button{flex:0 0 auto;padding:7px 22px;font-size:13px}
   main{max-width:1120px;padding:16px 20px 30px}
-  .grid{grid-template-columns:repeat(7,minmax(0,1fr))}
+  .grid{grid-template-columns:repeat(6,minmax(0,1fr))}
   .duoshot{flex:0 0 300px}
   .thumbs{grid-template-columns:repeat(4,minmax(0,1fr))}
   #setForm{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 34px;align-items:start}
@@ -1229,16 +1262,16 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
     <div class="tile"><div class="v" id="visitTxt">--</div><div class="k">今日踩踩</div><div class="bar"><i id="visitBar"></i></div></div>
     <div class="tile"><div class="v" id="pkTxt">--</div><div class="k">今日PK</div><div class="bar"><i id="pkBar"></i></div></div>
     <div class="tile"><div class="v" id="advTxt">--</div><div class="k">今日冒险</div></div>
-    <div class="tile"><div class="v" id="schoolCnt">--</div><div class="k" id="schoolLbl">今日学习</div><div class="bar"><i id="schoolBar"></i></div></div>
-    <div class="tile"><div class="v" id="workCnt">--</div><div class="k" id="workLbl">今日打工</div><div class="bar"><i id="workBar"></i></div></div>
+    <div class="tile"><div class="v" id="swTxt">--</div><div class="k" id="swLbl">今日学习 / 打工</div><div class="bar bar-split"><i id="swBarSchool"></i><i id="swBarWork"></i></div></div>
     <div class="tile"><div class="v" id="expTxt">--</div><div class="k">经验日常</div></div>
   </section>
 
   <section class="duo" data-page="main">
     <div class="card duoshot">
-      <h2>手机画面 <span id="shotMeta" style="font-weight:400;font-size:10.5px"></span></h2>
+      <h2><span class="shotttl">手机画面 <span id="shotMeta" style="font-weight:400;font-size:10.5px"></span></span>
+        <span class="shotctl"><button id="btnShot">刷新</button><span id="shotErr" class="err"></span></span>
+      </h2>
       <a id="shotLink" class="loading" href="/api/screenshot" target="_blank" rel="noopener"><img id="phoneShot" alt="加载中…"></a>
-      <div class="shotctl"><button id="btnShot">刷新</button><span id="shotErr" class="err"></span></div>
     </div>
     <div class="card duoque">
       <h2>任务队列</h2>
@@ -1359,27 +1392,37 @@ function renderData(d){
   $('#pkBar').style.width=(pp!=null?Math.min(100,pp/ppMax*100):0)+'%';
   const av=pg.adventure&&pg.adventure.learned!=null?pg.adventure.learned:0;
   $('#advTxt').textContent=av+'/'+(cfg.adventure_times||1);
-  // 今日学习/打工：主数值 = 当天完成次数，+1 = 当前正在进行的那一次；
-  // 标签里附配额进度（已用小时/配额小时），一眼看出离配额多远。
-  // 注意 kind 必须参与判断——work_eta 是"学习/打工/冒险"共用模板，只判有无会把
-  // "正在上课"错算成"正在打工"（曾显示 0+1 实际在上课）。冒险另有 advTxt，不在此列。
+  // 今日学习 / 打工（合并一张卡：两者共享同一份合计预算，放一起才看得出分配）
+  // 主数值 = 学习节数 + 打工次数（当前正在进行的那一项 +1）；进度条分两段叠加显示
+  // 学习/打工占比。注意 kind 必须参与判断——work_eta 是"上课/打工/冒险"共用模板，
+  // 只判有无会把"正在上课"错算成"正在打工"（曾显示 0+1 实际在上课）。
   const etaKind=(d.work_eta&&d.work_eta.kind)?String(d.work_eta.kind):'';
   const busy=(schedOn&&etaRemain!=null);
   const hrs=s=>((s||0)/3600).toFixed(1).replace(/\.0$/,'');
   const sc=pg.school&&pg.school.learned!=null?pg.school.learned:0;
-  const scHrs=hrs(pg.school&&pg.school.study_secs);
+  const scHrs=Number(hrs(pg.school&&pg.school.study_secs));
   const scQuota=cfg.study_quota_hours||0;
-  $('#schoolCnt').textContent=(busy&&etaKind.indexOf('上课')>=0)?(sc+1):sc;
-  $('#schoolLbl').textContent='今日学习'+(scQuota?(' · '+scHrs+'/'+scQuota+'h'):'');
-  $('#schoolCnt').title=sc+' 节，已学 '+scHrs+' 小时'+(scQuota?('（配额 '+scQuota+' 小时）'):'');
-  $('#schoolBar').style.width=(scQuota?Math.min(100,scHrs/scQuota*100):0)+'%';
   const wk=pg.work&&pg.work.learned!=null?pg.work.learned:0;
-  const wkHrs=hrs(pg.work&&pg.work.work_secs);
+  const wkHrs=Number(hrs(pg.work&&pg.work.work_secs));
   const wkQuota=cfg.work_quota_hours||0;
-  $('#workCnt').textContent=(busy&&etaKind.indexOf('打工')>=0)?(wk+1):wk;
-  $('#workLbl').textContent='今日打工'+(wkQuota?(' · '+wkHrs+'/'+wkQuota+'h'):'');
-  $('#workCnt').title=wk+' 次，已打 '+wkHrs+' 小时'+(wkQuota?('（配额 '+wkQuota+' 小时）'):'');
-  $('#workBar').style.width=(wkQuota?Math.min(100,wkHrs/wkQuota*100):0)+'%';
+  const scBusy=busy&&etaKind.indexOf('上课')>=0;
+  const wkBusy=busy&&etaKind.indexOf('打工')>=0;
+  // 主数值：学习N节(+1) / 打工M次(+1)；两者都为0且无进行中时简显示 0
+  const scTxt=sc+(scBusy?1:0), wkTxt=wk+(wkBusy?1:0);
+  $('#swTxt').textContent=(scBusy||sc>0||wkBusy||wk>0)
+    ? ('学 '+scTxt+' · 工 '+wkTxt) : '0';
+  // 总预算 = 学习配额 + 打工配额（两者共享）；进度条按"已用/总预算"分两段
+  const totalQuota=scQuota+wkQuota;
+  const totalUsed=scHrs+wkHrs;
+  const pct=v=>totalQuota?Math.min(100,Math.max(0,v/totalQuota*100)):0;
+  $('#swBarSchool').style.width=pct(scHrs)+'%';
+  $('#swBarWork').style.width=pct(wkHrs)+'%';
+  $('#swLbl').textContent='学习 / 打工'
+    +(totalQuota?(' · '+totalUsed.toFixed(1).replace(/\.0$/,'')+'/'+totalQuota+'h'):'');
+  $('#swTxt').title='学习 '+sc+' 节（'+scHrs+'h'
+    +(scQuota?('/'+scQuota+'h'):'')+'）· 打工 '+wk+' 次（'+wkHrs+'h'
+    +(wkQuota?('/'+wkQuota+'h'):'')+'）'
+    +((scBusy||wkBusy)?(' · 正在进行：'+(d.work_eta.kind||'')):'');
   const ed=(pg.exp_daily&&pg.exp_daily.done)?'✓ 完成':'未完成';
   $('#expTxt').textContent=ed;
   // 队列：MAA 风格任务开关列表（勾选=启用该任务，写入 config 下轮生效）
@@ -1456,8 +1499,16 @@ function renderData(d){
   }
   if(d.editable && !setDirty) renderSettings(d.editable);
   renderCfg((d.config||{}).rows);
-  // footer
-  $('#footStrategy').textContent='策略：'+(cfg.strategy||'未知')+(cfg.work_duration?(' · 打工 '+cfg.work_duration+' @ '+cfg.work_location):'');
+  // footer：策略按配额（cfg.strategy 已算好）；打工地点/时长只在打工确实启用时附上，
+  // 否则会出现"策略：只学习 · 打工 45分钟 @ 风铃旅社"这种自相矛盾的文案
+  let foot='策略：'+(cfg.strategy||'未知');
+  if(cfg.work_enabled&&(cfg.work_quota_hours||0)>0&&cfg.work_duration){
+    foot+=' · 打工 '+cfg.work_duration+' @ '+(cfg.work_location||'');
+  }
+  if((cfg.study_quota_hours||0)>0){
+    foot+=' · 学习配额 '+cfg.study_quota_hours+'h';
+  }
+  $('#footStrategy').textContent=foot;
 }
 
 async function refreshData(){
