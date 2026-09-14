@@ -12,7 +12,7 @@ from .config import find_adb, load_config
 from .locators import LOCATORS, ocr_screen
 from .locators import see as locate
 from .locators import see_all as locate_all
-from .ocr import parse_employed_ratio, parse_employed_remaining
+from .ocr import ocr_fullscreen, parse_employed_ratio, parse_employed_remaining
 from .progress import (
     HIRE_FRIEND_PROGRESS_FILE,
     count_cross,
@@ -148,6 +148,23 @@ class DeviceScenario:
     def see_all(self, name: str, screen=None):
         """定位 name 的所有命中（OCR 多点），按从上到下排序。"""
         return locate_all(self.dev, name, screen)
+
+    # ---- 游戏疲劳提示（"学习/打工太久"） ----
+
+    # 学园课程面板 / 打工面板底部的疲劳提示（含玩家手动游玩时间，工具账本之外的
+    # 权威信号）："提示：我今天学习/打工太久，要学不进去啦（本次…）"，
+    # 打工面板同句、结尾是"要干不动啦"。OCR 偶读成"千不动"，关键词取"太久"稳。
+    FATIGUE_KEYS = ('学习/打工太久', '打工太久')
+
+    def _screen_has_fatigue(self, screen=None) -> bool:
+        """当前屏幕是否是疲劳提示态（面板底部有"我今天学习/打工太久"提示行）。"""
+        if screen is None:
+            screen = self.screen()
+        try:
+            texts = ocr_fullscreen(screen)
+        except Exception:
+            return False
+        return any(k in t for t, *_ in texts for k in self.FATIGUE_KEYS)
 
     def click(self, x: int, y: int) -> None:
         log(f'点击 ({x}, {y})')
