@@ -1059,13 +1059,13 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 .duoshot .shoterr{grid-area:err;padding:0 14px;font-size:11px}
 .duoshot .shoterr:empty{display:none}
 .duoshot .shoterr:not(:empty){padding-bottom:10px}
-/* 卡片 <240px 放不下"完整标题 + 刷新" → 按钮移到画面下方（左对齐）。
+/* 卡片 <240px 放不下"完整标题 + 刷新" → 按钮移到画面下方（居中）。
    240 而非 230：实测 230px 临界点上标题会被压到 23px（"手机画面"被截），
    留 10px 余量规避 CSS 圆整/字体差异导致的临界抖动。 */
 @container (max-width:239px){
   .duoshot.card{grid-template-columns:1fr;grid-template-areas:"title" "shot" "ctl" "err"}
   .duoshot>h2{padding:12px 14px 8px}
-  .duoshot .shotctl{padding:8px 14px 10px;justify-content:flex-start}
+  .duoshot .shotctl{padding:8px 0 10px;justify-content:center}
 }
 .duoque .qhead{flex-wrap:wrap;gap:2px 8px;font-size:11.5px}
 .duoque .tasklist .row{font-size:13px;padding:7px 0;flex-wrap:wrap;gap:2px 6px}
