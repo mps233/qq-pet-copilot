@@ -1023,23 +1023,39 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 .duo{display:flex;gap:10px;align-items:stretch}
 .duoshot{flex:0 0 46%;min-width:0}
 .duoque{flex:1;min-width:0}
-/* 手机画面卡：图片左右贴到卡片边缘（full-bleed）、下方不留占位。
-   标题行改成 flex：左"手机画面 + 拍摄时间"、右"刷新"按钮 —— 按钮**在标题行内**
-   （不用绝对定位，否则会浮到画面上遮住画面）。卡片只保留标题行内边距。 */
-.duoshot.card{padding:0;overflow:hidden;position:relative;display:flex;flex-direction:column}
-.duoshot>h2{padding:12px 14px 8px;margin:0;display:flex;align-items:center;gap:8px;flex-wrap:nowrap}
-.duoshot>h2 .shotttl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.duoshot>h2 .shotctl{margin-left:auto}
-#shotLink{display:block;position:relative;line-height:0}
+/* 手机画面卡：图片左右贴满卡片、下方不留占位。
+   用 grid-template-areas 摆位（DOM 顺序固定为 标题/图片/按钮，不改结构）：
+     宽卡片 → 标题与「刷新」同一行，图片占满下一行
+     窄卡片 → 刷新按钮移到**画面下方**（左对齐）
+   **用容器查询而不是视口断点**：卡片宽度 = 视口 × 46%（宽屏 44%/240/300px），
+   同一视口下不同断点的卡片宽度差很大，而"标题+刷新"约需 168px——
+   按视口断点会在 400~460px 视口（卡片仅 ~184px）漏判，按钮被挤成"刷/新"竖排。
+   容器查询按卡片自身宽度判断，任何布局下都准确。 */
+.duoshot.card{
+  container-type:inline-size;
+  padding:0;overflow:hidden;position:relative;
+  display:grid;grid-template-columns:1fr auto;
+  grid-template-areas:"title ctl" "shot shot";
+}
+.duoshot>h2{grid-area:title;padding:12px 0 8px 14px;margin:0;min-width:0;display:flex;align-items:center}
+.duoshot>h2 .shotttl{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#shotLink{grid-area:shot;display:block;position:relative;line-height:0}
 /* 画面贴满：无圆角、无边框（截图比例与设备一致、无黑边） */
 #phoneShot{display:block;width:100%;height:auto;border-radius:0;background:#eef0f4;min-height:48px;color:transparent}
 #shotLink.loading::before{content:"画面加载中…";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--sub);background:#eef0f4;min-height:64px}
 #shotLink.loading.failed::before{content:"获取失败，稍后自动重试…";color:#b45309}
 #shotLink.loading #phoneShot{visibility:hidden}
-/* 标题行内的刷新按钮（常规控件样式，跟随主题；不像浮层那样遮挡画面） */
-.duoshot .shotctl{flex-wrap:nowrap;gap:6px;margin:0;padding:0;justify-content:flex-end}
-.duoshot .shotctl button{padding:4px 10px;font-size:11.5px}
+/* 刷新按钮（常规控件样式，跟随主题；不像浮层那样遮挡画面） */
+.duoshot .shotctl{grid-area:ctl;align-self:center;margin:0;padding:12px 14px 8px 6px;display:flex;flex-wrap:nowrap;gap:6px;justify-content:flex-end}
+.duoshot .shotctl button{padding:4px 10px;font-size:11.5px;white-space:nowrap;flex:0 0 auto}
 .duoshot .shotctl .err{font-size:11px}
+/* 卡片太窄（<230px）放不下"标题+刷新" → 刷新移到画面下方。
+   不用视口断点：400~460px 视口下卡片只有 ~184px，按视口判断会漏掉。 */
+@container (max-width:229px){
+  .duoshot.card{grid-template-columns:1fr;grid-template-areas:"title" "shot" "ctl"}
+  .duoshot>h2{padding:12px 14px 8px}
+  .duoshot .shotctl{padding:8px 14px 10px;justify-content:flex-start}
+}
 .duoque .qhead{flex-wrap:wrap;gap:2px 8px;font-size:11.5px}
 .duoque .tasklist .row{font-size:13px;padding:7px 0;flex-wrap:wrap;gap:2px 6px}
 .duoque .tasklist .t{gap:5px}
@@ -1268,10 +1284,9 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
 
   <section class="duo" data-page="main">
     <div class="card duoshot">
-      <h2><span class="shotttl">手机画面 <span id="shotMeta" style="font-weight:400;font-size:10.5px"></span></span>
-        <span class="shotctl"><button id="btnShot">刷新</button><span id="shotErr" class="err"></span></span>
-      </h2>
+      <h2><span class="shotttl">手机画面 <span id="shotMeta" style="font-weight:400;font-size:10.5px"></span></span></h2>
       <a id="shotLink" class="loading" href="/api/screenshot" target="_blank" rel="noopener"><img id="phoneShot" alt="加载中…"></a>
+      <div class="shotctl"><button id="btnShot">刷新</button><span id="shotErr" class="err"></span></div>
     </div>
     <div class="card duoque">
       <h2>任务队列</h2>
