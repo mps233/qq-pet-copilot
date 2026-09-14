@@ -1021,21 +1021,27 @@ pre#logbox{height:46vh;min-height:250px;overflow:auto;background:#0f1116;color:#
 .thumbs .cap{position:absolute;left:0;right:0;bottom:0;background:rgba(15,17,22,.72);color:#fff;font-size:10px;padding:2px 6px;text-align:center}
 footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;line-height:1.7}
 .duo{display:flex;gap:10px;align-items:stretch}
-.duoshot{flex:0 0 46%;min-width:0}
+.duoshot-wrap{flex:0 0 46%;min-width:0}
 .duoque{flex:1;min-width:0}
 /* 手机画面卡：图片左右贴满卡片、下方不留占位。
+   **窄卡片时「刷新」移到画面下方**（否则会把标题挤成"手机画面…"、"拍摄 01:xx" 丢失）。
    用 grid-template-areas 摆位（DOM 顺序固定为 标题/图片/按钮，不改结构）：
-     宽卡片 → 标题与「刷新」同一行，图片占满下一行
-     窄卡片 → 刷新按钮移到**画面下方**（左对齐）
-   **用容器查询而不是视口断点**：卡片宽度 = 视口 × 46%（宽屏 44%/240/300px），
-   同一视口下不同断点的卡片宽度差很大，而"标题+刷新"约需 168px——
-   按视口断点会在 400~460px 视口（卡片仅 ~184px）漏判，按钮被挤成"刷/新"竖排。
-   容器查询按卡片自身宽度判断，任何布局下都准确。 */
+     宽卡片 → 标题行: [手机画面 拍摄 01:xx] [刷新]，图片占满下一行
+     窄卡片 → 标题 / 图片 / [刷新]（按钮左对齐、在画面下方）
+
+   判断依据用**容器查询**而非视口断点：卡片宽度 = 视口 × 46%（宽屏 44%/240/300px），
+   按视口断点会在 400~460px 视口（卡片仅 ~184px）漏判。
+   注意：元素不能被自身的容器查询命中——所以 container-type 放在外层包装
+   .duoshot-wrap 上，@container 规则作用于内层 .duoshot.card（曾写在同一个元素上，
+   规则永不匹配、按钮一直挤在标题行，实测踩坑）。
+   临界值：实测量得完整标题 ~107px + 按钮 45px + 内边距/间距 34px ≈ 186px，
+   取 230px 作断点留足余量（含 meta 未加载 / 字体差异）。 */
+.duoshot-wrap{container-type:inline-size;min-width:0;display:flex}
 .duoshot.card{
-  container-type:inline-size;
+  flex:1;min-width:0;
   padding:0;overflow:hidden;position:relative;
   display:grid;grid-template-columns:1fr auto;
-  grid-template-areas:"title ctl" "shot shot";
+  grid-template-areas:"title ctl" "shot shot" "err err";
 }
 .duoshot>h2{grid-area:title;padding:12px 0 8px 14px;margin:0;min-width:0;display:flex;align-items:center}
 .duoshot>h2 .shotttl{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -1048,11 +1054,16 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 /* 刷新按钮（常规控件样式，跟随主题；不像浮层那样遮挡画面） */
 .duoshot .shotctl{grid-area:ctl;align-self:center;margin:0;padding:12px 14px 8px 6px;display:flex;flex-wrap:nowrap;gap:6px;justify-content:flex-end}
 .duoshot .shotctl button{padding:4px 10px;font-size:11.5px;white-space:nowrap;flex:0 0 auto}
-.duoshot .shotctl .err{font-size:11px}
-/* 卡片太窄（<230px）放不下"标题+刷新" → 刷新移到画面下方。
-   不用视口断点：400~460px 视口下卡片只有 ~184px，按视口判断会漏掉。 */
-@container (max-width:229px){
-  .duoshot.card{grid-template-columns:1fr;grid-template-areas:"title" "shot" "ctl"}
+/* 错误提示独立占一行（原先放在 .shotctl 里会与标题/按钮抢同一行宽度，
+   把"手机画面 拍摄 01:xx"挤到截断）；空时不占高度（:empty） */
+.duoshot .shoterr{grid-area:err;padding:0 14px;font-size:11px}
+.duoshot .shoterr:empty{display:none}
+.duoshot .shoterr:not(:empty){padding-bottom:10px}
+/* 卡片 <240px 放不下"完整标题 + 刷新" → 按钮移到画面下方（左对齐）。
+   240 而非 230：实测 230px 临界点上标题会被压到 23px（"手机画面"被截），
+   留 10px 余量规避 CSS 圆整/字体差异导致的临界抖动。 */
+@container (max-width:239px){
+  .duoshot.card{grid-template-columns:1fr;grid-template-areas:"title" "shot" "ctl" "err"}
   .duoshot>h2{padding:12px 14px 8px}
   .duoshot .shotctl{padding:8px 14px 10px;justify-content:flex-start}
 }
@@ -1139,7 +1150,7 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
 /* 窄屏（≤639px）：保留左右双栏，任务行紧凑化（隐藏类型标签、缩小字号、不折行） */
 @media(max-width:639px){
-  .duoshot{flex:0 0 44%}
+  .duoshot-wrap{flex:0 0 44%}
   .mrow{gap:8px;padding:8px 0}
   .mcb{width:18px;height:18px;border-radius:5px}
   .mcb.on::after{font-size:11px}
@@ -1152,7 +1163,7 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
   main{max-width:720px}
   .grid{grid-template-columns:repeat(6,minmax(0,1fr))}
   .thumbs{grid-template-columns:repeat(4,minmax(0,1fr))}
-  .duoshot{flex:0 0 240px}
+  .duoshot-wrap{flex:0 0 240px}
   #setForm{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 28px;align-items:start}
   #setForm .fsec:nth-child(1),#setForm .fsec:nth-child(2){margin-top:0}
 }
@@ -1168,7 +1179,7 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
   .tile .v{font-size:17px}
   .grid{gap:6px}
   .duo{flex-direction:column}
-  .duoshot{flex:none}
+  .duoshot-wrap{flex:none}
   .advlist .ai{width:96px}
   .form select,.form input[type=number],.form input[type=text]{max-width:52%}
   .form input[type=text]{width:126px}
@@ -1181,7 +1192,7 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
   .tabs button{flex:0 0 auto;padding:7px 22px;font-size:13px}
   main{max-width:1120px;padding:16px 20px 30px}
   .grid{grid-template-columns:repeat(6,minmax(0,1fr))}
-  .duoshot{flex:0 0 300px}
+  .duoshot-wrap{flex:0 0 300px}
   .thumbs{grid-template-columns:repeat(4,minmax(0,1fr))}
   #setForm{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 34px;align-items:start}
   #setForm .fsec:nth-child(1),#setForm .fsec:nth-child(2){margin-top:0}
@@ -1283,10 +1294,13 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
   </section>
 
   <section class="duo" data-page="main">
-    <div class="card duoshot">
-      <h2><span class="shotttl">手机画面 <span id="shotMeta" style="font-weight:400;font-size:10.5px"></span></span></h2>
-      <a id="shotLink" class="loading" href="/api/screenshot" target="_blank" rel="noopener"><img id="phoneShot" alt="加载中…"></a>
-      <div class="shotctl"><button id="btnShot">刷新</button><span id="shotErr" class="err"></span></div>
+    <div class="duoshot-wrap">
+      <div class="card duoshot">
+        <h2><span class="shotttl">手机画面 <span id="shotMeta" style="font-weight:400;font-size:10.5px"></span></span></h2>
+        <a id="shotLink" class="loading" href="/api/screenshot" target="_blank" rel="noopener"><img id="phoneShot" alt="加载中…"></a>
+        <div class="shotctl"><button id="btnShot">刷新</button></div>
+        <div id="shotErr" class="err shoterr"></div>
+      </div>
     </div>
     <div class="card duoque">
       <h2>任务队列</h2>
