@@ -35,6 +35,7 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from src.fatigue import mark_fatigue
 from src.locators import see_bounds
 from src.ocr import ocr_texts
 from src.progress import (
@@ -145,6 +146,12 @@ class FriendHireScenario(FriendCareScenario):
         # 不是则走重选分支——back 重置 -> OCR 找配置地点 -> 点击进入，仍不行回主页面
         # 重新进小镇再选（此时 hire 已生效/CD 已起，重选的是自己干活的打工面板）
         work.select_place()
+        if self._screen_has_fatigue():
+            # 游戏疲劳提示：只记录，不据此拦停——是否停止由调度层按合计时长
+            # 分层判定（第一层 8~12h 仍可继续，第二层 >=12h 才禁止）
+            mark_fatigue('hire_friend')
+            log('检测到游戏疲劳提示"学习/打工太久"（已记录，'
+                '是否停止由调度层按合计时长分层判定）')
         self._select_job()
         # work_start 没出现时，先处理"去照顾一下"弹窗（护理 + back 回工作面板，同 work.py）
         if not work._has_work_start():
@@ -240,6 +247,8 @@ class FriendHireScenario(FriendCareScenario):
             else:
                 raise last_err or RuntimeError('雇佣好友: 列表里的好友都不在轮播里')
             self.wait_hire_ready()
+            # 游戏疲劳提示不再在此拦停（场景层只记录，是否停止由调度层按合计时长
+            # 分层判定：第一层 8~12h 仍可继续，第二层 >=12h 才禁止），故不再捕获异常
             self._hire_and_work()
             if self.defer_wait:
                 # 延时收尾模式：计数在 pending 收尾时统一进行（_count_hire_and_work），

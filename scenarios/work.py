@@ -33,6 +33,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from src.fatigue import mark_fatigue
 from src.locators import OCR_MIN_SCORE, locate_cached
 from src.ocr import find_text, ocr_fullscreen, parse_panel_location
 from src.progress import (
@@ -465,6 +466,12 @@ class WorkScenario(DeviceScenario):
                 log('本轮结束，回主页面重新开始')
                 continue
             self.select_place()
+            if self._screen_has_fatigue():
+                # 游戏疲劳提示：只记录，不据此处拦停——是否停止打工由调度层按
+                # 合计时长分层判定（第一层 8~12h 仍可继续，第二层 >=12h 才禁止）
+                mark_fatigue('work')
+                log('检测到游戏疲劳提示"学习/打工太久"（已记录，'
+                    '是否停止由调度层按合计时长分层判定）')
             self.select_job()
             self.hire_friend()
             # work_start 没出现时，先处理"去照顾一下"弹窗（护理 + back 回工作面板）
