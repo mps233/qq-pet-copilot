@@ -93,7 +93,7 @@ COURSE30_NAMES = {
     '初级学园': {'力量': '田径运动课', '智力': '世界地理课', '魅力': '演说表达课',
                 '夏令营': '萌芽夏令营'},
 }
-# 面板标题识别规则（在选课页检测，页面只有一个学园标题，不需要靠编号/后缀防误判）：
+# 面板标题识别规则（在选课页检测）：
 # - 初级/中级/高级学园：形如"初级学园 5年级"（年级可省略）
 # - 进修学院：形如"进修学院 研修生12" / "进修学院 研修生Ⅰ"，真实 OCR 常把编号
 #   （Ⅰ/Ⅱ 等罗马数字实际ocr可能出现缺读）（如"进修学院研修生"），
@@ -101,6 +101,15 @@ COURSE30_NAMES = {
 _STAGE_RE = re.compile(
     r'(初级学园|中级学园|高级学园)(?:\s*[\d一二三四五六七八九十]+\s*年级)?'
     r'|(进修学院)(?:\s*研修生)?')
+# **带年级后缀**的标题（如"中级学园1年级"）——只有选课面板标题长这样；
+# 地图上的学校名（"中级学园"）、顶部状态栏（"初级学园✓"）都没有年级。
+# 实测踩坑（2026-09-15 升中级后）：页面同时出现
+#   y=50 "初级学园"（顶部状态栏，是已毕业的旧学园）
+#   y=527 "中级学园"（地图）
+#   y=1071 "中级学园1年级"（选课面板标题 ← 这才是当前学园）
+# 取第一个匹配会命中"初级学园"，导致阶段判定错误（属性→选框映射会用错顺序）。
+_STAGE_TITLE_RE = re.compile(
+    r'(初级学园|中级学园|高级学园)\s*[\d一二三四五六七八九十]+\s*年级')
 
 PROGRESS_FILE = SCHOOL_PROGRESS_FILE
 
@@ -324,22 +333,49 @@ class SchoolScenario(DeviceScenario):
             self._drag_card_step()
         return False
 
-    DURATION_RE = re.compile(r'(?:用时|时长|时间)\D{0,4}(\d+)\s*分钟')
+    # 详情面板的"用时:XX分钟"标签。**要求标签后紧跟冒号**再是数字——
+    # 早期用 (?:用时|时长|时间)\D{0,4}(\d+) 放宽匹配，会把同屏别的行（如
+    # "上课时间 10:00"）也吃进来，故收紧为必须带冒号。
+    DURATION_RE = re.compile(r'(?:用时|时长)[：:]\s*(\d+)\s*分钟')
+    # 「用时:1小时」形式（中级学园实测有此档，=60 分钟）
+    DURATION_HOUR_RE = re.compile(r'(?:用时|时长)[：:]\s*(\d+(?:\.\d+)?)\s*小时')
+    # 课时时长的**合理性区间**（分钟）：只用于挡 OCR 明显读错的值（如把 10 读成
+    # 1000），**不是档位白名单**——各学园档位不同且会变：初级 10/30、中级 20/60（实测
+    # 2026-09-15：中级课程卡片显示"用时:20分钟"/"用时:1小时"）、高级疑似 30/90。
+    # 所以只要落在 5~180 分钟内就接受，不再枚举具体档位。
+    DURATION_MIN, DURATION_MAX = 5, 180
 
     def read_course_duration(self, results=None) -> str | None:
         """从课程详情面板读**实际课时时长**，返回 "N分钟"；读不到返回 None。
 
-        各学园的课时档位不同且会变（初级 10/30、高级疑似 30/90…），所以不预设
-        档位表，直接读面板上的「用时:XX分钟」标签。**只认这个标签**——曾用"学分反推"
-        兜底（10分课+10/30分课+25），但学分与档位的对应关系并不线性、各学园也不同，
-        外推出来的分钟数完全不准确，故已移除；读不到就返回 None，由调用方回退配置值。
+        各学园的课时档位不同且会变（初级 10/30、中级 20/60、高级疑似 30/90…），
+        所以不预设档位表，直接读面板上的「用时:XX分钟」/「用时:X小时」标签。
+        **只认这个标签**——曾用"学分反推"兜底，但学分与档位并非线性、各学院也不同，
+        外推完全不准确，故已移除。读不到/超出合理区间时返回 None，由调用方按档位回退。
+
+        每次命中都记日志（含原文），便于事后核对是否符合该学园的实际档位。
         """
         if results is None:
             results = ocr_texts(self.screen())
         for t, *_ in results:
-            m = self.DURATION_RE.search(t.replace(' ', ''))
+            flat = t.replace(' ', '')
+            mins = None
+            m = self.DURATION_RE.search(flat)
             if m:
-                return f'{int(m.group(1))}分钟'
+                mins = int(m.group(1))
+            else:
+                # 「用时:1小时」——中级学园实测有此档（=60分钟）
+                m = self.DURATION_HOUR_RE.search(flat)
+                if m:
+                    mins = int(float(m.group(1)) * 60)
+            if mins is None:
+                continue
+            if not (self.DURATION_MIN <= mins <= self.DURATION_MAX):
+                log(f'课时时长读取: 忽略明显异常值 {mins}分钟（原文 {t[:40]!r}），'
+                    '改用档位估计')
+                continue
+            log(f'课时时长读取: {mins}分钟（原文 {t[:40]!r}）')
+            return f'{mins}分钟'
         return None
 
     def verify_course_selected(self) -> bool:
@@ -418,15 +454,23 @@ class SchoolScenario(DeviceScenario):
     def _detect_stage(results: list[tuple[str, int, int, float]]) -> str | None:
         """从上半屏 OCR 结果里识别学园阶段，返回匹配到的阶段名或 None。
 
-        用子串包含匹配（不是精确相等）：实际文案带年级后缀（'初级学园 5年级'）、
-        图标前缀等都能命中；单个文本块没命中时再拼全部文本兜底（防止拆块）。
+        **优先认"带年级的选课面板标题"**（如"中级学园1年级"）——页面上还会出现
+        地图上的学校名（"中级学园"）和顶部状态栏（"初级学园✓"，是已毕业的旧学园），
+        取第一个匹配会命中状态栏、把阶段判错（见 _STAGE_TITLE_RE 注释）。
+        标题都没有时再退回宽松匹配（单个文本块 → 拼接全文兜底，防拆块）。
         """
-        for text, *_ in results:
-            m = _STAGE_RE.search(text.replace(' ', ''))
+        texts = [t.replace(' ', '') for t, *_ in results]
+        # ① 先找带年级的面板标题（唯一能确定"当前正在读哪个学园"的判据）
+        for text in texts:
+            m = _STAGE_TITLE_RE.search(text)
+            if m:
+                return m.group(1)
+        # ② 退回宽松匹配（进修学院没有"年级"后缀，走这里）
+        for text in texts:
+            m = _STAGE_RE.search(text)
             if m:
                 return m.group(1) or m.group(2)
-        merged = ''.join(t.replace(' ', '') for t, *_ in results)
-        m = _STAGE_RE.search(merged)
+        m = _STAGE_RE.search(''.join(texts))
         return (m.group(1) or m.group(2)) if m else None
 
     def wait_class_end(self) -> bool:
