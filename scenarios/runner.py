@@ -86,6 +86,7 @@ from src.config import (
     is_emulator_build,
     load_config,
 )
+from src.fatigue import fatigue_today
 from src.notify import send_alert
 from src import opener
 from src.opener import open_pet_page
@@ -97,6 +98,8 @@ from src.progress import (
     SCHOOL_PROGRESS_FILE,
     VISIT_PROGRESS_FILE,
     WORK_PROGRESS_FILE,
+    course_kind,
+    course_seconds,
     exp_daily_done,
     load_durations,
     load_progress,
@@ -130,14 +133,28 @@ RECOVERY_RESET_AFTER = 3600
 SIDE_TASK_RETRY_DELAY = 1800
 
 # 游戏机制：学习+打工合计时长的收益效率档（用户确认：>8 小时效率 25%、>12 小时 10%）
-# (秒门槛, 效率百分比)，按门槛从高到低匹配
-EFFICIENCY_TIERS = ((12 * 3600, 10), (8 * 3600, 25))
+# (秒门槛, 效率百分比)，按门槛从高到低匹配。门槛可用配置覆盖（schedule.efficiency_tier*_hours）
+DEFAULT_EFFICIENCY_TIERS = ((12 * 3600, 10), (8 * 3600, 25))
+EFFICIENCY_TIERS = DEFAULT_EFFICIENCY_TIERS  # 兼容旧引用
 
 
-def daily_efficiency_pct(study_s: int, work_s: int) -> int:
+def efficiency_tiers(tier1_hours: int, tier2_hours: int):
+    """按配置的门槛小时数生成效率档（高门槛在前，便于顺序匹配）。
+
+    tier1=8h→25%、tier2=12h→10%；门槛 <=0 表示该档禁用（不参与判定）。"""
+    tiers = []
+    if tier2_hours > 0:
+        tiers.append((tier2_hours * 3600, 10))
+    if tier1_hours > 0:
+        tiers.append((tier1_hours * 3600, 25))
+    return tuple(tiers)
+
+
+def daily_efficiency_pct(study_s: int, work_s: int,
+                         tiers=DEFAULT_EFFICIENCY_TIERS) -> int:
     """按学习+打工合计时长取当前收益效率（100 / 25 / 10）。"""
     total = study_s + work_s
-    for threshold_s, pct in EFFICIENCY_TIERS:
+    for threshold_s, pct in tiers:
         if total >= threshold_s:
             return pct
     return 100
@@ -215,6 +232,9 @@ class Runner:
         self._hf_bad_time_logged = False   # 雇佣好友时间格式错误只记一次日志（同上）
         self._ec_bad_range_logged = False  # 被雇佣时间段格式错误只记一次日志（同上）
         self._work_over_logged_on = None   # “打工停止时长已达”日志每天只记一次的日期标记
+        self._study_quota_logged_on = None  # “今日学习配额已满”日志每天只记一次的日期标记
+        self._work_quota_logged_on = None   # “今日打工配额已满”日志每天只记一次的日期标记
+        self._fatigue_logged_on = None     # “游戏疲劳提示转冒险”日志每天只记一次的日期标记
         self._idle_logged_at = None        # “主任务组已结束，留守轮询”日志限频（10 分钟）
         self._durations_logged = (None, datetime.now())  # 今日时长日志去重/限频（值变化或 10 分钟）
         self._employed_last_check = None   # 上次被雇佣检查时间（interval_seconds 起算点）
@@ -222,6 +242,16 @@ class Runner:
         self.threshold = sched.coin_threshold
         self.daily_hour_limit = sched.daily_hour_limit
         self.work_stop_hours = sched.work_stop_hours  # 学习+打工合计达该时长后今天不再打工
+        # 今日学习/打工配额（小时，0=今天不做该项）：当天想怎么花掉共享总预算
+        self.study_quota_hours = sched.study_quota_hours
+        self.work_quota_hours = sched.work_quota_hours
+        # 效率档门槛（小时）→ 预生成 (秒门槛, 效率%) 供日志/界面展示
+        self._eff_tiers = efficiency_tiers(sched.efficiency_tier1_hours,
+                                           sched.efficiency_tier2_hours)
+        # 疲劳分层的两道门槛（小时）：游戏 8h/12h 的提示文案相同、区分不了层，
+        # 故用工具自己的时长账本分层（见 _fatigue_skip）
+        self.eff_tier1_hours = sched.efficiency_tier1_hours   # 第一层：效率 25%，仍可继续
+        self.eff_tier2_hours = sched.efficiency_tier2_hours   # 第二层：效率 10%，完全禁止
         # 旧版点数系数：仅首次运行把老进度次数换算成时长用（不再参与调度）
         self.school_factor = sched.school_factor
         self.work_factor = sched.work_factor
@@ -237,10 +267,17 @@ class Runner:
             raise ValueError(
                 f'config.yaml 中 adventure.start_time 格式无效: {adv.start_time!r}，应为 HH:MM')
         log(f'金币阈值: {self.threshold}，'
-            f'学习工作时长上限: {self.daily_hour_limit if self.daily_hour_limit else "不限"} 小时'
-            f'（学习按学园 10/20/30/45 分钟、打工按所选时长结算），'
-            f'打工停止时长: {self.work_stop_hours if self.work_stop_hours else "不限"} 小时'
-            f'（游戏效率档: 合计 >8h 收益 25%、>12h 10%），'
+            f'今日配额: 学习 {self.study_quota_hours} 小时'
+            f'{"（不学习）" if self.study_quota_hours <= 0 else ""}'
+            f' / 打工 {self.work_quota_hours} 小时'
+            f'{"（不打工）" if self.work_quota_hours <= 0 else ""}'
+            f'（两者共享同一份合计预算），'
+            f'停止点: 学习 {self.daily_hour_limit if self.daily_hour_limit else "不限"} 小时'
+            f'（学习+打工合计，0=不限）、'
+            f'打工 {self.work_stop_hours if self.work_stop_hours else "不限"} 小时，'
+            f'效率档: 合计 {sched.efficiency_tier1_hours}h→25%、'
+            f'{sched.efficiency_tier2_hours}h→10%（两档均为疲劳层：第一层仍可继续，'
+            f'第二层完全禁止学习/打工），'
             f'冒险: 每天 {self.adventure_times} 次 @ {start_time}')
         visit = self.school.cfg.visit
         self.visit_times = visit.times_per_day
@@ -411,6 +448,36 @@ class Runner:
         limit = self.work_stop_hours
         return limit > 0 and study_s + work_s >= limit * 3600
 
+    def _quota_over(self, own_s: int, quota_hours: int) -> bool:
+        """某项（学习/打工）自身配额是否已满（schedule.*_quota_hours）。
+
+        配额是**当天想怎么花掉共享总预算**的选择器：0 = 今天不做该项
+        （study_quota=8/work_quota=0 → 只学习；4/4 → 各 4 小时自动切换）。
+        与总预算（daily_hour_limit/work_stop_hours，均按学习+打工合计计）是 AND
+        关系：配额先到就切另一项，总预算到点两项一起停（转冒险）。"""
+        return quota_hours <= 0 or own_s >= quota_hours * 3600
+
+    def efficiency_pct(self, study_s: int, work_s: int) -> int:
+        """当前收益效率档（读配置门槛，见 schedule.efficiency_tier*_hours）。"""
+        return daily_efficiency_pct(study_s, work_s, self._eff_tiers)
+
+    def _eff_tier_hint(self, study_s: int, work_s: int) -> str:
+        """当前档位 + 距下一档还有多久，供日志/界面展示（不参与调度判定）。
+
+        下一档 = 所有未达门槛里**最小**的那个（门槛表按高→低排，直接取第一个
+        未达项会跳到最高门槛，如 0h 时报"再 720 分钟降到 10%"而非 8h 的 25%）。"""
+        total = study_s + work_s
+        pct = self.efficiency_pct(study_s, work_s)
+        nxt = None
+        for ts, p in self._eff_tiers:
+            if total < ts and (nxt is None or ts < nxt[0]):
+                nxt = (ts, p)
+        if nxt is None:
+            return f'效率 {pct}%'
+        left_min = max(0, (nxt[0] - total)) // 60
+        return (f'效率 {pct}%（合计 {total / 3600:.1f}h，'
+                f'再 {left_min} 分钟降到 {nxt[1]}%）')
+
     def _ctx_durations(self, ctx: dict) -> tuple[int, int]:
         """本轮（ctx）第一次取学习/打工时长时加载；数值变化时（或每 10 分钟）记一次日志。
 
@@ -424,10 +491,28 @@ class Runner:
                 self._durations_logged = ((study_s, work_s), now)
                 log(f'今日时长: 已学习 {study_s // 60} 分钟 + 已打工 {work_s // 60} 分钟'
                     f' = {(study_s + work_s) // 60} 分钟'
-                    f'（效率 {daily_efficiency_pct(study_s, work_s)}%）'
-                    f' / 学习上限 {self.daily_hour_limit if self.daily_hour_limit else "不限"} 小时'
-                    f' / 打工停止 {self.work_stop_hours if self.work_stop_hours else "不限"} 小时')
+                    f'（{self._eff_tier_hint(study_s, work_s)}）'
+                    f' / 今日配额 学习 {self.study_quota_hours} 小时'
+                    f'、打工 {self.work_quota_hours} 小时'
+                    f' / 合计上限 学习 {self.daily_hour_limit if self.daily_hour_limit else "不限"} 小时'
+                    f'、打工 {self.work_stop_hours if self.work_stop_hours else "不限"} 小时')
         return ctx['durations']
+
+    def _log_quota_over(self, which: str) -> None:
+        """“今日配额已满”日志每天每项只记一次（ctx 每轮重建，用日期标记防刷屏）。"""
+        today = date.today()
+        if which == 'school':
+            if self._study_quota_logged_on == today:
+                return
+            self._study_quota_logged_on = today
+            log(f'今日学习配额 {self.study_quota_hours} 小时已满，今天不再学习'
+                + ('（配额 0 = 今天不学习）' if self.study_quota_hours <= 0 else ''))
+        else:
+            if self._work_quota_logged_on == today:
+                return
+            self._work_quota_logged_on = today
+            log(f'今日打工配额 {self.work_quota_hours} 小时已满，今天不再打工'
+                + ('（配额 0 = 今天不打工）' if self.work_quota_hours <= 0 else ''))
 
     def _log_work_over(self, durations: tuple[int, int]) -> None:
         """“打工停止时长已达”日志每天只记一次（条件实时求值，防调度轮询刷屏）。"""
@@ -436,8 +521,52 @@ class Runner:
             self._work_over_logged_on = today
             total_h = (durations[0] + durations[1]) / 3600
             log(f'学习+打工合计已达 {total_h:.1f} 小时'
-                f'（效率 {daily_efficiency_pct(*durations)}% 档），今天不再打工'
+                f'（{self._eff_tier_hint(*durations)}），今天不再打工'
                 f'（work_stop_hours={self.work_stop_hours}，0=不限）')
+
+    def _log_fatigue(self, tier: int) -> None:
+        """疲劳档日志：(日期, 层级) 各只记一次（条件实时求值，防调度轮询刷屏）。"""
+        key = (date.today(), tier)
+        if self._fatigue_logged_on == key:
+            return
+        self._fatigue_logged_on = key
+        if tier >= 2:
+            log(f'疲劳第二层（学习+打工合计已达 {self.eff_tier2_hours} 小时，'
+                f'效率 {self.efficiency_pct(0, 0)}% 档）：今天完全禁止学习/打工，转冒险')
+        else:
+            log(f'疲劳第一层（合计已达 {self.eff_tier1_hours} 小时，效率 25% 档）：'
+                f'收益降档但**仍可继续**学习/打工（要停请调低配额或停止点）')
+
+    def _fatigue_tier(self, study_s: int, work_s: int) -> int:
+        """疲劳层（决定学习/打工能否继续）：
+
+        0 = 未进疲劳档（效率 100%）
+        1 = 第一层（合计 >= efficiency_tier1_hours，默认 8h）：效率 25%，**仍可继续**
+        2 = 第二层（合计 >= efficiency_tier2_hours，默认 12h）：效率 10%，**完全禁止**
+
+        游戏在 8h/12h 的提示文案相同、分不出层，故分层以**工具自己的时长账本**为准；
+        游戏疲劳提示命中时至少算第一层（把玩家手动游玩计入疲劳状态、日志能看到），
+        但**不据此硬停**——旧逻辑"一遇提示就停"会把 8h 后的学习也一起停掉，
+        导致配置的 12h 配额永远用不上。
+        """
+        total = study_s + work_s
+        if self.eff_tier2_hours > 0 and total >= self.eff_tier2_hours * 3600:
+            return 2
+        if self.eff_tier1_hours > 0 and total >= self.eff_tier1_hours * 3600:
+            return 1
+        if fatigue_today():
+            return 1  # 游戏提示：至少第一层（含手动游玩时长），但不据此禁止
+        return 0
+
+    def _fatigue_skip(self, study_s: int, work_s: int) -> bool:
+        """今天是否**完全禁止**学习/打工：只有第二层疲劳才禁止（第一层只警告）。"""
+        tier = self._fatigue_tier(study_s, work_s)
+        if tier >= 2:
+            self._log_fatigue(2)
+            return True
+        if tier == 1:
+            self._log_fatigue(1)  # 只记日志，不拦任务
+        return False
 
     def read_main_coins(self) -> int | None:
         """回主页面 OCR 金币数量，失败返回 None。识别成功写状态缓存（GUI 状态条）。"""
@@ -670,10 +799,12 @@ class Runner:
             self.school.attribute = cfg.school.attribute
         else:
             log(f'属性点配置无效 {cfg.school.attribute!r}，沿用 {self.school.attribute}')
-        if cfg.school.duration in ('10分钟', '30分钟'):
-            self.school.duration = cfg.school.duration
+        # school.duration 热加载：值为"短课/长课"（旧的分钟数会自动归一化）
+        kind = course_kind(cfg.school.duration)
+        if kind:
+            self.school.duration = kind
         else:
-            log(f'课时时长配置无效 {cfg.school.duration!r}，沿用 {self.school.duration}')
+            log(f'课时档位配置无效 {cfg.school.duration!r}，沿用 {self.school.duration}')
         self.work.location = cfg.work.location
         # work.duration 热加载：work.py 选工作选择框用 self.duration 副本，
         # hire_friend.py 用 cfg.work.duration，两个都要更新；非法值回退旧值
@@ -907,7 +1038,7 @@ class Runner:
                 over_limit = self._duration_over(study_s, work_s)
                 log(f'今日时长: 已学习 {study_s // 60} 分钟 + 已打工 {work_s // 60} 分钟'
                     f' = {(study_s + work_s) // 60} 分钟'
-                    f'（效率 {daily_efficiency_pct(study_s, work_s)}%）'
+                    f'（{self._eff_tier_hint(study_s, work_s)}）'
                     f' / 上限 {self.daily_hour_limit if self.daily_hour_limit else "不限"} 小时')
                 if over_limit:
                     # 学习+工作时长达上限：今天不再学习，只打工直到第二天清零
@@ -1267,11 +1398,17 @@ class TaskQueueRunner(Runner):
         点数/金币每轮循环只读一次（ctx 缓存）：金币读取要截图 OCR，不能每个任务读一次。
         """
         study_s, work_s = self._ctx_durations(ctx)
+        if self._fatigue_skip(study_s, work_s):
+            return False  # 疲劳第二层（合计 >= tier2）：今天完全禁止学习
+        if self._quota_over(study_s, self.study_quota_hours):
+            # 今日学习配额已满（0=今天不学习）：让位给打工/冒险
+            self._log_quota_over('school')
+            return False
         over_limit = self._duration_over(study_s, work_s)
         if over_limit:
             if not ctx.get('over_logged'):
                 ctx['over_logged'] = True
-                log('学习工作时长已达上限，今天不再学习，只打工')
+                log(f'学习+打工合计已达上限 {self.daily_hour_limit} 小时，今天不再学习，只打工')
             return False
         if ctx.get('coins', _COINS_UNSET) is _COINS_UNSET:
             try:
@@ -1288,7 +1425,18 @@ class TaskQueueRunner(Runner):
                 log(f'金币 {coins} < 阈值 {self.threshold}，先去打工')
         if ctx['coins'] is not None and ctx['coins'] >= self.threshold:
             return True
-        return self._dead(tasks, 'work')  # 打工不可继续且点数未超限，回退学习
+        # 金币不足（或识别失败）时想先去打工赚钱——但必须先确认打工今天真能跑，
+        # 否则配额 0 / 已达停止时长时打工也不跑，学习和打工双双返回 False 卡死
+        # （历史 bug：work_quota=0 只学习 + 金币 < 阈值 → 一整天什么都不做）。
+        return self._work_blocked(tasks, study_s, work_s)
+
+    def _work_blocked(self, tasks: dict, study_s: int, work_s: int) -> bool:
+        """打工今天是否不可继续：任务判死 / 今日配额已满 / 已达停止时长。
+
+        供 _school_due 的「金币不足回退打工」判定——打工不可继续时才让学习兜底。"""
+        return (self._dead(tasks, 'work')
+                or self._quota_over(work_s, self.work_quota_hours)
+                or self._work_over(study_s, work_s))
 
     def _main_choice(self, tasks: dict, ctx: dict) -> str | None:
         """主任务组（冒险/学习/打工/雇佣好友，互斥不能同时做）本轮该执行哪个。
@@ -1330,11 +1478,22 @@ class TaskQueueRunner(Runner):
                     return 'hire_friend'
             elif key == 'work':
                 study_s, work_s = self._ctx_durations(ctx)
+                if self._fatigue_skip(study_s, work_s):
+                    continue  # 疲劳第二层：今天完全禁止打工（转冒险）
+                if self._quota_over(work_s, self.work_quota_hours):
+                    # 今日打工配额已满（0=今天不打工）：让位给冒险
+                    self._log_quota_over('work')
+                    continue
                 if self._work_over(study_s, work_s):
                     self._log_work_over((study_s, work_s))
-                    continue  # 已达打工停止时长（效率 10% 档），今天不再打工
+                    continue  # 已达打工停止时长，今天不再打工
                 return 'work'  # 兜底：打工当天可继续就可执行
         return None
+
+    def _work_available(self, tasks: dict, study_s: int, work_s: int) -> bool:
+        """打工本轮是否可执行（不含疲劳/任务开关判定，那些在 _main_choice 里）。
+        与 _main_choice 的 work 分支同源，供队列状态显示等处复用。"""
+        return not self._work_blocked(tasks, study_s, work_s)
 
     def _task_due(self, key: str, tasks: dict, ctx: dict) -> bool:
         """任务自身的执行条件（配额/场景时间窗/主任务组统一判定），在 _eligible 之后判定。"""
@@ -1666,10 +1825,19 @@ class TaskQueueRunner(Runner):
                 if hf_q.times_per_day:
                     _, done, _ = load_progress(HIRE_FRIEND_PROGRESS_FILE, quiet=True)
                     quota_done = done >= hf_q.times_per_day
-            elif key == 'work':
-                # 打工停止时长已达（效率 10% 档）：显示"今日完成"，明天时长清零后恢复
+            elif key == 'school':
+                # 疲劳提示 / 学习配额满 / 合计达上限：今天不再学习，显示"今日完成"
                 study_s, work_s = self._load_durations()
-                quota_done = self._work_over(study_s, work_s)
+                quota_done = (self._fatigue_skip(study_s, work_s)
+                              or self._quota_over(study_s, self.study_quota_hours)
+                              or self._duration_over(study_s, work_s))
+            elif key == 'work':
+                # 疲劳提示 / 打工配额满 / 打工停止时长已达：
+                # 显示"今日完成"，明天时长清零后恢复
+                study_s, work_s = self._load_durations()
+                quota_done = (self._fatigue_skip(study_s, work_s)
+                              or self._quota_over(work_s, self.work_quota_hours)
+                              or self._work_over(study_s, work_s))
             if quota_done:
                 nxt = (self._next_daily_time(cfg.daily_times, now)
                        if cfg.trigger == 'daily' else None)
@@ -1758,9 +1926,12 @@ class TaskQueueRunner(Runner):
         if self._main_pending_scen() is not None:
             return False
         study_s, work_s = self._load_durations()
-        school_done = (self._dead(tasks, 'school')
+        fatigue = self._fatigue_skip(study_s, work_s)  # 只第二层才算当天结束
+        school_done = (fatigue or self._dead(tasks, 'school')
+                       or self._quota_over(study_s, self.study_quota_hours)
                        or self._duration_over(study_s, work_s))
-        work_done = (self._dead(tasks, 'work')
+        work_done = (fatigue or self._dead(tasks, 'work')
+                     or self._quota_over(work_s, self.work_quota_hours)
                      or self._work_over(study_s, work_s))
         return (school_done and work_done
                 and self._adventure_done(tasks) and self._hire_friend_done(tasks))

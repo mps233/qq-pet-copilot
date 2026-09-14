@@ -50,7 +50,7 @@ class AdventureScenario(DeviceScenario):
         self.batch = self.cfg.adventure.batch
         log(f'每天冒险次数: {self.times_per_day if self.times_per_day else "不冒险"}'
             f'，跳过"天色不对": {"开" if self.skip_bad_weather else "关"}'
-            f'，单轮冒险次数 {self.batch}')
+            f'，单批连跑 {self.batch} 把（每批跑完回主页，总次数按"每天冒险次数"计）')
 
     # ---- 各阶段 ----
 
@@ -194,7 +194,8 @@ class AdventureScenario(DeviceScenario):
         round_no = 0
         while True:
             round_no += 1
-            log(f'===== 第 {round_no} 轮（连跑 {batch} 次冒险）=====')
+            log(f'===== 第 {round_no} 轮冒险（本批连跑 {batch} 把，跑完回主页；'
+                f'今天已 {done} 次 / 每天上限 {max_times if max_times else "不限"}）=====')
             # 刚收尾完（finish_pending 点 quit 已落在"出门"页）且中间没跑过别的
             # 任务（时间窗内）：直接点冒险入口，省一次 back + 出门。
             # 标记只消费一次；**用前必须确认不在主页面**（main_sign 缺失）——
@@ -297,7 +298,7 @@ class AdventureScenario(DeviceScenario):
                 self.ensure_main_page()
                 log(f'已跑完 {max_rounds} 轮，返回')
                 return done > start_done
-            log(f'本轮连跑 {batch} 次冒险完成，回主页面重新开始')
+            log(f'本批 {batch} 把冒险完成，回主页面重新开始')
 
 
 if __name__ == '__main__':

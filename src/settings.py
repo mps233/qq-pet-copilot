@@ -27,7 +27,7 @@ DEFAULTS = {
     'emulator.path': '',
     'emulator.device_spoof': False,
     'school.attribute': '力量',
-    'school.duration': '10分钟',
+    'school.duration': '短课',
     'school.times_per_day': 0,
     'work.location': '风铃旅社',
     'work.times_per_day': 0,
@@ -36,6 +36,10 @@ DEFAULTS = {
     'schedule.coin_threshold': 2000,
     'schedule.daily_hour_limit': 8,
     'schedule.work_stop_hours': 12,
+    'schedule.study_quota_hours': 8,
+    'schedule.work_quota_hours': 8,
+    'schedule.efficiency_tier1_hours': 8,
+    'schedule.efficiency_tier2_hours': 12,
     'schedule.check_interval': 8,
     'schedule.main_page_checks': 1,
     'schedule.back_method': '系统返回',
@@ -102,7 +106,10 @@ def validate_field(key: str, value):
     if key == 'school.attribute':
         return (True, value) if value in ('力量', '智力', '魅力', '夏令营') else (False, default)
     if key == 'school.duration':
-        return (True, value) if value in ('10分钟', '30分钟') else (False, default)
+        # 只区分短课/长课（按卡位选，不绑定具体分钟数：初级 10/30、高级 30/90…）。
+        # 兼容旧值（10分钟=短课，其余分钟数=长课）——见 progress.course_kind
+        from .progress import course_kind
+        return (True, value) if course_kind(value) else (False, default)
     if key == 'work.duration':
         return (True, value) if value in ('10分钟', '45分钟', '2小时') else (False, default)
     if key == 'care.method' or key == 'friend_care.method':
@@ -173,6 +180,13 @@ def validate_field(key: str, value):
             return False, default
     if key == 'schedule.work_stop_hours':
         # 0 = 不限；上限 24 小时（一天最长）
+        try:
+            return (True, value) if 0 <= int(value) <= 24 else (False, default)
+        except (TypeError, ValueError):
+            return False, default
+    if key in ('schedule.study_quota_hours', 'schedule.work_quota_hours',
+               'schedule.efficiency_tier1_hours', 'schedule.efficiency_tier2_hours'):
+        # 配额/效率档门槛：0..24 小时（配额 0 = 今天不做该项；效率档 0 = 该档禁用）
         try:
             return (True, value) if 0 <= int(value) <= 24 else (False, default)
         except (TypeError, ValueError):
