@@ -23,7 +23,7 @@ import signal
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -33,6 +33,33 @@ RUNS = BASE / 'runs'
 LOGS = RUNS / 'logs'
 ADV_LIVE_FILE = RUNS / 'adventure_live.jsonl'   # 冒险统一记录（实验 300 把 + 日常实时）
 DEFAULT_PORT = 8787
+
+# ---- PWA：应用清单 + Service Worker（离线兜底；SW 需 https/localhost 才注册）----
+MANIFEST_JSON = json.dumps({
+    'name': 'QQ宠物托管', 'short_name': 'QQ宠物',
+    'start_url': '/', 'scope': '/', 'display': 'standalone',
+    'background_color': '#f6f7f9', 'theme_color': '#ea580c',
+    'icons': [
+        {'src': '/icon-192.png', 'sizes': '192x192', 'type': 'image/png'},
+        {'src': '/icon-512.png', 'sizes': '512x512', 'type': 'image/png',
+         'purpose': 'any maskable'},
+    ],
+}, ensure_ascii=False)
+
+SW_JS = """const CACHE = 'qpet-shell-v1';
+self.addEventListener('install', e => self.skipWaiting());
+self.addEventListener('activate', e => e.waitUntil(clients.claim()));
+self.addEventListener('fetch', e => {
+  const url = new URL(e.request.url);
+  if (url.origin !== location.origin || url.pathname.startsWith('/api/')) return;
+  e.respondWith(
+    fetch(e.request).then(r => {
+      const c = r.clone();
+      caches.open(CACHE).then(ca => ca.put(e.request, c)).catch(() => {});
+      return r;
+    }).catch(() => caches.match(e.request))
+  );
+});"""
 
 
 # ---------------------------------------------------------------- 数据读取
@@ -212,11 +239,38 @@ def work_eta(lines: list[str]):
             'kind': m.group(1).strip()}
 
 
-def today_duration(lines: list[str]):
+# 游戏机制：学习+打工合计时长的收益效率档（与 scenarios/runner.py 的
+# efficiency_tiers 保持一致；门槛可用 schedule.efficiency_tier*_hours 覆盖）。
+# dashboard 是独立进程、不导入 runner，故此处自带一份默认值。
+DEFAULT_EFFICIENCY_TIERS = ((12 * 3600, 10), (8 * 3600, 25))
+
+
+def efficiency_tiers_of(sched: dict):
+    """按 config 的 schedule 段生成 (秒门槛, 效率%) 序列；缺失时用默认值。"""
+    t1 = sched.get('efficiency_tier1_hours')
+    t2 = sched.get('efficiency_tier2_hours')
+    if t1 is None and t2 is None:
+        return DEFAULT_EFFICIENCY_TIERS
+    try:
+        t1 = 8 if t1 is None else int(t1)
+        t2 = 12 if t2 is None else int(t2)
+    except (TypeError, ValueError):
+        return DEFAULT_EFFICIENCY_TIERS
+    tiers = []
+    if t2 > 0:
+        tiers.append((t2 * 3600, 10))
+    if t1 > 0:
+        tiers.append((t1 * 3600, 25))
+    return tuple(tiers) or DEFAULT_EFFICIENCY_TIERS
+
+
+def today_duration(lines: list[str], tiers=None):
     """最后一条“今日时长: 已学习 X 分钟 + 已打工 Y 分钟”的 X/Y + 效率档。
 
-    效率档（游戏机制，与 scenarios/runner.py 的 EFFICIENCY_TIERS 一致）：
-    学习+打工合计 >12 小时 10%、>8 小时 25%、否则 100%。"""
+    效率档（游戏机制，与 scenarios/runner.py 的 efficiency_tiers 一致）：
+    学习+打工合计 >= tier2 小时 10%、>= tier1 小时 25%、否则 100%。
+    门槛可配（schedule.efficiency_tier*_hours），tiers 传入 (秒门槛, 效率%) 序列。
+    额外返回距下一档还有多少分钟，供界面提示"还能跑多久降档"。"""
     m = None
     for ln in lines[-400:]:
         mm = re.search(r'今日时长: 已学习 (\d+) 分钟 \+ 已打工 (\d+) 分钟', ln)
@@ -226,8 +280,24 @@ def today_duration(lines: list[str]):
         return None
     learn_min, work_min = int(m.group(1)), int(m.group(2))
     total_min = learn_min + work_min
-    eff = 10 if total_min >= 12 * 60 else (25 if total_min >= 8 * 60 else 100)
-    return {'learn_min': learn_min, 'work_min': work_min, 'eff_pct': eff}
+    total_s = total_min * 60
+    if tiers is None:
+        tiers = DEFAULT_EFFICIENCY_TIERS
+    eff = 100
+    for threshold_s, pct in tiers:
+        if total_s >= threshold_s:
+            eff = pct
+            break
+    nxt = None
+    for ts, p in tiers:
+        if total_s < ts and (nxt is None or ts < nxt[0]):
+            nxt = (ts, p)
+    return {
+        'learn_min': learn_min, 'work_min': work_min, 'eff_pct': eff,
+        'total_min': total_min,
+        'next_pct': nxt[1] if nxt else None,
+        'next_in_min': (nxt[0] - total_s) // 60 if nxt else None,
+    }
 
 
 def _task_enabled_map(tasks: dict, friend_care: dict, gift_bag: dict,
@@ -331,9 +401,15 @@ def load_progress() -> dict:
     }
 
 
-def adventure_data() -> dict:
+def adventure_data(sel_date: str | None = None) -> dict:
     """冒险记录（统一数据源：runs/adventure_live.jsonl——实验期 300 把 + 日常实时，
-    由 src/scenario.record_adventure_live 在每把结算时记录）。"""
+    由 src/scenario.record_adventure_live 在每把结算时记录）。
+
+    sel_date: 统计范围——'YYYY-MM-DD' 看指定某天，'all' 看全部历史，
+    空/'today' = 当天（当天还没有记录时回落到最近有记录的一天）。
+    每条记录归属哪天优先取结算页内容里的日期（跨零点补录归前一天，
+    如 00:00 才检测到的"昨天 23:59"结算），识别不到再用记录时间 ts。
+    """
     rows = []
     try:
         for _line in ADV_LIVE_FILE.read_text('utf-8').splitlines()[-1500:]:
@@ -346,7 +422,30 @@ def adventure_data() -> dict:
     if not rows:
         return {'ok': False}
     rows.sort(key=lambda d: str(d.get('ts') or ''))
-    coins = [int(r.get('coins') or 0) for r in rows]
+    today = datetime.now().strftime('%Y-%m-%d')
+    yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+    for r in rows:
+        day = ''
+        for t in (r.get('settle') or []):
+            m = re.search(r'(\d{4})\s*/\s*(\d{1,2})\s*/\s*(\d{1,2})', str(t))
+            if m:
+                day = f'{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}'
+                break
+        r['_day'] = day or str(r.get('ts') or '')[:10] or today
+    date_n: dict = {}
+    for r in rows:
+        date_n[r['_day']] = date_n.get(r['_day'], 0) + 1
+    dates = sorted(date_n, reverse=True)
+    if not sel_date or sel_date == 'today':
+        sel = today if today in date_n else (dates[0] if dates else today)
+    elif sel_date == 'all':
+        sel = 'all'
+    elif sel_date in date_n:
+        sel = sel_date
+    else:
+        sel = today
+    view = rows if sel == 'all' else [r for r in rows if r['_day'] == sel]
+    coins = [int(r.get('coins') or 0) for r in view]
     n = len(coins)
     net = sum(coins)
     win = sum(1 for c in coins if c > 0)
@@ -359,11 +458,14 @@ def adventure_data() -> dict:
         s += c
         cum.append([i, s])
     pts = [[i, c] for i, c in enumerate(coins, 1)]
-    today = datetime.now().strftime('%Y-%m-%d')
     tn = tnet = 0
+    for r in rows:
+        if r['_day'] == today:
+            tn += 1
+            tnet += int(r.get('coins') or 0)
     gains = {}
     recent = []
-    for i, r in enumerate(rows, 1):
+    for i, r in enumerate(view, 1):
         toks = [str(t).strip() for t in (r.get('settle') or [])]
         gs = []
         for t in toks:
@@ -375,9 +477,6 @@ def adventure_data() -> dict:
                 gs.append(f'{m.group(1)}+{m.group(2)}')
         ts = str(r.get('ts') or '')
         c = int(r.get('coins') or 0)
-        if ts.startswith(today):
-            tn += 1
-            tnet += c
         recent.append([i, ts[5:16] or ts[:5], c, ' '.join(gs), 0])
     return {
         'ok': True, 'n': n,
@@ -386,7 +485,9 @@ def adventure_data() -> dict:
         'gains': [[k, v[0], v[1]] for k, v in sorted(gains.items())],
         'cum': cum, 'pts': pts, 'stats': [], 'recent': recent[-800:],
         'today_n': tn, 'today_net': tnet,
-        'updated': str(rows[-1].get('ts') or '')[11:16],
+        'date': sel, 'dates': dates, 'date_n': date_n,
+        'today': today, 'yesterday': yesterday, 'all_n': len(rows),
+        'updated': str(view[-1].get('ts') or '')[11:16] if view else '',
     }
 
 
@@ -657,6 +758,10 @@ def editable_snapshot() -> dict:
         'coin_threshold': sched.get('coin_threshold', 2000),
         'daily_hour_limit': sched.get('daily_hour_limit', 8),
         'work_stop_hours': sched.get('work_stop_hours', 12),
+        'study_quota_hours': sched.get('study_quota_hours', 8),
+        'work_quota_hours': sched.get('work_quota_hours', 8),
+        'efficiency_tier1_hours': sched.get('efficiency_tier1_hours', 8),
+        'efficiency_tier2_hours': sched.get('efficiency_tier2_hours', 12),
         'main_order': str(tasks.get('main_order') or ''),
         'visit_times': visit.get('times_per_day', 10),
         'pk_times': pk.get('times_per_day', 15),
@@ -691,14 +796,36 @@ def apply_settings(updates: dict) -> dict:
     调度器每轮重读配置（含 tasks.* 任务级设置），保存后下一轮调度自动生效。
     """
     import src.settings as S
+    # 复合任务（好友护理/福袋/雇佣好友）同时有任务级 tasks.<k>.enabled 与场景级
+    # <k>.enabled 两个开关，前端勾选态 = 两者 AND（见 _task_enabled_map）。仪表盘
+    # 任务队列勾选框与设置页开关共用同一字段名，只写其中一个会让另一个残留 false，
+    # 表现为"点了勾选/开关却启不起来"（单向失效）。两处一起写，保持一致。
+    task_scene_pairs = {
+        'friend_care_enabled': ('tasks.friend_care.enabled', 'friend_care.enabled'),
+        'gift_bag_enabled': ('tasks.gift_bag.enabled', 'gift_bag.enabled'),
+        'hire_friend_enabled': ('tasks.hire_friend.enabled', 'hire_friend.enabled'),
+    }
     mapping = {
         'school_enabled': ('tasks.school.enabled', 'bool'),
+        'care_enabled': ('tasks.care.enabled', 'bool'),
+        'adventure_enabled': ('tasks.adventure.enabled', 'bool'),
+        'visit_enabled': ('tasks.visit.enabled', 'bool'),
+        'pk_enabled': ('tasks.pk.enabled', 'bool'),
+        'work_enabled': ('tasks.work.enabled', 'bool'),
+        # 复合任务主键（实际写入见 task_scene_pairs 的双写）
+        'friend_care_enabled': ('tasks.friend_care.enabled', 'bool'),
+        'gift_bag_enabled': ('tasks.gift_bag.enabled', 'bool'),
+        'hire_friend_enabled': ('tasks.hire_friend.enabled', 'bool'),
         'work_location': ('work.location', None),
         'work_duration': ('work.duration', None),
         'hire_name': ('work.hire_name', None),
         'coin_threshold': ('schedule.coin_threshold', 'int'),
         'daily_hour_limit': ('schedule.daily_hour_limit', 'int'),
         'work_stop_hours': ('schedule.work_stop_hours', 'int'),
+        'study_quota_hours': ('schedule.study_quota_hours', 'int'),
+        'work_quota_hours': ('schedule.work_quota_hours', 'int'),
+        'efficiency_tier1_hours': ('schedule.efficiency_tier1_hours', 'int'),
+        'efficiency_tier2_hours': ('schedule.efficiency_tier2_hours', 'int'),
         'main_order': ('tasks.main_order', None),
         'school_attribute': ('school.attribute', None),
         'school_duration': ('school.duration', None),
@@ -715,14 +842,12 @@ def apply_settings(updates: dict) -> dict:
         'care_clean': ('care.clean_threshold', 'int'),
         'care_method': ('care.method', None),
         'care_exchange': ('care.exchange_count', 'int'),
-        'friend_care_enabled': ('friend_care.enabled', 'bool'),
         'friend_care_name': ('friend_care.friend_name', None),
         'friend_care_interval': ('friend_care.interval_seconds', 'int'),
         'friend_care_method': ('friend_care.method', None),
         'employed_enabled': ('employed.enabled', 'bool'),
         'employed_action': ('employed.action', None),
         'employed_interval': ('employed.interval_seconds', 'int'),
-        'gift_bag_enabled': ('gift_bag.enabled', 'bool'),
         'gift_bag_interval': ('gift_bag.interval_seconds', 'int'),
         'career_watch': ('career.watch', 'bool'),
         'career_stop_study': ('career.stop_study_on_unlock', 'bool'),
@@ -739,7 +864,9 @@ def apply_settings(updates: dict) -> dict:
             if not isinstance(value, bool):
                 rejected.append(f'{field}: 需要布尔值')
                 continue
-            S.set_value(data, key, value)
+            # 复合任务：任务级 + 场景级两个开关同时写，避免另一个残留 false
+            for k in task_scene_pairs.get(field, (key,)):
+                S.set_value(data, k, value)
             applied[field] = value
             continue
         ok, fixed = S.validate_field(key, value)
@@ -761,6 +888,11 @@ def build_data() -> dict:
     if p:
         log_lines = tail_lines(p, 400)
     accounts = (read_json('status_cache.json').get('accounts') or {})
+    try:
+        import yaml
+        sched_cfg = (yaml.safe_load((BASE / 'config.yaml').read_text('utf-8')) or {}).get('schedule') or {}
+    except Exception:
+        sched_cfg = {}
     return {
         'now': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'scheduler': scheduler_info(),
@@ -770,7 +902,7 @@ def build_data() -> dict:
         'config': config_summary(),
         'shots': list_shots(),
         'work_eta': work_eta(log_lines),
-        'today_duration': today_duration(log_lines),
+        'today_duration': today_duration(log_lines, efficiency_tiers_of(sched_cfg)),
         'last_line': log_lines[-1] if log_lines else '',
         'editable': editable_snapshot(),
     }
@@ -784,12 +916,20 @@ HTML = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="theme-color" content="#f6f7f9">
+<meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#111318" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="QQ宠物">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>QQ宠物托管</title>
 <style>
-:root{--bg:#f6f7f9;--card:#fff;--line:#e6e8ee;--text:#111827;--sub:#6b7280;--accent:#533afd;--ok:#16a34a;--warn:#b45309;--gold:#D4A017;--gold-d:#B8860B}
+:root{--bg:#f6f7f9;--card:#fff;--line:#e6e8ee;--text:#111827;--sub:#6b7280;--accent:#ea580c;--ok:#16a34a;--warn:#b45309;--gold:#D4A017;--gold-d:#B8860B}
 *{box-sizing:border-box}
-html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%;overflow-x:hidden}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%;overflow-x:hidden}html{overscroll-behavior-y:contain}
 header{position:sticky;top:0;z-index:10;background:rgba(246,247,249,.9);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--line);padding:10px 14px;display:flex;flex-direction:column;align-items:stretch;gap:0;padding-top:calc(10px + env(safe-area-inset-top))}
 .hrow{display:flex;justify-content:space-between;align-items:center;width:100%}
 .tabs{display:flex;gap:6px;margin-top:8px;width:100%}
@@ -799,6 +939,9 @@ header{position:sticky;top:0;z-index:10;background:rgba(246,247,249,.9);backdrop
 .dot{width:8px;height:8px;border-radius:50%;background:#9ca3af;flex:none}
 .dot.on{background:var(--ok);box-shadow:0 0 0 3px rgba(22,163,74,.15)}
 .dot.off{background:#ef4444;box-shadow:0 0 0 3px rgba(239,68,68,.12)}
+/* 头部品牌 logo：橘猫图标（内嵌 SVG）；运行状态看调度器卡片的状态灯 */
+.brand .dot{width:22px;height:22px;border-radius:7px;background:#ffedd5;box-shadow:none}
+.brand .dot svg{display:block;width:100%;height:100%}
 .meta{font-size:12px;color:var(--sub);font-variant-numeric:tabular-nums}
 main{padding:12px;max-width:560px;margin:0 auto;display:flex;flex-direction:column;gap:10px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
@@ -814,13 +957,31 @@ main{padding:12px;max-width:560px;margin:0 auto;display:flex;flex-direction:colu
 .bar{height:4px;background:#eef0f4;border-radius:2px;overflow:hidden;margin-top:7px}
 .bar>i{display:block;height:100%;background:var(--accent);width:0;border-radius:2px}
 .qhead{display:flex;justify-content:space-between;font-size:12px;color:var(--sub);margin-bottom:6px;font-variant-numeric:tabular-nums}
+.qgrp{font-size:10.5px;color:var(--sub);letter-spacing:.06em;margin:10px 0 2px}
+.mrow{display:flex;gap:10px;padding:9px 2px;border-top:1px solid var(--line);align-items:center}
+.mrow:first-child{border-top:0}
+.mcb{width:20px;height:20px;border-radius:6px;background:var(--line);flex:none;cursor:pointer;position:relative;user-select:none}
+.mcb.on{background:var(--accent)}
+.mcb.on::after{content:"✓";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;font-weight:700}
+.mname{font-weight:650;font-size:14px}
+.mname.off{color:var(--sub);font-weight:500}
+.mdet{margin-left:auto;font-size:12.5px;color:var(--sub);font-variant-numeric:tabular-nums;text-align:right}
+.mdet .run{color:var(--accent);font-weight:650}
+.mdet .off-t{color:#9ca3af}
+.ttag{font-size:9.5px;padding:1px 5px;border-radius:4px;border:1px solid var(--line);color:var(--sub);flex:none;margin-left:2px}
+.mrow.done{opacity:.6}
+.mrow.done .mname{text-decoration:line-through;color:var(--sub);font-weight:500}
+.mrow.run .mname{color:var(--accent)}
+.tasklist .qgrp+.row{border-top:0}
+.chip.run{background:var(--accent);color:#fff;font-weight:600}
+.tasklist .row.run .t>span:first-child{font-weight:650;color:var(--accent)}
 .tasklist .row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px dashed var(--line);font-size:14px}
 .tasklist .row:first-child{border-top:0}
 .tasklist .t{display:flex;gap:8px;align-items:center}
 .tasklist .nx{font-size:12px;color:var(--sub);font-variant-numeric:tabular-nums}
 .chip{font-size:11px;padding:2px 8px;border-radius:999px;background:#f1f2f6;color:#6b7280;flex:none}
 .chip.ready{background:#eaf7ee;color:#15803d}
-.chip.wait{background:#f1efff;color:#533afd}
+.chip.wait{background:#fdeede;color:#ea580c}
 .chip.off{background:#f4f4f5;color:#a1a1aa}
 .chip.done{background:#f0f1f4;color:#52525b}
 .logctl{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
@@ -836,7 +997,11 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 .duo{display:flex;gap:10px;align-items:stretch}
 .duoshot{flex:0 0 46%;min-width:0}
 .duoque{flex:1;min-width:0}
-#phoneShot{display:block;width:100%;height:auto;border-radius:8px;border:1px solid var(--line);background:#eef0f4;min-height:48px}
+#shotLink{display:block;position:relative}
+#phoneShot{display:block;width:100%;height:auto;border-radius:8px;border:1px solid var(--line);background:#eef0f4;min-height:48px;color:transparent}
+#shotLink.loading::before{content:"画面加载中…";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--sub);background:#eef0f4;border:1px solid var(--line);border-radius:8px;min-height:64px}
+#shotLink.loading.failed::before{content:"获取失败，稍后自动重试…";color:#b45309}
+#shotLink.loading #phoneShot{visibility:hidden}
 .duoshot .shotctl{flex-wrap:wrap;gap:4px 8px}
 .duoque .qhead{flex-wrap:wrap;gap:2px 8px;font-size:11.5px}
 .duoque .tasklist .row{font-size:13px;padding:7px 0;flex-wrap:wrap;gap:2px 6px}
@@ -894,7 +1059,7 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 .plansteps .pr{color:var(--sub);font-size:11.5px;flex:none;font-variant-numeric:tabular-nums}
 .plansteps .st.done .tx{color:var(--sub)}
 .plansteps .st.done .pr{color:#9ca3af}
-.plansteps .st.cur{background:#f6f4ff;border-radius:8px;padding-left:6px;padding-right:6px}
+.plansteps .st.cur{background:#fdf0e4;border-radius:8px;padding-left:6px;padding-right:6px}
 .plannote{font-size:11px;color:var(--sub);margin-top:6px;line-height:1.5}
 .watchbox .wrow{display:flex;justify-content:space-between;gap:8px;font-size:12.5px;padding:6px 0;border-top:1px dashed var(--line);align-items:baseline}
 .watchbox .wrow:first-child{border-top:0}
@@ -912,6 +1077,49 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 .btnrow2 .savebtn{margin-top:0}
 .savebtn.ghost{background:#fff;color:var(--accent);border:1.5px solid var(--accent)}
 .hide{display:none!important}
+/* 统一细滚动条（日志框/冒险列表/整页）：细圆角、透明轨道，悬停加深 */
+::-webkit-scrollbar{width:7px;height:7px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#cfd3db;border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:#b4bac6}
+::-webkit-scrollbar-corner{background:transparent}
+html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
+/* 窄屏（≤639px）：保留左右双栏，任务行紧凑化（隐藏类型标签、缩小字号、不折行） */
+@media(max-width:639px){
+  .duoshot{flex:0 0 44%}
+  .mrow{gap:8px;padding:8px 0}
+  .mcb{width:18px;height:18px;border-radius:5px}
+  .mcb.on::after{font-size:11px}
+  .mname{font-size:13px;white-space:nowrap}
+  .ttag{display:none}
+  .mdet{font-size:10.5px;white-space:nowrap}
+}
+/* 平板/中窗（640–919px）：比手机版用更宽的版心和更多列 */
+@media(min-width:640px){
+  main{max-width:720px}
+  .grid{grid-template-columns:repeat(6,minmax(0,1fr))}
+  .thumbs{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .duoshot{flex:0 0 240px}
+  #setForm{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 28px;align-items:start}
+  #setForm .fsec:nth-child(1),#setForm .fsec:nth-child(2){margin-top:0}
+}
+/* 小屏手机（≤360px）：收紧字号与内边距，主页截图/队列改上下堆叠 */
+@media(max-width:360px){
+  header{padding:8px 10px;padding-top:calc(8px + env(safe-area-inset-top))}
+  .brand{font-size:14px}
+  .tabs{gap:4px}
+  .tabs button{font-size:11px;padding:5px 0;border-radius:7px}
+  main{padding:8px}
+  .card{padding:10px 11px;border-radius:10px}
+  .workline .big{font-size:20px}
+  .tile .v{font-size:17px}
+  .grid{gap:6px}
+  .duo{flex-direction:column}
+  .duoshot{flex:none}
+  .advlist .ai{width:96px}
+  .form select,.form input[type=number],.form input[type=text]{max-width:52%}
+  .form input[type=text]{width:126px}
+}
 /* 桌面/网页版（≥920px）：手机布局原样保留，宽屏下加宽 + 多列 */
 @media(min-width:920px){
   header{padding:12px 20px}
@@ -926,12 +1134,39 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
   #setForm .fsec:nth-child(1),#setForm .fsec:nth-child(2){margin-top:0}
   pre#logbox{height:58vh}
 }
+/* 跟随系统深色模式：变量整体换肤 + 硬编码底色的控件逐个覆盖 */
+@media(prefers-color-scheme:dark){
+  :root{--bg:#111318;--card:#1b1e26;--line:#2a2e3a;--text:#e7eaf0;--sub:#98a0ae;--accent:#ff9440;--ok:#22c55e;--gold:#D4A017;--gold-d:#E6C35C}
+  header{background:rgba(17,19,24,.88)}
+  .tabs button,.logctl button,.shotctl button,.minibtn,.savebtn.ghost,.advlist{background:#1b1e26;color:var(--text)}
+  .logctl input,.form select,.form input[type=number],.form input[type=text],.plinedit input{background:#15171e;color:var(--text);border-color:var(--line)}
+  #advDate{background:#1b1e26;color:var(--text);border:1px solid var(--line);border-radius:6px}
+  .chip{background:#262a35;color:#a8b0bf}
+  .chip.ready{background:#12291a;color:#4ade80}
+  .chip.wait{background:#3a2812;color:#ffb877}
+  .chip.run{background:#ff9440;color:#1b1e26}
+  .chip.off{background:#20232c;color:#6b7280}
+  .chip.done{background:#24262e;color:#a1a1aa}
+  .planlines .chipx{background:#20232c;color:#6b7280}
+  .planlines .chipx.ok{background:#12291a;color:#4ade80}
+  .advtip,.advchart{background:#15171e}
+  #phoneShot,#shotLink.loading::before{background:#15171e}
+  .bar{background:#262a35}
+  .sw{background:#3a3f4d}
+  .plansteps .st.cur{background:#382713}
+  .savebtn.ghost{color:#ffb877;border-color:#ff9440}
+  .err{color:#f59e0b}
+  #shotLink.loading.failed::before{color:#f59e0b}
+  ::-webkit-scrollbar-thumb{background:#333947}
+  ::-webkit-scrollbar-thumb:hover{background:#454c5e}
+  html{scrollbar-color:#333947 transparent}
+}
 </style>
 </head>
 <body>
 <header>
   <div class="hrow">
-    <div class="brand"><span class="dot" id="schedDot"></span>QQ宠物托管 <span style="font-weight:400;color:var(--sub);font-size:12px" id="schedTxt"></span></div>
+    <div class="brand"><span class="dot" id="schedDot"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#ffedd5"/><path d="M7.5 12.5 L6 3.5 L14.5 8 Z" fill="#f59e0b"/><path d="M24.5 12.5 L26 3.5 L17.5 8 Z" fill="#f59e0b"/><path d="M8.3 10.6 L7.5 6 L12 8.3 Z" fill="#fbcfe8"/><path d="M23.7 10.6 L24.5 6 L20 8.3 Z" fill="#fbcfe8"/><circle cx="16" cy="18" r="10" fill="#f59e0b"/><ellipse cx="16" cy="21.6" rx="6.6" ry="5" fill="#fff7ed"/><circle cx="11.8" cy="16.4" r="1.7" fill="#1f2937"/><circle cx="20.2" cy="16.4" r="1.7" fill="#1f2937"/><path d="M14.7 19.4 h3.2 l-1.6 2 Z" fill="#f97316"/><path d="M16 21.4 v1.1 M16 22.5 q-1.2 1.3 -2.4 .3 M16 22.5 q1.2 1.3 2.4 .3" stroke="#92400e" stroke-width=".9" fill="none" stroke-linecap="round"/><path d="M6.5 18.5 h3 M6.8 21.5 h2.6 M25.5 18.5 h-3 M25.2 21.5 h-2.6" stroke="#d97706" stroke-width=".9" stroke-linecap="round"/></svg></span>QQ宠物托管 <span style="font-weight:400;color:var(--sub);font-size:12px" id="schedTxt"></span></div>
     <div class="meta" id="clock">--:--:--</div>
   </div>
   <nav class="tabs" id="tabbar">
@@ -944,21 +1179,17 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 </header>
 <main>
   <section class="card" id="runnerCard" data-page="main">
-    <h2>调度器 <span id="runnerMeta" style="font-weight:400;font-size:10.5px"></span></h2>
-    <div class="workline"><span class="dot" id="runnerDot"></span><span class="big" id="runnerState" style="font-size:15px">--</span><span class="hint" id="runnerHint"></span></div>
+    <h2>调度器 · 主任务 <span id="runnerMeta" style="font-weight:400;font-size:10.5px"></span></h2>
+    <div class="workline"><span class="dot" id="runnerDot"></span><span class="big" id="runnerState">--</span><span class="hint" id="runnerHint"></span></div>
     <div class="subline" id="runnerSub"></div>
     <div class="btnrow2"><button class="savebtn" id="btnRunnerStart">▶ 启动调度器</button><button class="savebtn ghost" id="btnRunnerStop">■ 停止调度器</button></div>
     <div class="saveMsg" id="runnerMsg"></div>
-  </section>
-
-  <section class="card" id="workCard" data-page="main">
-    <h2>主任务 <span style="font-weight:400;font-size:10.5px">学习 · 打工 · 冒险</span></h2>
-    <div class="workline"><span class="big" id="workBig">--</span><span class="hint" id="workHint"></span></div>
     <div class="subline" id="workSub"></div>
   </section>
 
   <section class="card" id="advCard" data-page="adv">
     <h2>冒险记录 <span id="advMeta" style="font-weight:400;font-size:10.5px"></span></h2>
+    <div class="advcap" id="advDateRow" style="margin:-2px 0 4px"></div>
     <div class="workline"><span class="big" id="advNet">--</span><span class="hint" id="advNetHint"></span></div>
     <div class="subline" id="advSub"></div>
     <div class="advchips" id="advChips"></div>
@@ -1001,7 +1232,7 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
   <section class="duo" data-page="main">
     <div class="card duoshot">
       <h2>手机画面 <span id="shotMeta" style="font-weight:400;font-size:10.5px"></span></h2>
-      <a id="shotLink" href="/api/screenshot" target="_blank" rel="noopener"><img id="phoneShot" alt="加载中…"></a>
+      <a id="shotLink" class="loading" href="/api/screenshot" target="_blank" rel="noopener"><img id="phoneShot" alt="加载中…"></a>
       <div class="shotctl"><button id="btnShot">刷新</button><span id="shotErr" class="err"></span></div>
     </div>
     <div class="card duoque">
@@ -1072,9 +1303,7 @@ function renderData(d){
   if($('#runnerState')){
     const sch=d.scheduler||{};
     $('#runnerDot').className='dot '+(sch.alive?'on':'off');
-    $('#runnerState').textContent=sch.alive?'运行中':'已停止';
-    $('#runnerHint').textContent=sch.alive?('PID '+sch.pid+(sch.uptime?(' · 已跑 '+sch.uptime):'')):'';
-    $('#runnerSub').textContent=sch.alive?'正在按任务队列自动跑（护理/踩踩/PK/打工/冒险…）':'已停止：手机不会被自动操作；随时可再启动';
+    $('#runnerMeta').textContent=sch.alive?('PID '+sch.pid+(sch.uptime?(' · 已跑 '+sch.uptime):'')):'未运行';
     $('#btnRunnerStart').disabled=!!sch.alive;
     $('#btnRunnerStop').disabled=!sch.alive;
   }
@@ -1086,22 +1315,33 @@ function renderData(d){
   etaRemain=(d.work_eta&&d.work_eta.remaining!=null)?d.work_eta.remaining:null;
   etaClock=d.work_eta?d.work_eta.eta_clock:'';
   schedOn=(d.scheduler||{}).alive;
-  const wdHtml=d.today_duration?('今日：学习 '+d.today_duration.learn_min+' 分 · 打工 '+d.today_duration.work_min+' 分 · '+(((d.today_duration.eff_pct!=null)&&(d.today_duration.eff_pct<100))?('<span style="color:#d97706">效率 '+d.today_duration.eff_pct+'%</span>'):'效率 100%')):'';
+  const td=d.today_duration;
+  let wdHtml='';
+  if(td){
+    const eff=(td.eff_pct!=null&&td.eff_pct<100)?('<span style="color:#d97706">效率 '+td.eff_pct+'%</span>'):'效率 100%';
+    const nxt=(td.next_pct!=null&&td.next_in_min!=null)?('（再 '+td.next_in_min+' 分降到 '+td.next_pct+'%）'):'';
+    wdHtml='今日：学习 '+td.learn_min+' 分 · 打工 '+td.work_min+' 分 · 合计 '+(td.total_min??(td.learn_min+td.work_min))+' 分 · '+eff+nxt;
+  }
+  const rs=$('#runnerState'), rh=$('#runnerHint'), rsub=$('#runnerSub');
   if(!schedOn){
     // 调度器未运行：不引用日志里的旧“预计结算”行（会残留“进行中 剩余00:00”误导）
-    $('#workBig').textContent='未托管';
-    $('#workHint').textContent='调度器未运行（启动后恢复实时状态）';
+    rs.textContent='已停止';
+    rh.textContent='';
+    rsub.textContent='已停止：手机不会被自动操作；随时可再启动';
     $('#workSub').innerHTML=wdHtml;
   }else if(etaRemain!=null){
     const kind=(d.work_eta&&d.work_eta.kind)?d.work_eta.kind:'';
-    $('#workBig').textContent=kind?(kind+'中'):'进行中';
-    $('#workHint').textContent='预计 '+etaClock+' 结束';
+    rs.textContent=kind?(kind+'中'):'进行中';
+    rh.textContent='预计 '+etaClock+' 结束';
     $('#workSub').textContent=(etaRemain>0?('剩余 '+hms(etaRemain)):'收尾中…')+' · 结束后自动开启下一项';
+    rsub.textContent='';
   }else{
-    $('#workBig').textContent='等待中';
-    $('#workHint').textContent=d.last_line?d.last_line.replace(/^\[[\d:]+\]\s*/,'').slice(0,60):'';
+    rs.textContent='等待中';
+    rh.textContent=d.last_line?d.last_line.replace(/^\[[\d:]+\]\s*/,'').slice(0,60):'';
     $('#workSub').innerHTML=wdHtml;
+    rsub.textContent='';
   }
+  if(rsub) rsub.style.display=rsub.textContent?'':'none';
   // 统计瓦片
   const pg=d.progress||{}, cfg=d.config||{};
   const vv=pg.visit&&pg.visit.learned!=null?pg.visit.learned:null;
@@ -1118,49 +1358,67 @@ function renderData(d){
   $('#workCnt').textContent=(schedOn&&etaRemain!=null)?wk+'+1':wk;
   const ed=(pg.exp_daily&&pg.exp_daily.done)?'✓ 完成':'未完成';
   $('#expTxt').textContent=ed;
-  // 队列：运行中=实时快照（按执行顺序排）；停止=按当前配置显示启用状态（旧快照会误导，不用）
+  // 队列：MAA 风格任务开关列表（勾选=启用该任务，写入 config 下轮生效）
   const q=d.queue||{}, qt=q.tasks||{};
   const qLive=(d.scheduler||{}).alive;
   const qOrder=(cfg.task_order||[]);
   const qRank=k=>{const i=qOrder.indexOf(k);return i<0?999:i;};
   let rows='';
   let hiddenQ=[];
+  const cur=(q.current||'');
+  const curMap={'上课':'school','学习':'school','打工':'work','冒险':'adventure',
+                '护理':'care','踩踩':'visit','PK':'pk','好友护理':'friend_care',
+                '福袋':'gift_bag','雇佣好友':'hire_friend'};
+  const curKey=cur?(curMap[cur]||Object.keys(TASKNAME).find(k=>TASKNAME[k]===cur)||''):null;
+  // 任务类型标签：循环=按间隔反复巡检；每日=每天定时一轮；主线=主任务组
+  const TTAG={care:'循环',friend_care:'循环',gift_bag:'循环',
+              visit:'每日',pk:'每日',
+              adventure:'主线',school:'主线',work:'主线',hire_friend:'主线'};
+  const rowOf=(k,on,st,nx)=>{
+    const isRun=curKey&&k===curKey;
+    let det;
+    if(!on) det='<span class="off-t">已禁用</span>';
+    else if(st==='cfg') det=on==='cfg'?'':'已启用';
+    else if(isRun) det='<span class="run">▶ 执行中</span>';
+    else if(st==='ready') det='可执行';
+    else if(st==='waiting') det=(qt[k]&&qt[k].next)?('等待 · '+qt[k].next.slice(11,16)):'等待';
+    else if(st==='done') det='✓ 今日完成';
+    else if(st==='dead') det='今日结束';
+    else det='—';
+    const done=(st==='done'||st==='dead');
+    const tag=TTAG[k]?('<span class="ttag">'+TTAG[k]+'</span>'):'';
+    return '<div class="mrow'+(done?' done':'')+(isRun?' run':'')+'">'
+      +'<span class="mcb'+(on&&st!=='disabled'?' on':'')+'" data-k="'+k+'"></span>'
+      +'<span class="mname'+(on?'':' off')+'">'+(TASKNAME[k]||k)+'</span>'+tag
+      +'<span class="mdet">'+(on?det:'<span class="off-t">已禁用</span>')+'</span></div>';
+  };
   if(qLive){
-    $('#qTop').textContent='待执行 '+(q.ready??'--')+' · 等待中 '+(q.waiting??'--')+(q.next?(' · 下个定时：'+(TASKNAME[q.next]||q.next)+' '+(q.next_at||'')):'');
+    $('#qTop').innerHTML=(cur?'<span style="color:var(--accent);font-weight:650">正在执行:'+esc(cur)+'</span> · ':'')
+      +'可执行 '+(q.ready??'--')+' · 等待 '+(q.waiting??'--')
+      +(q.next?(' · 下个定时 '+(TASKNAME[q.next]||q.next)+' '+String(q.next_at||'').slice(0,5)):'');
     $('#qUpd').textContent=q.updated?('更新 '+q.updated):'';
-    // 按执行顺序排：可执行在前、定时的居中（按时间）、今日完成沉底；未启用的不显示（列表下方灰字标注）
-    const qStatRank=s=> s==='ready'?0 : s==='waiting'?1 : 2;
-    const qItems=Object.entries(qt).map(([k,v])=>({k,v,st:v.state||'',sr:qStatRank(v.state||'')}));
-    qItems.sort((a,b)=> (a.sr-b.sr)
-        || (a.sr===1 ? String(a.v.next||'~').localeCompare(String(b.v.next||'~')) : (qRank(a.k)-qRank(b.k))));
-    hiddenQ=qItems.filter(o=>o.st==='disabled').map(o=>TASKNAME[o.k]||o.k);
-    if(q.pending) rows+='<div class="row"><div class="t"><span>收尾队列</span><span class="chip ready">'+q.pending+' 待结算</span></div><div class="nx"></div></div>';
-    for(const o of qItems){
-      if(o.st==='disabled') continue;
-      const stt=o.st;
-      const chip= stt==='ready'?'<span class="chip ready">可执行</span>'
-                : stt==='waiting'?'<span class="chip wait">等待</span>'
-                : stt==='done'?'<span class="chip done">✓ 今日完成</span>'
-                : stt==='dead'?'<span class="chip done">✓ 今日完成</span>'
-                : '<span class="chip">'+stt+'</span>';
-      const nx=o.v.next?('→ '+(o.v.next.slice(0,10)===todayStr?'':'明 ')+o.v.next.slice(11,16)):'';
-      rows+='<div class="row"><div class="t"><span>'+(TASKNAME[o.k]||o.k)+'</span>'+chip+'</div><div class="nx">'+nx+'</div></div>';
+    hiddenQ=Object.entries(qt).filter(([k,v])=>(v.state||'')==='disabled').map(([k])=>TASKNAME[k]||k);
+    if(q.pending) rows+='<div class="mrow"><span class="mname">收尾队列</span>'
+      +'<span class="mdet"><span class="run">'+q.pending+' 待结算</span></span></div>';
+    const ks=Object.keys(qt).slice().sort((a,b)=>qRank(a)-qRank(b));
+    for(const k of ks){
+      const st=qt[k].state||'';
+      const nx=qt[k].next?('→ '+(qt[k].next.slice(0,10)===todayStr?'':'明 ')+qt[k].next.slice(11,16)):'';
+      rows+=rowOf(k, st!=='disabled', st, nx);
     }
   }else{
-    // 调度器未运行：不用旧快照（曾残留"学习 已禁用"误导），按当前配置逐任务算启用状态；
-    // 未启用的任务不显示（列表下方灰字标注）
     const te=cfg.tasks_enabled||{};
     const keys=qOrder.length?qOrder:Object.keys(te);
-    $('#qTop').textContent='调度器未运行 · 按当前配置显示';
-    $('#qUpd').innerHTML='<span style="color:#d97706">启动后显示实时队列（可执行/等待/今日完成）</span>';
+    $('#qTop').textContent='调度器未运行 · 勾选即启用该任务（保存后下一轮生效）';
+    $('#qUpd').innerHTML='<span style="color:#d97706">启动调度器后开始自动托管</span>';
     hiddenQ=keys.filter(k=>te[k]===false).map(k=>TASKNAME[k]||k);
-    for(const k of keys){
-      if(te[k]===false) continue;
-      const chip= te[k]===true?'<span class="chip ready">已启用</span>' : '<span class="chip">—</span>';
-      rows+='<div class="row"><div class="t"><span>'+(TASKNAME[k]||k)+'</span>'+chip+'</div><div class="nx"></div></div>';
+    const allKeys=(keys.length?keys:Object.keys(TASKNAME)).slice().sort((a,b)=>qRank(a)-qRank(b));
+    for(const k of allKeys){
+      const on=te[k]!==false;
+      rows+=rowOf(k, on, 'cfg', '');
     }
   }
-  $('#taskList').innerHTML=rows||'<div class="row">无数据</div>';
+  $('#taskList').innerHTML=rows||'';
   const qh=document.getElementById('qHidden');
   if(qh){
     if(hiddenQ.length){ qh.style.display=''; qh.textContent='未启用：'+hiddenQ.join('、')+'（不参与调度）'; }
@@ -1193,11 +1451,11 @@ function drawAdv(){
   let mx=Math.max(10,...ys0.map(v=>Math.abs(v)))*1.15;
   const sy0=v=>42-v/mx*34;
   if((d.cum||[]).length>1){
-    inner+='<polyline points="'+d.cum.map(p=>sx(p[0]).toFixed(1)+','+sy0(p[1]).toFixed(1)).join(' ')+'" fill="none" stroke="#533afd" stroke-width="2" stroke-linejoin="round"/>';
+    inner+='<polyline points="'+d.cum.map(p=>sx(p[0]).toFixed(1)+','+sy0(p[1]).toFixed(1)).join(' ')+'" fill="none" stroke="#ea580c" stroke-width="2" stroke-linejoin="round"/>';
     const lp=d.cum[d.cum.length-1];
-    inner+='<circle cx="'+sx(lp[0]).toFixed(1)+'" cy="'+sy0(lp[1]).toFixed(1)+'" r="3" fill="#533afd"/>';
+    inner+='<circle cx="'+sx(lp[0]).toFixed(1)+'" cy="'+sy0(lp[1]).toFixed(1)+'" r="3" fill="#ea580c"/>';
   }
-  if(window.__advSel&&window.__advSel.chart==='cum'){const cm={};(d.cum||[]).forEach(p=>cm[p[0]]=p[1]);const k=window.__advSel.k;if(k in cm){const xx=sx(k).toFixed(1);inner+='<line x1="'+xx+'" y1="4" x2="'+xx+'" y2="80" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3 3"/><circle cx="'+xx+'" cy="'+sy0(cm[k]).toFixed(1)+'" r="4" fill="#533afd" stroke="#fff" stroke-width="1.5"/>';}}
+  if(window.__advSel&&window.__advSel.chart==='cum'){const cm={};(d.cum||[]).forEach(p=>cm[p[0]]=p[1]);const k=window.__advSel.k;if(k in cm){const xx=sx(k).toFixed(1);inner+='<line x1="'+xx+'" y1="4" x2="'+xx+'" y2="80" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3 3"/><circle cx="'+xx+'" cy="'+sy0(cm[k]).toFixed(1)+'" r="4" fill="#ea580c" stroke="#fff" stroke-width="1.5"/>';}}
   svgSet('svgCum',inner);
   let inner2='<line x1="0" y1="42" x2="'+W+'" y2="42" stroke="#e2e5ec" stroke-width="1" stroke-dasharray="4 4"/>';
   const ys1=(d.pts||[]).map(p=>p[1]);
@@ -1225,7 +1483,11 @@ function drawAdv(){
 function renderAdventure(d){
   window.__adv=d;
   if(!d||!d.ok){const m=$('#advMeta');if(m)m.textContent='暂无数据';return}
-  $('#advMeta').textContent='共 '+d.n+' 把 · 今日 '+(d.today_n||0)+' 把（'+((d.today_net||0)>0?'+':'')+(d.today_net||0)+'） · 更新 '+(d.updated||'');
+  const fmtNet=v=>(v>0?'+':'')+v;
+  if(d.date==='all') $('#advMeta').textContent='共 '+d.n+' 把 · 今日 '+(d.today_n||0)+' 把（'+fmtNet(d.today_net||0)+'） · 更新 '+(d.updated||'');
+  else if(d.date===d.today) $('#advMeta').textContent='共 '+d.n+' 把 · 更新 '+(d.updated||'');
+  else $('#advMeta').textContent=(d.date||'').slice(5).replace('-','月')+'日 · 共 '+d.n+' 把 · 更新 '+(d.updated||'');
+  renderAdvDates(d);
   const big=$('#advNet');big.textContent=(d.net>0?'+':'')+d.net;
   big.style.color=d.net>0?'var(--gold)':(d.net<0?'#dc2626':'');
   $('#advNetHint').textContent='金币收益合计（结算页口径） · 平均 '+(d.avg>0?'+':'')+d.avg+'/把';
@@ -1239,6 +1501,22 @@ function renderAdventure(d){
   drawAdv();
   renderAdvList(d);
 }
+function renderAdvDates(d){
+  const row=$('#advDateRow'); if(!row)return;
+  const sig=(d.date||'')+'|'+(d.dates||[]).join(',');
+  if(row.__sig===sig)return; row.__sig=sig;
+  const opts=[];
+  for(const dt of (d.dates||[])){
+    const lab=dt===d.today?'今天':(dt===d.yesterday?'昨天':dt.slice(5).replace('-','/'));
+    opts.push('<option value="'+dt+'"'+(dt===d.date?' selected':'')+'>'+lab+'</option>');
+  }
+  opts.push('<option value="all"'+(d.date==='all'?' selected':'')+'>全部</option>');
+  row.innerHTML='统计范围 <select id="advDate" style="font:inherit;padding:1px 4px">'+opts.join('')+'</select>';
+}
+const _advDateRow=document.getElementById('advDateRow');
+if(_advDateRow) _advDateRow.addEventListener('change',e=>{
+  if(e.target&&e.target.id==='advDate'){window.__advDate=e.target.value;refreshAdventure();}
+});
 let advShowAll=true;
 function renderAdvList(d){
   const list=$('#advList'); if(!list)return;
@@ -1321,7 +1599,7 @@ function renderPlan(d){
   if(!d||!d.ok)return;
   window.__plan=d;
   $('#planMeta').textContent='总属性 '+d.total+'/'+d.total_target+' · 更新 '+(d.updated||'');
-  $('#planBars').innerHTML=planBar('属性总进度',d.total,d.total_target,'var(--accent)')+planBar('见习解锁',d.jr_n,8,'#16a34a')+planBar('初级解锁',d.ch_n,8,'#533afd');
+  $('#planBars').innerHTML=planBar('属性总进度',d.total,d.total_target,'var(--accent)')+planBar('见习解锁',d.jr_n,8,'#16a34a')+planBar('初级解锁',d.ch_n,8,'#ea580c');
   let firstOpen=false;
   $('#planSteps').innerHTML=(d.steps||[]).map(s=>{
     let cls='st',dot='○';
@@ -1398,7 +1676,7 @@ const _rbStart=$('#btnRunnerStart'), _rbStop=$('#btnRunnerStop');
 if(_rbStart) _rbStart.onclick=()=>runnerAction('start');
 if(_rbStop) _rbStop.onclick=()=>{ if(confirm('停止调度器？正在进行的任务会先收尾再退出（约几秒到十几秒）。')) runnerAction('stop'); };
 async function refreshAdventure(){
-  try{ renderAdventure(await j('/api/adventure')); }catch(e){}
+  try{ renderAdventure(await j('/api/adventure'+(window.__advDate?'?date='+encodeURIComponent(window.__advDate):''))); }catch(e){}
 }
 
 async function refreshLogs(){
@@ -1441,27 +1719,48 @@ function renderSettings(ed){
   if(!ed) return;
   setInit=Object.assign({},ed);
   const sel=(id,opts,cur)=>'<select id="'+id+'">'+opts.map(v=>'<option value="'+v+'"'+(v===cur?' selected':'')+'>'+v+'</option>').join('')+'</select>';
-  const moOpts=[['school>hire_friend>work>adventure','打工优先（打满8h疲劳后全冒险）'],['school>hire_friend>adventure>work','冒险优先（有次数就优先冒险）']];
-  const moSel=(cur)=>'<select id="selMainOrder" title="主任务组（学习/雇佣/冒险/打工）互斥时的执行优先级，改完下一轮调度生效">'+moOpts.map(o=>'<option value="'+o[0]+'"'+(o[0]===cur?' selected':'')+'>'+o[1]+'</option>').join('')+(moOpts.some(o=>o[0]===cur)?'':'<option value="'+esc(cur||'')+'" selected>自定义：'+esc(cur||'')+'</option>')+'</select>';
+  // 选项名只描述 work 与 adventure 的先后（school/hire_friend 两组里都固定在前，
+  // 且各任务能否执行还取决于自身条件——金币/时长上限/疲劳/次数，见 _school_due 等）
+  const moOpts=[['school>hire_friend>work>adventure','先打工，打满 8h 再冒险'],['school>hire_friend>adventure>work','先冒险，冒险没次数了再打工']];
+  const moSel=(cur)=>'<select id="selMainOrder" title="主任务组（学习/雇佣/冒险/打工）互斥时的执行优先级：按 > 顺序逐个检查，第一个条件满足的执行。学习与雇佣好友在两组预设里都固定排在最前，此处切换的只是打工与冒险的先后；每个任务还要自身条件满足才会执行（金币达标/未超时长上限/未疲劳/次数未满），改完下一轮调度生效">'+moOpts.map(o=>'<option value="'+o[0]+'"'+(o[0]===cur?' selected':'')+'>'+o[1]+'</option>').join('')+(moOpts.some(o=>o[0]===cur)?'':'<option value="'+esc(cur||'')+'" selected>自定义：'+esc(cur||'')+'</option>')+'</select>';
   const FG=(t,rows)=>'<div class="fsec"><div class="fsect">'+t+'</div>'+rows.join('')+'</div>';
   $('#setForm').innerHTML=
     FG('学习',[
     '<div class="frow"><span class="k">只打工不学习</span><button class="sw'+(ed.school_enabled?'':' on')+'" id="swSchool" title="开=只打工；关=学习+打工"></button></div>',
     '<div class="frow"><span class="k">学习科目</span>'+sel('selSchoolAttr', ['力量','智力','魅力','夏令营'], ed.school_attribute)+'</div>',
     '<div class="frow"><span class="k">每天学习次数</span><input type="number" id="numSchoolTimes" min="0" step="1" title="0=不限" value="'+(ed.school_times??0)+'"></div>',
-    '<div class="frow"><span class="k">课时时长</span>'+sel('selSchoolDur', ['10分钟','30分钟'], ed.school_duration)+'</div>',
-    '<div class="frow"><span class="k">课时说明</span><span style="color:var(--sub);font-size:12px">10分钟课单位消耗收益更高；夏令营=随机属性+5（固定30分钟）</span></div>',
-    '<div class="frow"><span class="k">金币阈值</span><input type="number" id="numCoin" min="0" step="100" title="金币 ≥ 该值优先学习，低于该值先打工" value="'+(ed.coin_threshold??'')+'"></div>',
+    '<div class="frow"><span class="k">课时档位</span>'+sel('selSchoolDur', ['短课','长课'], ed.school_duration)+'</div>',
+    '<div class="frow"><span class="k">当前选择</span><span id="schoolHint" style="color:var(--sub);font-size:12px"></span></div>',
+    '<div class="frow"><span class="k">档位说明</span><span style="color:var(--sub);font-size:12px">课程轮播固定 7 张：卡1-3 短课（力量/智力/魅力）、卡4-6 长课（同序）、卡7 萌芽夏令营。各学院具体分钟数不同（初级10/30、高级30/90），实际时长选课后从面板自动读取，升级学院不用改配置</span></div>',
+    '<div class="frow"><span class="k">课时说明</span><span style="color:var(--sub);font-size:12px">短课单位消耗收益更高（每30分钟 +6属性/+30学分 vs 长课 +5/+25）</span></div>',
     ])+
     FG('打工',[
     '<div class="frow"><span class="k">打工地点</span>'+sel('selLoc', ed.work_locations||[], ed.work_location)+'</div>',
     '<div class="frow"><span class="k">打工时长</span>'+sel('selDur', ['10分钟','45分钟','2小时'], ed.work_duration)+'</div>',
     '<div class="frow"><span class="k">优先雇佣</span><input type="text" id="txtHire" placeholder="宠物名/主人名，空=自动选收益最高" value="'+esc(ed.hire_name||'')+'"></div>',
     ])+
-    FG('调度与效率',[
+    FG('学习 / 打工 总控（8h 共享预算）',[
+    '<div class="frow"><span class="k">今日学习</span><input type="number" id="numStudyQuota" min="0" max="24" step="1" title="今天最多学几小时。0 = 今天不学习。学习与打工共享同一份合计预算" value="'+(ed.study_quota_hours??8)+'"><span class="u">小时</span></div>',
+    '<div class="frow"><span class="k">今日打工</span><input type="number" id="numWorkQuota" min="0" max="24" step="1" title="今天最多打几小时。0 = 今天不打工。学习与打工共享同一份合计预算" value="'+(ed.work_quota_hours??8)+'"><span class="u">小时</span></div>',
+    '<div class="frow"><span class="k">合计预算</span><input type="number" id="numHour" min="0" max="24" step="1" title="学习+打工合计达到该时长后，今天不再学习（但仍可打工，直到「打工停」）。0=不限" value="'+(ed.daily_hour_limit??'')+'"><span class="u">小时（学习停）</span></div>',
+    '<div class="frow"><span class="k">打工停</span><input type="number" id="numWorkStop" min="0" max="24" step="1" title="学习+打工合计达到该时长后今天不再打工。设得比「合计预算」大 = 学满后继续吃 25% 档打工；两个都填 8 = 合计满 8h 全停转冒险" value="'+(ed.work_stop_hours??'')+'"><span class="u">小时（打工停）</span></div>',
+    '<div class="frow"><span class="k">金币阈值</span><input type="number" id="numCoin" min="0" step="100" title="金币 ≥ 该值优先学习，低于该值先打工赚够再学。只学习时请填 0，否则金币不足会先去打工" value="'+(ed.coin_threshold??'')+'"></div>',
+    '<div class="frow"><span class="k">当前设置</span><span id="quotaHint" style="color:var(--sub);font-size:12px"></span></div>',
+    '<div class="frow"><span class="k">一键预设</span><span style="display:flex;gap:6px;flex-wrap:wrap">'
+      +'<button class="minibtn" data-quota="study8" title="学习8 / 打工0 / 合计8 / 打工停8 / 金币0">只学习 8h</button>'
+      +'<button class="minibtn" data-quota="study12" title="学习12 / 打工0 / 合计12 / 打工停12 / 金币0">只学习 12h</button>'
+      +'<button class="minibtn" data-quota="work8" title="学习0 / 打工8 / 合计8 / 打工停8">只打工 8h</button>'
+      +'<button class="minibtn" data-quota="half" title="学习4 / 打工4 / 合计8 / 打工停8 / 金币2000">各半 4+4</button>'
+      +'<button class="minibtn" data-quota="both" title="学习8 / 打工8 / 合计8 / 打工停8 / 金币2000（默认：按金币自动选）">都行 8+8</button>'
+      +'</span></div>',
+    ])+
+    FG('疲劳分两层（8h 降收益仍可跑 / 12h 完全停止）',[
+    '<div class="frow"><span class="k">第一层门槛</span><input type="number" id="numEffT1" min="0" max="24" step="1" title="学习+打工合计达到该时长进入【第一层】：收益效率降到 25%，但仍可继续学习/打工。游戏在 8h/12h 的提示文案相同，分层以本工具的时长账本为准" value="'+(ed.efficiency_tier1_hours??8)+'"><span class="u">小时 → 25%，仍可跑</span></div>',
+    '<div class="frow"><span class="k">第二层门槛</span><input type="number" id="numEffT2" min="0" max="24" step="1" title="学习+打工合计达到该时长进入【第二层】：收益效率降到 10%，且完全禁止学习/打工（转冒险）。0 = 不设第二层" value="'+(ed.efficiency_tier2_hours??12)+'"><span class="u">小时 → 10%，完全停</span></div>',
+    '<div class="frow"><span class="k">说明</span><span style="color:var(--sub);font-size:12px">第一层只降收益、不拦任务；第二层才禁止学习/打工。游戏疲劳提示会记录，但是否停由上面的合计时长决定</span></div>',
+    ])+
+    FG('调度',[
     '<div class="frow"><span class="k">主任务优先级</span>'+moSel(ed.main_order)+'</div>',
-    '<div class="frow"><span class="k">时长上限（小时）</span><input type="number" id="numHour" min="0" step="1" title="学习+打工合计到该时长后今天不再学习（只打工）" value="'+(ed.daily_hour_limit??'')+'"></div>',
-    '<div class="frow"><span class="k">打工停止（小时）</span><input type="number" id="numWorkStop" min="0" max="24" step="1" title="学习+打工合计到该时长后今天不再打工（主号=8：打满疲劳档转全冒险），0=不限" value="'+(ed.work_stop_hours??'')+'"></div>',
     ])+
     FG('踩踩',[
     '<div class="frow"><span class="k">踩踩次数/天</span><input type="number" id="numVisit" min="0" step="1" value="'+(ed.visit_times??'')+'"></div>',
@@ -1510,6 +1809,66 @@ function renderSettings(ed){
   $('#swCareer').onclick=()=>{ $('#swCareer').classList.toggle('on'); setDirty=true; };
   $('#swCareerStop').onclick=()=>{ $('#swCareerStop').classList.toggle('on'); setDirty=true; };
   $('#swPkHf').onclick=()=>{ $('#swPkHf').classList.toggle('on'); setDirty=true; };
+  // 「当前设置」实时提示：把四个数字翻译成一句人话，避免填错组合（如只学习却
+  // 忘了把金币阈值调 0 → 金币不足时会先去打工，看着像"没在学习"）
+  const qv=id=>{const el=$(id); return el?parseInt(el.value,10):NaN;};
+  const updQuotaHint=()=>{
+    const el=$('#quotaHint'); if(!el) return;
+    const sq=qv('#numStudyQuota'), wq=qv('#numWorkQuota');
+    const lim=qv('#numHour'), stop=qv('#numWorkStop'), coin=qv('#numCoin');
+    const parts=[];
+    if(sq===0&&wq===0) parts.push('学习和打工都关了（只剩冒险/支线）');
+    else if(sq>0&&wq===0) parts.push('只学习 '+sq+' 小时');
+    else if(sq===0&&wq>0) parts.push('只打工 '+wq+' 小时');
+    else if(sq>0&&wq>0) parts.push('学习 '+sq+'h + 打工 '+wq+'h，先到先切');
+    if(lim>0) parts.push('合计满 '+lim+'h 停学习');
+    if(stop>0) parts.push('满 '+stop+'h 停打工');
+    if(sq>0&&wq===0&&coin>0) parts.push('⚠ 金币阈值 '+coin+' > 0：金币不足时会先去打工，想纯学习请设 0');
+    el.textContent=parts.join('；');
+    el.style.color=(sq>0&&wq===0&&coin>0)?'var(--warn)':'var(--sub)';
+  };
+  ['#numStudyQuota','#numWorkQuota','#numHour','#numWorkStop','#numCoin'].forEach(id=>{
+    const el=$(id); if(el) el.addEventListener('input',updQuotaHint);
+  });
+  updQuotaHint();
+  // 「当前选择」实时提示：科目与档位是两个独立字段，选「夏令营」时档位会被忽略
+  // （夏令营固定第 7 张卡、不按属性选框），这里说清，避免看着矛盾
+  const updSchoolHint=()=>{
+    const el=$('#schoolHint'); if(!el) return;
+    const attrEl=$('#selSchoolAttr'), durEl=$('#selSchoolDur');
+    const attr=attrEl?attrEl.value:'', dur=durEl?durEl.value:'';
+    if(attr==='夏令营'){
+      el.textContent='科目=萌芽夏令营（卡7）：随机属性+5，不走属性课卡；下面的课时档位对它无效';
+      el.style.color='var(--warn)';
+    } else {
+      el.textContent=attr+' · '+(dur==='长课'?'长课（卡4-6）':'短课（卡1-3）')
+        +' —— 具体分钟数选课后自动读取（各学院不同）';
+      el.style.color='var(--sub)';
+    }
+  };
+  ['#selSchoolAttr','#selSchoolDur'].forEach(id=>{
+    const el=$(id); if(el) el.addEventListener('change',updSchoolHint);
+  });
+  updSchoolHint();
+  // 一键预设：把「学习/打工怎么分」这类需求一次填好 5 个字段（只改表单，点保存才落盘）
+  const QUOTA_PRESETS={
+    study8:  {study:8,  work:0, lim:8,  stop:8,  coin:0},
+    study12: {study:12, work:0, lim:12, stop:12, coin:0},
+    work8:   {study:0,  work:8, lim:8,  stop:8,  coin:2000},
+    half:    {study:4,  work:4, lim:8,  stop:8,  coin:2000},
+    both:    {study:8,  work:8, lim:8,  stop:8,  coin:2000},
+  };
+  document.querySelectorAll('[data-quota]').forEach(b=>{
+    b.onclick=()=>{
+      const p=QUOTA_PRESETS[b.dataset.quota]; if(!p) return;
+      const set=(id,v)=>{const el=$(id); if(el) el.value=v;};
+      set('#numStudyQuota',p.study); set('#numWorkQuota',p.work);
+      set('#numHour',p.lim); set('#numWorkStop',p.stop); set('#numCoin',p.coin);
+      setDirty=true; updQuotaHint();
+      const msg=$('#saveMsg');
+      if(msg){ msg.className='saveMsg'; msg.textContent='已填入「'+b.textContent+'」，记得点下面的保存设置'; }
+    };
+  });
 }
 
 async function saveSettings(){
@@ -1538,6 +1897,7 @@ async function saveSettings(){
   selc('#selLoc','work_location'); selc('#selDur','work_duration'); selc('#selCare','care_method'); selc('#selFCMethod','friend_care_method'); selc('#selEmpAction','employed_action'); selc('#selMainOrder','main_order'); selc('#selSchoolAttr','school_attribute'); selc('#selSchoolDur','school_duration');
   txtc('#txtHire','hire_name');
   num('#numCoin','coin_threshold'); num('#numHour','daily_hour_limit'); num('#numWorkStop','work_stop_hours'); num('#numSchoolTimes','school_times');
+  num('#numStudyQuota','study_quota_hours'); num('#numWorkQuota','work_quota_hours'); num('#numEffT1','efficiency_tier1_hours'); num('#numEffT2','efficiency_tier2_hours');
   num('#numVisit','visit_times'); num('#numPk','pk_times'); num('#numAdv','adventure_times');
   txtc('#txtPkOnly','pk_only'); txtc('#txtPkSkip','pk_skip'); num('#numPkLv','pk_max_level'); txtc('#txtPkHelper','pk_helper');
   num('#numEnergy','care_energy'); num('#numClean','care_clean'); num('#numExchange','care_exchange'); num('#numGbInt','gift_bag_interval'); num('#numCareerInt','career_interval');
@@ -1585,13 +1945,34 @@ async function refreshShot(force){
     if(!r.ok) throw new Error((await r.text()).slice(0,80));
     const b=await r.blob(); const u=URL.createObjectURL(b);
     const img=$('#phoneShot'); if(shotUrl) URL.revokeObjectURL(shotUrl);
-    shotUrl=u; img.src=u;
+    shotUrl=u;
+    img.onload=()=>$('#shotLink').classList.remove('loading','failed');
+    img.src=u;
     $('#shotMeta').textContent='拍摄 '+((r.headers.get('X-Shot-At')||'').slice(0,5));
     $('#shotErr').textContent='';
-  }catch(e){ $('#shotErr').textContent='获取失败，点“刷新”重试'; }
+  }catch(e){
+    $('#shotLink').classList.add('failed');
+    $('#shotErr').textContent='获取失败，点“刷新”重试';
+  }
   shotBusy=false;
 }
 $('#btnShot').onclick=()=>refreshShot(true);
+
+
+// 任务开关：点击勾选 → 写入 config（ruamel 保注释），调度器下一轮热加载生效
+document.getElementById('taskList').addEventListener('click', async ev => {
+  const cb = ev.target.closest('.mcb'); if(!cb) return;
+  const k = cb.dataset.k; if(!k) return;
+  const on = !cb.classList.contains('on');
+  cb.classList.toggle('on', on);
+  const nm = cb.parentElement.querySelector('.mname');
+  if(nm) nm.classList.toggle('off', !on);
+  try {
+    await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({updates:{[k+'_enabled']:on}})});
+    setTimeout(refreshData, 1500);
+  } catch(e) { cb.classList.toggle('on'); setTimeout(refreshData, 800); }
+});
 
 function showTab(name){
   document.querySelectorAll('main > [data-page]').forEach(el=>el.classList.toggle('hide', el.dataset.page!==name));
@@ -1610,6 +1991,10 @@ setInterval(()=>{if(!document.hidden)refreshPlan()},15000);
 setInterval(()=>{if(!document.hidden)refreshShot(false)},15000);
 refreshData();refreshLogs();refreshAdventure();refreshPlan();refreshShot(false);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden){refreshData();refreshLogs();refreshAdventure();refreshPlan();refreshShot(false)}});
+try{
+  const okSW=('serviceWorker' in navigator)&&(location.protocol==='https:'||location.hostname==='localhost'||location.hostname==='127.0.0.1');
+  if(okSW) navigator.serviceWorker.register('/sw.js').catch(()=>{});
+}catch(e){}
 </script>
 </body>
 </html>
@@ -1634,11 +2019,30 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == '/':
                 self._send(200, 'text/html; charset=utf-8', HTML.encode('utf-8'))
+            elif path == '/manifest.json':
+                self._send(200, 'application/manifest+json',
+                           MANIFEST_JSON.encode('utf-8'))
+            elif path == '/sw.js':
+                self._send(200, 'application/javascript', SW_JS.encode('utf-8'))
+            elif path in ('/icon-192.png', '/icon-512.png'):
+                fp = BASE / 'static' / path.lstrip('/')
+                if fp.exists():
+                    data = fp.read_bytes()
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'image/png')
+                    self.send_header('Cache-Control', 'max-age=604800')
+                    self.send_header('Content-Length', str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                else:
+                    self._send(404, 'text/plain', b'not found')
             elif path == '/api/data':
                 body = json.dumps(build_data(), ensure_ascii=False).encode('utf-8')
                 self._send(200, 'application/json; charset=utf-8', body)
             elif path == '/api/adventure':
-                body = json.dumps(adventure_data(), ensure_ascii=False).encode('utf-8')
+                q = parse_qs(u.query)
+                body = json.dumps(adventure_data((q.get('date') or [''])[0]),
+                                  ensure_ascii=False).encode('utf-8')
                 self._send(200, 'application/json; charset=utf-8', body)
             elif path == '/api/plan':
                 body = json.dumps(plan_data(), ensure_ascii=False).encode('utf-8')
