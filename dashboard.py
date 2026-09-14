@@ -373,6 +373,9 @@ def config_summary() -> dict:
         'work_location': work.get('location'),
         'work_duration': work.get('duration'),
         'coin_threshold': sched.get('coin_threshold'),
+        # 今日配额（小时）：首页「今日学习/打工」瓦片按配额显示进度（如 8.2/12h）
+        'study_quota_hours': sched.get('study_quota_hours', 0),
+        'work_quota_hours': sched.get('work_quota_hours', 0),
         'visit_per_day': visit.get('times_per_day'),
         'pk_per_day': pk.get('times_per_day'),
         'adventure_times': adv.get('times_per_day'),
@@ -396,6 +399,7 @@ def load_progress() -> dict:
         'visit': today_of('visit_progress.json', {'learned': 0}),
         'pk': today_of('pk_progress.json', {'learned': 0}),
         'work': today_of('work_progress.json', {'learned': 0}),
+        'school': today_of('school_progress.json', {'learned': 0, 'study_secs': 0}),
         'adventure': today_of('adventure_progress.json', {'learned': 0}),
         'exp_daily': today_of('exp_daily_progress.json', {'done': False}),
     }
@@ -1097,7 +1101,7 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
 /* 平板/中窗（640–919px）：比手机版用更宽的版心和更多列 */
 @media(min-width:640px){
   main{max-width:720px}
-  .grid{grid-template-columns:repeat(6,minmax(0,1fr))}
+  .grid{grid-template-columns:repeat(7,minmax(0,1fr))}
   .thumbs{grid-template-columns:repeat(4,minmax(0,1fr))}
   .duoshot{flex:0 0 240px}
   #setForm{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 28px;align-items:start}
@@ -1127,7 +1131,7 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
   .tabs{gap:8px}
   .tabs button{flex:0 0 auto;padding:7px 22px;font-size:13px}
   main{max-width:1120px;padding:16px 20px 30px}
-  .grid{grid-template-columns:repeat(6,minmax(0,1fr))}
+  .grid{grid-template-columns:repeat(7,minmax(0,1fr))}
   .duoshot{flex:0 0 300px}
   .thumbs{grid-template-columns:repeat(4,minmax(0,1fr))}
   #setForm{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 34px;align-items:start}
@@ -1225,7 +1229,8 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
     <div class="tile"><div class="v" id="visitTxt">--</div><div class="k">今日踩踩</div><div class="bar"><i id="visitBar"></i></div></div>
     <div class="tile"><div class="v" id="pkTxt">--</div><div class="k">今日PK</div><div class="bar"><i id="pkBar"></i></div></div>
     <div class="tile"><div class="v" id="advTxt">--</div><div class="k">今日冒险</div></div>
-    <div class="tile"><div class="v" id="workCnt">--</div><div class="k">今日打工(次)</div></div>
+    <div class="tile"><div class="v" id="schoolCnt">--</div><div class="k" id="schoolLbl">今日学习</div><div class="bar"><i id="schoolBar"></i></div></div>
+    <div class="tile"><div class="v" id="workCnt">--</div><div class="k" id="workLbl">今日打工</div><div class="bar"><i id="workBar"></i></div></div>
     <div class="tile"><div class="v" id="expTxt">--</div><div class="k">经验日常</div></div>
   </section>
 
@@ -1354,8 +1359,27 @@ function renderData(d){
   $('#pkBar').style.width=(pp!=null?Math.min(100,pp/ppMax*100):0)+'%';
   const av=pg.adventure&&pg.adventure.learned!=null?pg.adventure.learned:0;
   $('#advTxt').textContent=av+'/'+(cfg.adventure_times||1);
+  // 今日学习/打工：主数值 = 当天完成次数，+1 = 当前正在进行的那一次；
+  // 标签里附配额进度（已用小时/配额小时），一眼看出离配额多远。
+  // 注意 kind 必须参与判断——work_eta 是"学习/打工/冒险"共用模板，只判有无会把
+  // "正在上课"错算成"正在打工"（曾显示 0+1 实际在上课）。冒险另有 advTxt，不在此列。
+  const etaKind=(d.work_eta&&d.work_eta.kind)?String(d.work_eta.kind):'';
+  const busy=(schedOn&&etaRemain!=null);
+  const hrs=s=>((s||0)/3600).toFixed(1).replace(/\.0$/,'');
+  const sc=pg.school&&pg.school.learned!=null?pg.school.learned:0;
+  const scHrs=hrs(pg.school&&pg.school.study_secs);
+  const scQuota=cfg.study_quota_hours||0;
+  $('#schoolCnt').textContent=(busy&&etaKind.indexOf('上课')>=0)?(sc+1):sc;
+  $('#schoolLbl').textContent='今日学习'+(scQuota?(' · '+scHrs+'/'+scQuota+'h'):'');
+  $('#schoolCnt').title=sc+' 节，已学 '+scHrs+' 小时'+(scQuota?('（配额 '+scQuota+' 小时）'):'');
+  $('#schoolBar').style.width=(scQuota?Math.min(100,scHrs/scQuota*100):0)+'%';
   const wk=pg.work&&pg.work.learned!=null?pg.work.learned:0;
-  $('#workCnt').textContent=(schedOn&&etaRemain!=null)?wk+'+1':wk;
+  const wkHrs=hrs(pg.work&&pg.work.work_secs);
+  const wkQuota=cfg.work_quota_hours||0;
+  $('#workCnt').textContent=(busy&&etaKind.indexOf('打工')>=0)?(wk+1):wk;
+  $('#workLbl').textContent='今日打工'+(wkQuota?(' · '+wkHrs+'/'+wkQuota+'h'):'');
+  $('#workCnt').title=wk+' 次，已打 '+wkHrs+' 小时'+(wkQuota?('（配额 '+wkQuota+' 小时）'):'');
+  $('#workBar').style.width=(wkQuota?Math.min(100,wkHrs/wkQuota*100):0)+'%';
   const ed=(pg.exp_daily&&pg.exp_daily.done)?'✓ 完成':'未完成';
   $('#expTxt').textContent=ed;
   // 队列：MAA 风格任务开关列表（勾选=启用该任务，写入 config 下轮生效）
