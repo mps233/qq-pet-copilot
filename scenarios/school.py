@@ -11,8 +11,10 @@
 4. 选课：先 OCR 上半屏识别学园阶段（初级/中级学园课程顺序固定为
    力量/智力/魅力；高级学园/进修学院固定为 魅力/力量/智力，每次上课前重新判断），
    再把轮播归位到第一页，按 school.duration 选课：10分钟课直接点对应框；
-   30分钟课小步扫描卡名（COURSE30_NAMES）点击，点后按详情面板"奖励<属性>+N"
-   核对（只核对属性：数值随年级抬升不能硬比；时长走学分软信号），不通过归位重试一次；
+   其余时长（30/45/90…各学园档位不同）小步扫描卡名（COURSE30_NAMES）或按
+   "用时:<时长>"标签点击，点后按详情面板核对"奖励<属性>+N"（只核对属性：
+   数值随年级抬升不能硬比），并读「用时:XX分钟」得到**实际时长**（结算按它，
+   不预设档位表）；不通过归位重试一次；
    学习科目=夏令营（萌芽夏令营，30分钟、奖励随机属性）走 30分钟路径、课时时长固定按 30分钟结算
 5. 点击 school_start，直到页面出现 school_in 标志（进入上课）
 6. 上课中：按配置的检查间隔（schedule.check_interval）检查，直到出现 school_end 标志
@@ -31,10 +33,15 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from src.fatigue import mark_fatigue
 from src.ocr import ocr_texts
 from src.progress import (
     SCHOOL_PROGRESS_FILE,
+    LONG_COURSE as LONG_COURSE_IMPORT,
+    SHORT_COURSE as SHORT_COURSE_IMPORT,
     count_cross,
+    course_kind as course_kind_import,
+    course_seconds,
     load_progress,
     log,
     log_history,
@@ -67,9 +74,16 @@ INSTITUTE_ATTRIBUTE_COURSES = {
 }
 ADVANCED_STAGES = ('高级学园', '进修学院')
 
-# 课时时长（school.duration）：学园课程轮播 = 3 张 10 分钟课 + 3 张 30 分钟课
-# （个别阶段另有第 7 张），卡序：初级学园 = [10分:力量/智力/魅力] + [30分:力量/智力/魅力]
-DURATION_CHOICES = ('10分钟', '30分钟')
+# 课时档位（school.duration）：**按卡位选，不绑定具体分钟数**——
+# 课程轮播固定 7 张：卡 1-3 = 短课（力量/智力/魅力）、卡 4-6 = 长课（同属性顺序）、
+# 卡 7 = 萌芽夏令营。各学园的具体分钟数不同（初级 10/30、高级 30/90…），
+# 所以配置只说"要短课还是长课"，实际时长由选课后的详情面板读出来（见
+# read_course_duration），学院升级后无需改配置。
+SHORT_COURSE = SHORT_COURSE_IMPORT
+LONG_COURSE = LONG_COURSE_IMPORT
+DURATION_CHOICES = (SHORT_COURSE, LONG_COURSE)
+# 别名：course_kind 从 src.progress 导入（与 settings 校验共用同一份归一化逻辑）
+course_kind = course_kind_import
 # 学习科目可选值：三属性 + 夏令营（萌芽夏令营——30 分钟档、奖励随机属性+5，
 # 随机加到三属性之一，长期跑三属性逐渐拉平均；仪表盘设置页「学习科目」可选）
 ATTRIBUTE_CHOICES = ('力量', '智力', '魅力', '夏令营')
@@ -100,24 +114,29 @@ class SchoolScenario(DeviceScenario):
                 f'config.yaml 中 school.attribute 配置无效: {self.attribute!r}，'
                 f'可选: {"/".join(ATTRIBUTE_CHOICES)}'
             )
-        self.duration = self.cfg.school.duration
-        if self.duration not in DURATION_CHOICES:
+        # 课时档位：只区分"短课/长课"（按卡位选），不绑定具体分钟数——
+        # 各学园时长不同（初级 10/30、高级 30/90…），实际时长选课后从面板读出
+        self.duration = course_kind(self.cfg.school.duration)
+        if not self.duration:
             raise ValueError(
-                f'config.yaml 中 school.duration 配置无效: {self.duration!r}，'
-                f'可选: {"/".join(DURATION_CHOICES)}'
+                f'config.yaml 中 school.duration 配置无效: {self.cfg.school.duration!r}，'
+                f'应为 {"/".join(DURATION_CHOICES)}（短课=卡1-3，长课=卡4-6）'
             )
-        # 最近一次选课前识别到的学园阶段（resolve_course_box 里更新，供 30 分钟
-        # 课按阶段名字表找卡）
+        # 最近一次选课前识别到的学园阶段（resolve_course_box 里更新，供选卡参考）
         self._stage: str | None = None
-        # 本次实际课时时长（select_course 里确定：夏令营固定 30分钟，其余=配置值），
-        # verify_course_selected 按它做学分时长软核对
-        self._session_duration = self.duration
+        # 本次选课目标档位（select_course 里确定：夏令营固定走长课卡位），
+        # 供选课走哪条路径（短课直接点框 / 长课先前滑 3 张）与结算回退用
+        self._session_kind = self.duration
+        # 详情面板实际读到的课时时长（read_course_duration）：各学园档位不同
+        # （初级 10/30、高级 30/90…），结算以实际值为准，读不到才按档位回退估计
+        self._detected_duration: str | None = None
         self.times_per_day = self.cfg.school.times_per_day
         # 毕业处理防循环标志：关闭毕业面板后重新进学校仍出现毕业标志时抛异常，
         # 走重试链而不是无限"毕业->回主页面->再进"空转；成功看到 school_start 时重置
         self._graduated_once = False
-        log(f'学习科目: {self.attribute}，课时时长: {self.duration}，每天学习次数: '
-            f'{self.times_per_day if self.times_per_day else "不限"}')
+        log(f'学习科目: {self.attribute}，课时档位: {self.duration}'
+            f'（{"卡1-3 短课" if self.duration == SHORT_COURSE else "卡4-6 长课"}），'
+            f'每天学习次数: {self.times_per_day if self.times_per_day else "不限"}')
 
     # ---- 各阶段 ----
 
@@ -144,6 +163,12 @@ class SchoolScenario(DeviceScenario):
                 # 不出现时不能干等到超时，同帧检测命中则回主页面护理一次
                 self.handle_low_stat_dialog(source)
                 if self.see('school_start', None, source):
+                    # 游戏疲劳提示：只**记录**（供调度层按账本分层判定），不据此拦停——
+                    # 游戏在 8h/12h 的文案相同分不出层，第一层（8~12h）本就该允许继续学
+                    if self._screen_has_fatigue():
+                        mark_fatigue('school')
+                        log('检测到游戏疲劳提示"学习/打工太久"（已记录，'
+                            '是否停止由调度层按合计时长分层判定）')
                     self._graduated_once = False
                     return None
                 if self.see('school_graduated', None, source):
@@ -157,7 +182,12 @@ class SchoolScenario(DeviceScenario):
                     self.click(school[0], school[1])
                     clicked = True
                 elif clicked:
-                    # 学校气泡点完消失但面板标志没识别到：已进入面板，继续选课
+                    # 学校气泡点完消失但面板标志没识别到：已进入面板，继续选课。
+                    # 这里同样只记录疲劳提示，不拦停（见上面 school_start 处说明）
+                    if self._screen_has_fatigue():
+                        mark_fatigue('school')
+                        log('检测到游戏疲劳提示"学习/打工太久"（已记录，'
+                            '是否停止由调度层按合计时长分层判定）')
                     log('前往学校: school 已消失，进入选课')
                     return None
                 else:
@@ -185,54 +215,72 @@ class SchoolScenario(DeviceScenario):
                 raise RuntimeError('毕业面板关闭后未找到 back 按钮')
             time.sleep(CLICK_INTERVAL)
 
-    def select_course(self) -> None:
-        """选课：先 OCR 上半屏识别学园阶段（决定属性对应第几张卡），把轮播归位到
-        第一页；10 分钟课直接点框；30 分钟课（含固定 30 分钟的"夏令营"科目）
-        小步扫描卡名（COURSE30_NAMES）点击；点后按详情面板核对，不通过归位重试一次。
+    # 课程轮播固定 7 张：卡 1-3 = 短课（力量/智力/魅力）、卡 4-6 = 长课、卡 7 = 夏令营。
+    # 长课 = 从第一页再前滑这么多张（3 张短课之后就是长课区）。
+    LONG_COURSE_DRAG_STEPS = 3
 
-        选完把本次课时时长写入 school_progress.json 的 duration 字段：一节课结算时
-        按它累计学习时长（10分钟=600s / 30分钟=1800s，见 record_study_finish）。
-        夏令营（随机属性+5）只有 30 分钟档，配置了 10 分钟也按 30 分钟上课与结算。
+    def select_course(self) -> None:
+        """选课（**按卡位选，不依赖具体分钟数**）：
+
+        轮播归位到第一页后，短课点第 1-3 框那个位置（对应所选属性）；
+        长课先前滑 3 张（越过 3 张短课），再点同一框位置。
+        选完从详情面板读实际时长（read_course_duration）写入 school_progress.json，
+        结算按它累计——各学园时长不同（初级 10/30、高级 30/90…），故不写死分钟数。
+
+        夏令营（第 7 张、随机属性+5）不在 6 张常规卡里，走卡名扫描路径。
         """
         box = self.resolve_course_box()
-        duration = self.duration
-        if self.attribute == '夏令营' and duration != '30分钟':
-            log('夏令营只有 30 分钟档，本次按 30分钟 上课并结算学习时长')
-            duration = '30分钟'
-        self._session_duration = duration
+        kind = self.duration
+        if self.attribute == '夏令营':
+            # 萌芽夏令营固定第 7 张卡：走卡名扫描（不按属性选框）
+            kind = LONG_COURSE
+        self._session_kind = kind
         self.reset_select_boxes(drags=3)
-        if duration == '30分钟':
+        if self.attribute == '夏令营':
             name = COURSE30_NAMES.get(self._stage or '', {}).get(self.attribute, '')
             for attempt in (1, 2):
-                clicked = bool(name) and self._click_card_by_name(name)
-                if not clicked and box:
-                    clicked = self._click_nth_30min(box)
-                if clicked and self.verify_course_selected():
-                    set_current_school_duration(duration)
+                if name and self._click_card_by_name(name) and self.verify_course_selected():
+                    set_current_school_duration(self._effective_duration())
                     return
-                log('点选未通过核对，归位重试' if attempt == 1 else '点选仍未通过核对')
+                log('夏令营卡未点中，归位重试' if attempt == 1 else '夏令营卡仍未点中')
                 self.reset_select_boxes(drags=3)
-            raise RuntimeError(
-                f'30分钟课未定位或未选中（阶段 {self._stage!r}，{self.attribute}），本轮放弃')
+            raise RuntimeError(f'夏令营卡未定位（阶段 {self._stage!r}），本轮放弃')
         if not box:
             raise RuntimeError(f'未解析到课程选择框（{self.attribute}），本轮放弃')
-        log(f'选择课程: {self.attribute} ({box})')
-        hit = self.see(box)
-        if not hit:
-            raise RuntimeError(f'未定位到课程选择框: {box}')
-        time.sleep(CLICK_INTERVAL)
-        self.click(hit[0], hit[1])
-        if not self.verify_course_selected():
-            log('选课核对未通过，重试一次')
-            time.sleep(0.5)
+        for attempt in (1, 2):
+            self.reset_select_boxes(drags=3)
+            if kind == LONG_COURSE:
+                # 前滑 3 张越过短课区，落到长课区（卡 4-6 与卡 1-3 同序，故选框位置不变）
+                for _ in range(self.LONG_COURSE_DRAG_STEPS):
+                    self._drag_card_step()
+                time.sleep(CLICK_INTERVAL)
+            log(f'选择课程: {self.attribute} {kind} ({box})')
             hit = self.see(box)
-            if hit:
-                self.click(hit[0], hit[1])
-            if not self.verify_course_selected():
-                raise RuntimeError(
-                    f'选课核对未通过（{duration} {self.attribute}），本轮放弃')
-        set_current_school_duration(duration)
+            if not hit:
+                log(f'未定位到课程选择框: {box}')
+                continue
+            time.sleep(CLICK_INTERVAL)
+            self.click(hit[0], hit[1])
+            if self.verify_course_selected():
+                set_current_school_duration(self._effective_duration())
+                return
+            log('选课核对未通过，归位重试' if attempt == 1 else '选课核对仍未通过')
+        raise RuntimeError(
+            f'选课核对未通过（{kind} {self.attribute}，阶段 {self._stage!r}），本轮放弃')
 
+    def _effective_duration(self) -> str:
+        """本次结算用的课时时长文案：优先详情面板实际读到的值（各学园时长不同：
+        初级 10/30、高级 30/90…），读不到才回退一个保守估计（按档位取常识值）。
+
+        注意：结算调用方（record_study_finish）支持任意 "N分钟"，所以这里只需
+        给文案；确实读不到时用 10/30 分钟兜底（下一节课就会被真实值纠正）。
+        """
+        d = self._detected_duration
+        if d:
+            return d
+        fallback = '10分钟' if self._session_kind == SHORT_COURSE else '30分钟'
+        log(f'详情面板未读到实际时长，按 {self._session_kind} 回退估计 {fallback} 结算')
+        return fallback
     def _drag_card_step(self) -> None:
         """慢速小步前滑约 1 张卡（332px；慢拖惯性小、步进稳定，实测 1 步 1 张）。"""
         self.dev.drag(920, 1336, 588, 1336, 0.8)
@@ -276,14 +324,34 @@ class SchoolScenario(DeviceScenario):
             self._drag_card_step()
         return False
 
+    DURATION_RE = re.compile(r'(?:用时|时长|时间)\D{0,4}(\d+)\s*分钟')
+
+    def read_course_duration(self, results=None) -> str | None:
+        """从课程详情面板读**实际课时时长**，返回 "N分钟"；读不到返回 None。
+
+        各学园的课时档位不同且会变（初级 10/30、高级疑似 30/90…），所以不预设
+        档位表，直接读面板上的「用时:XX分钟」标签。**只认这个标签**——曾用"学分反推"
+        兜底（10分课+10/30分课+25），但学分与档位的对应关系并不线性、各学园也不同，
+        外推出来的分钟数完全不准确，故已移除；读不到就返回 None，由调用方回退配置值。
+        """
+        if results is None:
+            results = ocr_texts(self.screen())
+        for t, *_ in results:
+            m = self.DURATION_RE.search(t.replace(' ', ''))
+            if m:
+                return f'{int(m.group(1))}分钟'
+        return None
+
     def verify_course_selected(self) -> bool:
         """核对详情面板与所选课程一致：奖励属性一致 + 数值存在即可。
 
         注意：学园**年级会抬升奖励数值**（实测 1年级 10分钟课 = 智力+2，
         升到 2年级后同一张课 = 智力+4）——不能按固定数字比对，否则年级一变
         就误报"与预期奖励不符"，把主任务告警退出（2026-09-13 凌晨踩坑）。
-        时长核对走**学分软信号**：学分 +10=10分钟课 / +25=30分钟课（读不到则跳过）。
-        OCR 会把"+5点"读成"+50/③"等，所以只取首位数字；偶尔拆行，按相邻行合并后再匹配。
+        学分不做校验（曾按"学分+10=10分钟课/+25=30分钟课"软核对，但各学园档位
+        不同、且 OCR 会把"+25"读成"③"之类的错值，只会误判失败）；
+        实际时长改由 read_course_duration 读详情面板的「用时:XX分钟」。
+        OCR 会把"+5点"读成"+50"等，所以只取首位数字；偶尔拆行，按相邻行合并后再匹配。
         """
         time.sleep(0.5)
         results = ocr_texts(self.screen())
@@ -299,38 +367,19 @@ class SchoolScenario(DeviceScenario):
                 m = re.search(r'奖励(力量|智力|魅力)[+＋]?(\d)', band)
                 ok = bool(m) and m.group(1) == self.attribute
             if ok:
-                # 学分软核对（读到才查）：10分钟课 +10 / 30分钟课 +25（首位数字 1/2）
-                cred = re.search(r'学分[+＋]?(\d)', band)
-                if cred:
-                    want_cred = '1' if self._session_duration == '10分钟' else '2'
-                    if cred.group(1) != want_cred:
-                        log(f'选课核对: 学分行 {band[:40]!r} 与 {self._session_duration} 不符')
-                        return False
+                # 只核对"奖励属性是否与所选科目一致"；实际时长从面板读（见上）
+                actual = self.read_course_duration(results)
+                if actual:
+                    self._detected_duration = actual
+                    log(f'选课核对通过: {self.attribute} {self._session_kind}，'
+                        f'面板实际时长 {actual}')
+                else:
+                    log(f'选课核对通过: {self.attribute} {self._session_kind}'
+                        f'（面板未读到实际时长，将按档位回退估计）')
                 return True
             log(f'选课核对: 详情显示 {band[:60]!r}，奖励属性不符')
             return False
         log('选课核对: 详情面板未找到"奖励"行')
-        return False
-
-    def _click_nth_30min(self, box: str) -> bool:
-        """未知学园兜底：小步滑到轮播尽头，按"用时:30分钟"标签位置点第 N 张。"""
-        n = int(box.rsplit('_', 1)[-1])  # select_box_2 -> 2
-        prev = None
-        for _ in range(8):
-            row = self._card_row_results()
-            sig = tuple(sorted((t, x) for t, x, y, _ in row if 1300 < y < 1570))
-            if sig == prev:
-                break
-            prev = sig
-            self._drag_card_step()
-        results = self._card_row_results()
-        labels = sorted((x, y) for t, x, y, _ in results
-                        if '30分钟' in t and 1300 < y < 1570)
-        if len(labels) >= n:
-            x, y = labels[n - 1]
-            log(f'按 30 分钟标签点第 {n} 张 ({x}, {y - 40})')
-            self.click(x, y - 40)
-            return True
         return False
 
 

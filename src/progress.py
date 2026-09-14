@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import re
 import time
 from datetime import date
 from pathlib import Path
@@ -143,11 +144,57 @@ def count_cross(finished: str) -> None:
 
 
 # ---- 学习/工作时长累计（替代旧"每日点数"规则，按课时/打工时长结算） ----
-# 课时时长（school.duration：10分钟课 / 30分钟课）对应的学习时长（秒）
+# 课时时长对应的学习时长（秒）。已知档位的快表；**任意 "N分钟" 也支持**
+# （见 course_seconds——各学园档位不同：初级 10/30、高级 30/90…，不预先枚举）。
 SCHOOL_COURSE_SECONDS = {
     '10分钟': 10 * 60,
     '30分钟': 30 * 60,
 }
+
+
+def course_seconds(desc: str | None) -> int | None:
+    """课时时长文案 -> 秒。支持任意 "N分钟"/"N小时"（如 45分钟、90分钟、2小时）。
+
+    各学园的课时档位不同且会随版本变化（初级 10/30、高级疑似 30/90…），
+    故不再依赖枚举表：优先查已知表，查不到再按文案里的数字换算。
+    """
+    if not desc:
+        return None
+    d = ''.join(str(desc).split())
+    if d in SCHOOL_COURSE_SECONDS:
+        return SCHOOL_COURSE_SECONDS[d]
+    m = re.fullmatch(r'(\d+)分钟', d)
+    if m:
+        return int(m.group(1)) * 60
+    m = re.fullmatch(r'(\d+(?:\.\d+)?)小时', d)
+    if m:
+        return int(float(m.group(1)) * 3600)
+    return None
+
+
+# 课时档位：只分"短课/长课"（按课程轮播卡位选），不绑定具体分钟数——
+# 卡 1-3=短课、卡 4-6=长课、卡 7=夏令营（各学园时长不同：初级 10/30、高级 30/90…）
+SHORT_COURSE = '短课'
+LONG_COURSE = '长课'
+# 旧配置兼容：早期按具体分钟数配置。10 分钟=短课，其余（>10分钟）=长课。
+_LEGACY_SHORT_VALUES = ('10分钟',)
+
+
+def course_kind(value: str | None) -> str | None:
+    """把 school.duration 归一化为 '短课'/'长课'；无法识别返回 None。
+
+    新配置直接写"短课/长课"；旧的分钟数配置按 10分钟=短课、其余=长课 自动归一，
+    保证升级后老 config.yaml 仍能用（不必手动改）。
+    """
+    v = ''.join(str(value or '').split())
+    if v in (SHORT_COURSE, LONG_COURSE):
+        return v
+    secs = course_seconds(v)
+    if not secs:
+        return None
+    return SHORT_COURSE if v in _LEGACY_SHORT_VALUES else LONG_COURSE
+
+
 # 旧会话兼容：没有"课时时长"记录时，回退按学园阶段估算（新版学园每阶段都有
 # 10/30 分钟两类课，此表仅用于升级前开始、还未收尾的旧会话）
 SCHOOL_DURATION_SECONDS = {
@@ -203,10 +250,11 @@ def _add_seconds(progress_file: Path, key: str, seconds: int) -> int:
 
 
 def record_study_finish() -> int | None:
-    """一节课结算：优先按本次课时时长（school.duration）累计学习时长（秒）；
-    没有时长记录（旧会话）时回退按学园阶段估算。返回当天累计或 None（未知）。"""
+    """一节课结算：优先按本次课时时长累计学习时长（秒）；没有时长记录（旧会话）
+    时回退按学园阶段估算。时长支持任意 N 分钟（见 course_seconds）。
+    返回当天累计或 None（未知）。"""
     desc = get_current_school_duration()
-    secs = SCHOOL_COURSE_SECONDS.get(desc or '')
+    secs = course_seconds(desc)
     if not secs:
         desc = get_current_school()
         secs = SCHOOL_DURATION_SECONDS.get(desc or '')
