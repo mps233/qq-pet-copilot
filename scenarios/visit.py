@@ -61,6 +61,7 @@ class VisitScenario(DeviceScenario):
         super().__init__(dev)
         self.times_per_day = self.cfg.visit.times_per_day
         self._exp_handled = False  # 本轮是否处理过经验照顾（点击/判定完成）
+        self._friends_exhausted = False  # 本轮好友名单是否已走完（没有更多可访问）
         log(f'每天踩踩次数: {self.times_per_day if self.times_per_day else "不限"}')
 
     # ---- 各阶段 ----
@@ -153,36 +154,53 @@ class VisitScenario(DeviceScenario):
         rx2, ry2 = int(x2 * w / 1080), int(y2 * h / 2412)
         return any('加好友' in t for t, *_ in ocr_texts(img[ry1:ry2, rx1:rx2]))
 
-    def next_friend(self) -> bool:
-        """切换到下一个好友：按累积名单顺序点下一个。
+    def next_friend(self, allow_non_friend: bool = False, max_switches: int = 0) -> bool:
+        """切换到下一个目标：按累积名单顺序点下一个。
 
         好友列表滚动加载，控件树里只有当前可见项：每次重新抓取只把
-        新出现的好友追加到累积名单尾部（不删除滚出屏幕的项），切换索引
+        新出现的目标追加到累积名单尾部（不删除滚出屏幕的项），切换索引
         基于累积名单；点击目标从当前可见项里按 content-desc 找，
-        找不到（还没滚出来）视为没有更多好友。
+        找不到（还没滚出来）视为没有更多（置 _friends_exhausted）。
+
+        allow_non_friend=False（踩踩）：落到非好友/系统推荐页就**认定后面全是非好友**
+        —— 实测好友都在轮播前面，后面是每天不同的系统推荐；此时把累积名单**截断到
+        分界点**并结束本轮（不往后累积，否则名单无限膨胀、永远切不完）。
+        True（PK）：非好友也返回 True 照打（PK 允许打非好友）；名单不截断，
+        靠 max_switches + MAX_TARGETS 双重上限保证一定能结束。
         """
         visible = self._accumulate_friends()
         self._friend_index += 1
+        if max_switches and self._friend_index >= max_switches:
+            log(f'切换已达上限 {max_switches} 个，停止')
+            self._friends_exhausted = True
+            return False
         if self._friend_index >= len(self._friends):
+            self._friends_exhausted = True
             return False
         target = self._friends[self._friend_index]
-        for desc, x, y in visible:
-            if desc == target:
-                log(f'切换第 {self._friend_index + 1} 个好友: {target} ({x}, {y})')
-                self.click(x, y)
-                time.sleep(CLICK_INTERVAL)
-                # 进入新好友页后看右上角：出现"加好友"=非好友（系统推荐）——
-                # 好友都排在轮播前面，后面的都不是好友，立即停止切换
-                # （复读一次再确认，防页面半加载误判）
-                if self.is_non_friend_page():
-                    time.sleep(1.0)
-                    if self.is_non_friend_page():
-                        log(f'遇到非好友/系统推荐（右上角"加好友"）：{target}，'
-                            '后面的都不是好友，停止切换')
-                        return False
-                return True
-        log(f'下一个好友 {target} 当前不可见，停止切换')
-        return False
+        hit = next(((x, y) for desc, x, y in visible if desc == target), None)
+        if hit is None:
+            # 还没滚出来 / 列表没加载完：视为没有更多（置穷尽，避免反复空转）
+            self._friends_exhausted = True
+            log(f'下一个 {target} 当前不可见，停止切换')
+            return False
+        log(f'切换第 {self._friend_index + 1} 个: {target} ({hit[0]}, {hit[1]})')
+        self.click(hit[0], hit[1])
+        time.sleep(CLICK_INTERVAL)
+        if self.is_non_friend_page():
+            time.sleep(1.0)
+            if self.is_non_friend_page():
+                if allow_non_friend:
+                    log(f'进入非好友/系统推荐页: {target}（PK 允许打非好友，继续）')
+                    return True
+                # 踩踩：好友都排在前面，此后的都是系统推荐（每天不同）
+                # → 截断名单（不累积）并结束，避免"名单永远累积不完"
+                self._friends = self._friends[:self._friend_index]
+                self._friends_exhausted = True
+                log(f'遇到非好友/系统推荐（右上角"加好友"）：{target}，'
+                    '后面的都是系统推荐（每天不同），停止切换')
+                return False
+        return True
 
     def close(self) -> None:
         """关闭好友相关页面：点 back 直到 踩踩/访问/好友列表 都消失。"""
@@ -205,11 +223,13 @@ class VisitScenario(DeviceScenario):
         self._friends = []        # 累积好友名单（content-desc），只增不减
         self._friend_index = 0    # 访问进入时默认第一个好友
         self._exp_handled = False  # 本轮是否处理过经验照顾（点击/判定完成）
+        self._friends_exhausted = False  # 本轮好友名单是否已走完
         self.goto_first_friend()
         if self.is_non_friend_page():
             time.sleep(1.0)
             if self.is_non_friend_page():
                 log('好友列表第一个就是非好友（系统推荐），没有可访问的好友')
+                self._friends_exhausted = True
                 return done
         exp_today, exp_done, exp_history = load_exp_daily(quiet=True)
         while True:
@@ -291,6 +311,13 @@ class VisitScenario(DeviceScenario):
         done = self._visit_all(max_times, today, done, history)
         self.close()  # 先点 back 收掉好友相关页面，再确认回主页面
         self.ensure_main_page()
+        # 好友已全部走完但没凑满次数（好友数 < 目标次数，如 6 个好友 / 目标 10 次）：
+        # 这就是今天的上限，标记"今日完成"（返回 False → runner 置 task.dead），
+        # 否则调度器会按 success_interval 反复重进好友面板空转（实测连跑 4 轮）。
+        if self._friends_exhausted and (not max_times or done < max_times):
+            log(f'踩踩: 好友已全部走完（{done}'
+                + (f'/{max_times}' if max_times else '') + ' 次），今天不再重试')
+            return False
         # 踩了或处理过经验照顾（点击/判定完成）都算本轮有产出；
         # 不能把"早已完成的经验日常"算产出——那会让调度器反复重跑踩踩空转
         return done > start_done or self._exp_handled

@@ -60,6 +60,9 @@ PK_START_CHECK_DELAY = 1.0  # 点开始后多久开始整屏 OCR 判断"正在PK
 PK_END_TIMEOUT = 11.0  # 等 PK 结果（分享按钮）的超时（秒），超时点 quit 换好友
 PK_ENTER_TIMEOUT = 3.0  # 点 PK 后等开始按钮的短超时：上限只弹 toast 不跳页，不用长等
 PK_ROUND_CAP = 16     # 一次 run() 最多 PK 局数（超出由执行器下一轮接着处理）
+# 一次 run() 最多切换几个目标。PK 允许打非好友，而非好友是"系统推荐"（每天不同、
+# 理论上可无限往下滑），故设硬上限保证一定能结束；正常好友数远小于此值。
+PK_MAX_TARGETS = 40
 PK_STAT_COST = 5      # 每局消耗体力/清洁
 PK_TIMEOUT_STREAK_LIMIT = 2  # 连续几次"PK 结果超时"就临时推迟 PK 任务
 
@@ -672,12 +675,12 @@ class PKScenario(VisitScenario):
         self._pk_timeout_streak = 0  # 连续 PK 结果超时计数（本轮内连续，成功清零）
         self._helper_checked = False  # 打手管理本轮只做一次
         self.goto_first_friend()
-        self._accumulate_friends()  # 记录第一个好友（当前停在名单第 0 个）
+        self._accumulate_friends()  # 记录第一个目标（当前停在名单第 0 个）
+        # 第一个就是非好友/系统推荐也照打（PK 允许打非好友）；不再直接 return
         if self.is_non_friend_page():
             time.sleep(1.0)
             if self.is_non_friend_page():
-                log('好友列表第一个就是非好友（系统推荐），没有可 PK 的好友')
-                return done
+                log('第一个是非好友/系统推荐（PK 允许打非好友，继续）')
         while not max_times or done < max_times:
             desc = self._friends[self._friend_index] if self._friend_index < len(self._friends) else ''
             if self._friend_allowed(desc):
@@ -685,8 +688,10 @@ class PKScenario(VisitScenario):
             if max_times and done >= max_times:
                 break
             self.leave_result_page()
-            if not self.next_friend():
-                log('没有更多好友了')
+            # allow_non_friend=True：非好友页也返回 True，下一轮循环照样对它开打
+            # max_switches：非好友是每天不同的系统推荐、可无限下滑，设硬上限保证结束
+            if not self.next_friend(allow_non_friend=True, max_switches=PK_MAX_TARGETS):
+                log('没有更多目标了')
                 break
         return done
 
