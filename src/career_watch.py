@@ -1,7 +1,8 @@
 """职业解锁哨兵：读职业树，监控隐藏职业线（武术家/梦境旅人/大明星）是否解锁。
 
-导航链路（2026-09 真机实测 1080×2412，按屏幕宽高比例换算分辨率无关）：
-    主页面 → 出门 → 职业小镇（工作页，顶部固定显示三维）→ 右上角树形图标 → 职业树页
+导航链路（2026-09-14 真机实测 1080×2412，u2 content-desc 定位，分辨率无关）：
+    主页面 → 点头像/名字区（desc「宠物资料」）→ 宠物资料页点「职业」卡片 → 职业树页
+（旧路径「出门 → 职业小镇 → 右上角树形图标」更冗长，仅作捷径失败时的回退）
 职业树页：8 条线 × 5 级（见习→大师），一屏 4 列、横向可滑（慢滑一次 ≈ 移动 3 列）；
 顶部同样显示三维读数（一次检查同时完成「属性同步 + 解锁判定」）。
 
@@ -176,6 +177,92 @@ def _save_img(img, path: Path) -> bool:
         return False
 
 
+def _on_career_tree(scen) -> bool:
+    """当前是否已到职业树页（OCR 到"职业树"）。"""
+    try:
+        return any('职业树' in t for t, *_ in ocr_fullscreen(scen.screen()))
+    except Exception:
+        return False
+
+
+def _open_career_tree_shortcut(scen, w: int, h: int, log=None) -> bool:
+    """捷径进职业树：主页面点「宠物资料」→ 宠物资料页点「职业」卡片。
+
+    2026-09-14 实测（1080x2412）：两处都是 u2 content-desc 精确命中，
+    比旧的"出门→职业小镇→右上角树形图标"少两步、也不依赖坐标比例。
+    """
+    log = log or _log
+    prof = scen.see('pet_profile')
+    if not prof:
+        log('职业哨兵: 主页面未找到「宠物资料」入口')
+        return False
+    scen.click(prof[0], prof[1])
+    time.sleep(2.2)
+    card = scen.see('pet_profile_career')
+    if not card:
+        # 资料页可能还在加载/动画，重试一次
+        time.sleep(1.0)
+        card = scen.see('pet_profile_career')
+    if not card:
+        log('职业哨兵: 宠物资料页未找到「职业」卡片')
+        return False
+    scen.click(card[0], card[1])
+    time.sleep(2.5)
+    if _on_career_tree(scen):
+        log('职业哨兵: 已进职业树（捷径：宠物资料 → 职业）')
+        return True
+    log('职业哨兵: 点了「职业」卡片但未到职业树页')
+    return False
+
+
+def _open_career_tree_legacy(scen, w: int, h: int, log=None) -> bool:
+    """旧路径（捷径失败时回退）：出门 → 职业小镇（工作页）→ 右上角树形图标。"""
+    log = log or _log
+    log('职业哨兵: 捷径失败，回退旧路径（出门 → 职业小镇 → 树形图标）')
+    hit = scen.see('leave_home') or (int(0.498 * w), int(0.862 * h))
+    scen.click(hit[0], hit[1])
+    time.sleep(1.6)
+    town = scen.see('town')
+    if not town:
+        time.sleep(1.0)
+        town = scen.see('town')
+    town = town or (int(0.787 * w), int(0.513 * h))
+    scen.click(town[0], town[1])
+    time.sleep(1.8)
+    for cx, cy in ((int(0.787 * w), int(0.081 * h)), (int(0.787 * w), int(0.058 * h))):
+        scen.click(cx, cy)
+        time.sleep(2.0)
+        if _on_career_tree(scen):
+            log('职业哨兵: 已进职业树（旧路径）')
+            return True
+    return False
+
+
+def _swipe_and_ocr(scen, x1: int, x2: int, y: int, log=None, settle: float = 0.25,
+                   max_wait: float = 1.6):
+    """横滑一屏并 OCR：**等画面稳定**再识别，替代固定 sleep（更快也更稳）。
+
+    实测 swipe 本身约 1.6s（含惯性动画），而 screen()+OCR 只要 0.5s 左右；
+    旧实现每屏固定 `sleep(1.0)` 会在动画结束后白等。这里改为轮询相邻两帧
+    的 OCR 文本一致就算稳定（最多 max_wait 秒），滑动惯性结束时立即返回。
+    返回 (img, items)。
+    """
+    scen.dev.d.swipe(x1, y, x2, y, 0.5)
+    prev = None
+    img, items = None, []
+    deadline = time.time() + max_wait
+    while True:
+        img = scen.screen()
+        items = ocr_fullscreen(img)
+        sig = tuple(sorted((t, x, y2) for t, x, y2, _ in items))
+        if sig == prev:
+            return img, items
+        prev = sig
+        if time.time() >= deadline:
+            return img, items
+        time.sleep(settle)
+
+
 def check_career_tree(scen, targets=None, log=None) -> dict:
     """导航到职业树检查一遍（调用方保证设备空闲；finally 回主页面）。
 
@@ -198,64 +285,63 @@ def check_career_tree(scen, targets=None, log=None) -> dict:
             w, h = img.size
         win = max(60, int(0.088 * w))
 
-        # 出门 → 职业小镇（工作页）
-        hit = scen.see('leave_home') or (int(0.498 * w), int(0.862 * h))
-        scen.click(hit[0], hit[1])
-        time.sleep(1.6)
-        town = scen.see('town')
-        if not town:
-            time.sleep(1.0)
-            town = scen.see('town')
-        town = town or (int(0.787 * w), int(0.513 * h))
-        scen.click(town[0], town[1])
-        time.sleep(1.8)
-
-        # 右上角树形图标 → 职业树页（180°第一候选点实测命中；偏一点再试一次）
+        # 主页面捷径（2026-09-14 实测，2 步）：
+        #   点顶部头像/名字区（content-desc="宠物资料"）→ 宠物资料页的「职业」卡片 → 职业树
+        # 旧路径（出门 → 职业小镇 → 右上角树形图标，4 步）已弃用；若捷径失败再回退旧路径。
         items = []
-        opened = False
-        for cx, cy in ((int(0.787 * w), int(0.081 * h)), (int(0.787 * w), int(0.058 * h))):
-            scen.click(cx, cy)
-            time.sleep(2.0)
+        opened = _open_career_tree_shortcut(scen, w, h)
+        if opened:
             items = ocr_fullscreen(scen.screen())
-            if any('职业树' in t for t, *_ in items):
-                opened = True
-                break
         if not opened:
-            result['reason'] = '未进入职业树页（树形图标点击未生效）'
+            opened = _open_career_tree_legacy(scen, w, h)
+            if opened:
+                items = ocr_fullscreen(scen.screen())
+        if not opened:
+            result['reason'] = '未进入职业树页（捷径与旧路径均失败）'
             return result
 
-        # 顶部三维（数值异步加载，重试）
+        # 顶部三维（数值异步加载，重试）：短轮询代替固定 sleep(1.0)——数值通常
+        # 几百毫秒就出来，白等 1 秒是浪费（OCR 本身仅 ~0.36s）
         attrs = {}
-        for _ in range(6):
+        for attempt in range(8):
             attrs = read_attrs(items, ymax=int(0.29 * h))
             if len(attrs) == 3:
                 break
-            time.sleep(1.0)
+            time.sleep(0.3 if attempt < 4 else 1.0)
             items = ocr_fullscreen(scen.screen())
 
         # 横滑拍两屏（一屏 4 列）：初始左屏（流浪散人~法师）+ 右滑后的右屏（大厨~大明星）
+        # 先读一次库里的已知状态，用于判断"本次是否有变化"——复读确认只为防 OCR 抖动
+        # 导致的**误报新解锁**，状态没变时整轮复读（4 次 swipe + 3 次 OCR ≈ 8s）纯属浪费。
+        try:
+            prev_lines = (load_unlock_data().get('lines') or {})
+        except Exception:
+            prev_lines = {}
+
         y = int(0.62 * h)
         view_imgs, views = [], []
         views.append(items)  # 初始左屏（进树页时已 OCR）
         for _ in range(2):
-            scen.dev.d.swipe(int(0.83 * w), y, int(0.24 * w), y, 0.5)
-            time.sleep(1.0)
-            vimg = scen.screen()
+            vimg, vitems = _swipe_and_ocr(scen, int(0.83 * w), int(0.24 * w), y, log)
             view_imgs.append(vimg)
-            views.append(ocr_fullscreen(vimg))
+            views.append(vitems)
 
         states = merge_views(views, watch, win, h)
 
-        # 复读确认（防 OCR 抖动）：滑回左端再滑过来，两遍一致才算数
-        if any(v['state'] == 'unlocked' for v in states.values()):
+        # 是否有"新解锁"（本次实测 unlocked，而库里记的是未解锁）——只有这种才需要复读
+        newly = [t for t in watch
+                 if states[t]['state'] == 'unlocked'
+                 and not (prev_lines.get(t) or {}).get('unlocked')]
+        if newly:
+            # 复读确认（防 OCR 抖动）：滑回左端再滑过来，两遍一致才算数
+            log(f'职业哨兵: 出现新解锁候选 {newly}，复读确认一遍')
             for _ in range(2):
                 scen.dev.d.swipe(int(0.24 * w), y, int(0.83 * w), y, 0.5)
                 time.sleep(0.8)
             views2 = [ocr_fullscreen(scen.screen())]  # 左屏复读
             for _ in range(2):
-                scen.dev.d.swipe(int(0.83 * w), y, int(0.24 * w), y, 0.5)
-                time.sleep(1.0)
-                views2.append(ocr_fullscreen(scen.screen()))
+                _, vitems = _swipe_and_ocr(scen, int(0.83 * w), int(0.24 * w), y, log)
+                views2.append(vitems)
             states2 = merge_views(views2, watch, win, h)
             for tgt in watch:
                 if states[tgt]['state'] == 'unlocked' and states2[tgt]['state'] != 'unlocked':
@@ -263,6 +349,8 @@ def check_career_tree(scen, targets=None, log=None) -> dict:
             log('职业哨兵: 复读确认完成: '
                 + '、'.join(f"{t}={'已解锁' if states[t]['state'] == 'unlocked' else states[t]['state']}"
                            for t in watch))
+        elif any(v['state'] == 'unlocked' for v in states.values()):
+            log('职业哨兵: 无新解锁（与库中记录一致），跳过复读确认')
 
         # 8 线状态写回（树实测为准；解锁永久——不因单次读不到而回退）
         try:

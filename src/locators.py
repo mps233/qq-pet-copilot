@@ -115,6 +115,12 @@ LOCATORS: dict[str, dict] = {
     'career_new_view': {'ocr': ['去看看']},
     # 职业树页面（查看后进入）：无原生返回键，靠系统返回键逐层退出
     'career_tree': {'ocr': ['职业树']},
+    # 主页面捷径进职业树（2026-09-14 实测，比"出门→职业小镇→右上角树形图标"少两步）：
+    # 主页面顶部头像/名字区（content-desc="宠物资料"）→ 宠物资料页的「职业」卡片 → 职业树。
+    # 「宠物资料」是 xpath 精确匹配；「职业」卡片在宠物资料页的四个卡片之一
+    # （等级/勋章/职业/战力，y≈902 一行），页面唯一，故直接按 desc 匹配。
+    'pet_profile': {'xpath': ['//*[@content-desc="宠物资料"]']},
+    'pet_profile_career': {'xpath': ['//*[@content-desc="职业"]']},
 
     # 轮播选择框：大容器 bounds 按 2:2:1 分割成左/中/右三个可见槽位中心。
     # 容器 xpath 命中一次后 cache bounds，select_box_N 由它推导（免各自 dump）
