@@ -45,6 +45,23 @@ def send_alert(reason: str, image_path: str | None = None) -> bool:
     return send(TITLE, reason, image_path)
 
 
+def send_event(title: str, reason: str, image_path: str | None = None) -> bool:
+    """发送"事件类"通知（今日完成/配额达成等），受 notify.event_notify 总开关控制。
+
+    与告警区分：告警是出问题要人处理，事件是"按计划完成了"的告知——用户可能
+    不想被完成类消息打扰，故单独给一个开关（默认开）。
+    """
+    try:
+        cfg = load_config().notify
+    except Exception as e:
+        log(f'事件通知: 读取配置失败（{e}），跳过推送')
+        return False
+    if not getattr(cfg, 'event_notify', True):
+        log('事件通知: notify.event_notify 已关闭，跳过推送')
+        return False
+    return send(title, reason, image_path, cfg=cfg)
+
+
 def send_career_unlock(reason: str, image_path: str | None = None) -> bool:
     """职业解锁通知（受 notify.career_notify 开关控制）。"""
     try:

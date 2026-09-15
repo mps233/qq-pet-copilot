@@ -247,6 +247,8 @@ SETTING_FIELDS = [
     ('notify.telegram_token', 'Telegram Bot Token', 'str'),
     ('notify.telegram_chat_id', 'Telegram Chat ID（私聊数字 / 群 -100…）', 'str'),
     ('notify.career_notify', '隐藏职业解锁推送（含截图）', 'bool'),
+    ('notify.quota_done', '今日配额达成推送（学满/打满，含截图）', 'bool'),
+    ('notify.event_notify', '完成类通知总开关（关=不发完成通知；告警不受影响）', 'bool'),
 ]
 
 # 模拟器专用设置项：非模拟器模式在设置页隐藏

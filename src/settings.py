@@ -92,6 +92,9 @@ DEFAULTS = {
     'notify.telegram_token': '',
     'notify.telegram_chat_id': '',
     'notify.career_notify': True,
+    # 完成类事件通知
+    'notify.quota_done': True,
+    'notify.event_notify': True,
     'career.watch': True,
     'career.stop_study_on_unlock': True,
     'career.check_interval_min': 60,
@@ -217,7 +220,8 @@ def validate_field(key: str, value):
             or key == 'emulator.device_spoof' or key == 'gui.mirror' \
             or key in ('career.watch', 'career.stop_study_on_unlock',
                        'notify.feishu_enabled', 'notify.telegram_enabled',
-                       'notify.career_notify'):
+                       'notify.career_notify', 'notify.quota_done',
+                       'notify.event_notify'):
         return (True, value) if isinstance(value, bool) else (False, default)
     if key == 'notify.feishu_webhook':
         # 飞书群机器人 webhook：留空，或必须是 open.feishu.cn / open.larksuite.com 的 https 地址

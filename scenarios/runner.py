@@ -87,7 +87,7 @@ from src.config import (
     load_config,
 )
 from src.fatigue import fatigue_today
-from src.notify import send_alert, send_career_unlock
+from src.notify import send_alert, send_career_unlock, send_event
 from src import opener
 from src.opener import open_pet_page
 from src.ocr import get_engine
@@ -499,7 +499,10 @@ class Runner:
         return ctx['durations']
 
     def _log_quota_over(self, which: str) -> None:
-        """“今日配额已满”日志每天每项只记一次（ctx 每轮重建，用日期标记防刷屏）。"""
+        """“今日配额已满”日志每天每项只记一次（ctx 每轮重建，用日期标记防刷屏）。
+
+        配额 0 表示“今天不做该项”，不算达成，不发通知。
+        """
         today = date.today()
         if which == 'school':
             if self._study_quota_logged_on == today:
@@ -507,12 +510,49 @@ class Runner:
             self._study_quota_logged_on = today
             log(f'今日学习配额 {self.study_quota_hours} 小时已满，今天不再学习'
                 + ('（配额 0 = 今天不学习）' if self.study_quota_hours <= 0 else ''))
+            if self.study_quota_hours > 0:
+                self._notify_quota_done('学习', self.study_quota_hours)
         else:
             if self._work_quota_logged_on == today:
                 return
             self._work_quota_logged_on = today
             log(f'今日打工配额 {self.work_quota_hours} 小时已满，今天不再打工'
                 + ('（配额 0 = 今天不打工）' if self.work_quota_hours <= 0 else ''))
+            if self.work_quota_hours > 0:
+                self._notify_quota_done('打工', self.work_quota_hours)
+
+    def _notify_quota_done(self, which: str, quota_hours: int) -> None:
+        """今日配额达成通知（受 notify.quota_done 开关控制）。
+
+        这是当天的主要里程碑：配额就是为了“打满就停”，达成时告知用户。
+        附当前手机截图，便于顺手看一眼状态。
+        """
+        try:
+            cfg = getattr(self, '_last_cfg', None)
+            ncfg = getattr(cfg, 'notify', None) if cfg else None
+            if ncfg is not None and not getattr(ncfg, 'quota_done', True):
+                return
+            study_s, work_s = load_durations()
+            total_h = (study_s + work_s) / 3600
+            lines = [
+                f'今日{which}配额已达成：{quota_hours} 小时（不再安排{which}）',
+                f'当前累计：学习 {study_s / 3600:.1f}h + 打工 {work_s / 3600:.1f}h = {total_h:.1f}h',
+            ]
+            # 效率档提示是"锦上添花"，取不到（如属性未初始化）就不写这一行，
+            # 不能让整条通知因此发不出去。注意 _eff_tier_hint 的返回**已含**
+            # "效率 N%（…）"前缀，别再拼一次（曾拼成"效率：100%（效率 100%…）"）。
+            try:
+                lines.append(self._eff_tier_hint(study_s, work_s))
+            except Exception:
+                pass
+            if which == '学习' and self.work_quota_hours > 0:
+                lines.append(f'接下来按配额会转到打工（还有 {self.work_quota_hours} 小时额度）')
+            shot = self._capture_alert_image()   # 复用告警截图（存 runs/alert_*.png）
+            ok = send_event('[QQ宠物·今日完成]', '\n'.join(lines), shot)
+            log(f'配额达成通知已推送（{which}）' if ok else
+                f'配额达成通知未发出（{which}；检查「通知」页的渠道配置）')
+        except Exception as e:   # 通知失败绝不能影响调度
+            log(f'配额达成通知发送异常: {e}')
 
     def _log_work_over(self, durations: tuple[int, int]) -> None:
         """“打工停止时长已达”日志每天只记一次（条件实时求值，防调度轮询刷屏）。"""

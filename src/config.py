@@ -359,6 +359,11 @@ class NotifyConfig:
     # ---- 职业解锁通知 ----
     # 隐藏职业解锁时是否用上面已启用的渠道推送（含树页截图）
     career_notify: bool = True
+    # ---- 完成类事件通知 ----
+    # 今日配额达成（学满/打满）时推送（含当前截图）
+    quota_done: bool = True
+    # 事件类通知总开关（关掉后 quota_done 等"完成"类通知一律不发；告警不受影响）
+    event_notify: bool = True
 
 
 @dataclass
