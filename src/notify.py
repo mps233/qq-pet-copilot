@@ -1,55 +1,327 @@
-"""告警通知：场景多次重试仍失败时多渠道通知用户（参考 qq-farm-copilot）。
+"""告警与事件通知：多渠道推送（参考 qq-farm-copilot）。
 
 渠道（config.yaml 的 notify 段配置，可叠加，任一成功即算送达）：
-- Windows Toast 桌面通知：notify.win_toast: true（需 winotify）
+- Windows/macOS 桌面通知：notify.win_toast: true（Windows 需 winotify）
 - OnePush 推送：notify.onepush_config 填 YAML（设置页是多行输入框），
   支持 Bark / PushPlus / Server酱 / Telegram / SMTP / 自定义 webhook 等
   onepush 提供方，例如：
     onepush_config: "{provider: bark, key: 你的Key}"
   各提供方参数教程（ALAS wiki 中文文档）：
   https://github.com/LmeSzinc/AzurLaneAutoScript/wiki/Onepush-configuration-%5BCN%5D
+- **飞书群机器人**：notify.feishu_enabled + feishu_webhook（+ 可选 feishu_secret 加签）
+- **Telegram Bot**：notify.telegram_enabled + telegram_token + telegram_chat_id
 
-告警时可附当前手机屏幕截图（image_path）：Toast 用作图标，
-OnePush 放进 image_path 字段（是否展示取决于提供方）。
-发送失败只记日志不抛异常——告警本身不能再把调度器弄崩。
+飞书/Telegram 用标准库 urllib 直接发（不依赖 onepush），配置项少、设置页可直接填。
+告警时可附当前手机屏幕截图（image_path）：Toast 用作图标、飞书/Telegram 直接传图
+（Telegram 用 sendPhoto、飞书用图片上传接口；上传失败则降级为纯文本）。
+发送失败只记日志不抛异常——通知本身不能再把调度器弄崩。
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
+import mimetypes
 import os
 import subprocess
 import sys
+import time
+import uuid
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from .config import NotifyConfig, load_config
 from .progress import log
 
 TITLE = '[QQ宠物助手告警]'
+# 职业解锁通知的标题（与告警区分，便于在手机上看通知来源）
+CAREER_TITLE = '[QQ宠物·职业解锁]'
+HTTP_TIMEOUT = 20
 
 
 def send_alert(reason: str, image_path: str | None = None) -> bool:
     """按 notify 配置发送告警，返回是否有渠道发送成功。"""
+    return send(TITLE, reason, image_path)
+
+
+def send_career_unlock(reason: str, image_path: str | None = None) -> bool:
+    """职业解锁通知（受 notify.career_notify 开关控制）。"""
     try:
         cfg = load_config().notify
     except Exception as e:
-        # 配置坏了也要尽量报出来：按默认配置（Windows Toast）发
-        log(f'告警通知: 读取配置失败（{e}），按默认配置发送')
-        cfg = NotifyConfig()
+        log(f'职业通知: 读取配置失败（{e}），跳过推送')
+        return False
+    if not getattr(cfg, 'career_notify', True):
+        log('职业通知: notify.career_notify 已关闭，跳过推送')
+        return False
+    return send(CAREER_TITLE, reason, image_path, cfg=cfg)
+
+
+def send(title: str, content: str, image_path: str | None = None,
+         cfg: NotifyConfig | None = None) -> bool:
+    """按 notify 配置把 title+content 发到所有已启用渠道；返回是否有渠道成功。
+
+    cfg 传 None 时自行读配置（配置坏了按默认配置发，尽量把问题报出来）。
+    """
+    if cfg is None:
+        try:
+            cfg = load_config().notify
+        except Exception as e:
+            log(f'通知: 读取配置失败（{e}），按默认配置发送')
+            cfg = NotifyConfig()
     try:
         sent = False
+        if getattr(cfg, 'feishu_enabled', False) and str(cfg.feishu_webhook).strip():
+            sent = _send_feishu(cfg, title, content, image_path) or sent
+        if getattr(cfg, 'telegram_enabled', False) and str(cfg.telegram_token).strip():
+            sent = _send_telegram(cfg, title, content, image_path) or sent
         if cfg.win_toast:
             # win_toast 兼作“桌面通知”开关：Windows 用 Toast，macOS 用 osascript 通知
             if sys.platform == 'darwin':
-                sent = _send_mac_toast(reason) or sent
+                sent = _send_mac_toast(f'{title} {content}') or sent
             else:
-                sent = _send_windows_toast(reason, image_path) or sent
+                sent = _send_windows_toast(f'{title} {content}', image_path) or sent
         if str(cfg.onepush_config).strip():
-            sent = _send_onepush(str(cfg.onepush_config), reason, image_path) or sent
+            sent = _send_onepush(str(cfg.onepush_config), f'{title} {content}',
+                                 image_path) or sent
         if not sent:
-            log('告警通知: 未发送成功（未配置渠道或发送失败，详见上方日志）')
+            log('通知: 未发送成功（未启用渠道、配置不全或发送失败，详见上方日志）')
         return sent
     except Exception as e:
-        # 告警本身绝不能再把调度器弄崩：任何异常都记日志后返回失败
-        log(f'告警通知: 发送过程异常: {e}')
+        # 通知本身绝不能再把调度器弄崩：任何异常都记日志后返回失败
+        log(f'通知: 发送过程异常: {e}')
         return False
+
+
+# ---------------------------------------------------------------- 飞书群机器人
+
+def _feishu_sign(secret: str, timestamp: int) -> str:
+    """飞书加签：以 "{timestamp}\\n{secret}" 为**密钥**、空串为消息做 HMAC-SHA256。
+
+    注意是拿 timestamp+secret 当 key（不是拿 secret 当 key、timestamp 当消息）——
+    飞书文档的写法容易看反，实测按文档示例算才对得上。
+    """
+    key = f'{timestamp}\n{secret}'.encode('utf-8')
+    return base64.b64encode(hmac.new(key, b'', digestmod=hashlib.sha256).digest()).decode()
+
+
+def _post_json(url: str, payload: dict) -> tuple[bool, str]:
+    """POST JSON，返回 (是否成功, 说明)。飞书/Telegram 都用它，统一错误处理。"""
+    body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+    req = Request(url, data=body, method='POST',
+                  headers={'Content-Type': 'application/json; charset=utf-8'})
+    try:
+        with urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+            raw = resp.read().decode('utf-8', errors='replace')
+        data = json.loads(raw) if raw.strip() else {}
+    except HTTPError as e:
+        detail = ''
+        try:
+            detail = e.read().decode('utf-8', errors='replace')[:200]
+        except Exception:
+            pass
+        return False, f'HTTP {e.code} {detail}'
+    except URLError as e:
+        return False, f'网络错误 {e.reason}'
+    except Exception as e:
+        return False, f'{type(e).__name__}: {e}'
+    # 飞书：code==0 成功；Telegram：ok==true 成功
+    if isinstance(data, dict):
+        if data.get('code') not in (None, 0):
+            return False, f"code={data.get('code')} {data.get('msg') or ''}".strip()
+        if data.get('ok') is False:
+            return False, str(data.get('description') or 'ok=false')
+    return True, 'ok'
+
+
+def _feishu_upload_image(webhook: str, image_path: str) -> str | None:
+    """把图片传到飞书拿 image_key（发图必须先上传）。失败返回 None。
+
+    飞书没有公开的"上传图片"开放接口给自定义机器人，但群机器人收发图走
+    im/v1/images。这里用 multipart 手工拼包（避免依赖 requests）。
+    """
+    url = 'https://open.feishu.cn/open-apis/im/v1/images'
+    boundary = '----QQPetCopilot' + uuid.uuid4().hex
+    try:
+        with open(image_path, 'rb') as f:
+            data = f.read()
+    except OSError as e:
+        log(f'飞书通知: 读取截图失败: {e}')
+        return None
+    ctype = mimetypes.guess_type(image_path)[0] or 'image/png'
+    name = os.path.basename(image_path)
+    parts = []
+    parts.append(f'--{boundary}\r\n'.encode())
+    parts.append(b'Content-Disposition: form-data; name="image_type"\r\n\r\n')
+    parts.append(b'message\r\n')
+    parts.append(f'--{boundary}\r\n'.encode())
+    parts.append(
+        f'Content-Disposition: form-data; name="image"; filename="{name}"\r\n'.encode())
+    parts.append(f'Content-Type: {ctype}\r\n\r\n'.encode())
+    parts.append(data)
+    parts.append(f'\r\n--{boundary}--\r\n'.encode())
+    body = b''.join(parts)
+    req = Request(url, data=body, method='POST', headers={
+        'Content-Type': f'multipart/form-data; boundary={boundary}',
+    })
+    try:
+        with urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+            payload = json.loads(resp.read().decode('utf-8', errors='replace') or '{}')
+        if payload.get('code') == 0:
+            return ((payload.get('data') or {}).get('image_key')) or None
+        log(f"飞书通知: 图片上传失败 code={payload.get('code')} "
+            f"{payload.get('msg') or ''}".strip())
+    except Exception as e:
+        log(f'飞书通知: 图片上传失败: {type(e).__name__}: {e}')
+    return None
+
+
+def _send_feishu(cfg: NotifyConfig, title: str, content: str,
+                 image_path: str | None = None) -> bool:
+    """发送飞书群机器人消息。有截图先传图（image 消息），否则发文本。
+
+    飞书自定义机器人支持的 msg_type：text / post / image / interactive / share_chat。
+    """
+    webhook = str(cfg.feishu_webhook).strip()
+    if not webhook:
+        log('飞书通知: 未填 webhook，跳过')
+        return False
+    payload: dict = {}
+    secret = str(getattr(cfg, 'feishu_secret', '') or '').strip()
+    if secret:
+        ts = int(time.time())
+        payload['timestamp'] = str(ts)
+        payload['sign'] = _feishu_sign(secret, ts)
+
+    text = f'{title}\n{content}'
+    # 有截图：先传图，成功则发一条图片 + 一条文本（图单独发，文本带完整信息）
+    sent_any = False
+    if image_path and os.path.exists(image_path):
+        key = _feishu_upload_image(webhook, image_path)
+        if key:
+            ok, why = _post_json(webhook, {**payload, 'msg_type': 'image',
+                                           'content': {'image_key': key}})
+            if ok:
+                sent_any = True
+            else:
+                log(f'飞书通知: 图片消息发送失败: {why}')
+        else:
+            log('飞书通知: 图片上传未成功，仅发文本')
+    ok, why = _post_json(webhook, {**payload, 'msg_type': 'text',
+                                   'content': {'text': text}})
+    if ok:
+        log('飞书通知: 发送成功')
+        return True
+    log(f'飞书通知: 发送失败: {why}')
+    return sent_any
+
+
+# ---------------------------------------------------------------- Telegram Bot
+
+def _send_telegram(cfg: NotifyConfig, title: str, content: str,
+                   image_path: str | None = None) -> bool:
+    """发送 Telegram 消息（有截图用 sendPhoto，否则 sendMessage）。"""
+    token = str(cfg.telegram_token).strip()
+    chat_id = str(cfg.telegram_chat_id).strip()
+    if not token or not chat_id:
+        log('Telegram 通知: token 或 chat_id 未填，跳过')
+        return False
+    text = f'{title}\n{content}'
+    if image_path and os.path.exists(image_path):
+        ok, why = _telegram_send_photo(token, chat_id, text, image_path)
+        if ok:
+            log('Telegram 通知: 发送成功（图片）')
+            return True
+        log(f'Telegram 通知: 图片发送失败（{why}），降级为文本')
+    base = f'https://api.telegram.org/bot{token}'
+    ok, why = _post_json(f'{base}/sendMessage',
+                         {'chat_id': chat_id, 'text': text,
+                          'disable_web_page_preview': True})
+    if ok:
+        log('Telegram 通知: 发送成功')
+        return True
+    log(f'Telegram 通知: 发送失败: {why}')
+    return False
+
+
+def _telegram_send_photo(token: str, chat_id: str, caption: str,
+                         image_path: str) -> tuple[bool, str]:
+    """multipart 上传图片 + caption（标准库手工拼包，不依赖 requests）。"""
+    boundary = '----QQPetCopilot' + uuid.uuid4().hex
+    try:
+        with open(image_path, 'rb') as f:
+            data = f.read()
+    except OSError as e:
+        return False, f'读取截图失败 {e}'
+    ctype = mimetypes.guess_type(image_path)[0] or 'image/png'
+    name = os.path.basename(image_path)
+    # caption 上限 1024 字符，超了截断（避免整条发送失败）
+    cap = caption if len(caption) <= 1000 else caption[:1000] + '…'
+    parts = []
+    for k, v in (('chat_id', chat_id), ('caption', cap)):
+        parts.append(f'--{boundary}\r\n'.encode())
+        parts.append(f'Content-Disposition: form-data; name="{k}"\r\n\r\n'.encode())
+        parts.append(v.encode('utf-8') + b'\r\n')
+    parts.append(f'--{boundary}\r\n'.encode())
+    parts.append(
+        f'Content-Disposition: form-data; name="photo"; filename="{name}"\r\n'.encode())
+    parts.append(f'Content-Type: {ctype}\r\n\r\n'.encode())
+    parts.append(data)
+    parts.append(f'\r\n--{boundary}--\r\n'.encode())
+    req = Request(f'https://api.telegram.org/bot{token}/sendPhoto',
+                  data=b''.join(parts), method='POST',
+                  headers={'Content-Type': f'multipart/form-data; boundary={boundary}'})
+    try:
+        with urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+            payload = json.loads(resp.read().decode('utf-8', errors='replace') or '{}')
+    except HTTPError as e:
+        detail = ''
+        try:
+            detail = e.read().decode('utf-8', errors='replace')[:200]
+        except Exception:
+            pass
+        return False, f'HTTP {e.code} {detail}'
+    except Exception as e:
+        return False, f'{type(e).__name__}: {e}'
+    if isinstance(payload, dict) and payload.get('ok'):
+        return True, 'ok'
+    return False, str((payload or {}).get('description') or 'ok=false')
+
+
+def test_notify(target: str = 'all') -> dict:
+    """发送一条测试通知（设置页「测试通知」按钮用），返回每个渠道的结果。
+
+    target: all / feishu / telegram —— 便于只测其中一个渠道。
+    """
+    try:
+        cfg = load_config().notify
+    except Exception as e:
+        return {'ok': False, 'msg': f'读取配置失败: {e}', 'results': {}}
+    stamp = time.strftime('%Y-%m-%d %H:%M:%S')
+    text = f'这是一条测试通知（{stamp}）。收到说明配置正确。'
+    results: dict[str, str] = {}
+    ok_any = False
+    if target in ('all', 'feishu'):
+        if not str(cfg.feishu_webhook).strip():
+            results['飞书'] = '未填 webhook'
+        else:
+            ok = _send_feishu(cfg, '[测试] QQ宠物助手', text)
+            results['飞书'] = '成功' if ok else '失败（详见日志）'
+            ok_any = ok_any or ok
+    if target in ('all', 'telegram'):
+        if not (str(cfg.telegram_token).strip() and str(cfg.telegram_chat_id).strip()):
+            results['Telegram'] = '未填 token 或 chat_id'
+        else:
+            ok = _send_telegram(cfg, '[测试] QQ宠物助手', text)
+            results['Telegram'] = '成功' if ok else '失败（详见日志）'
+            ok_any = ok_any or ok
+    if target == 'all':
+        summary = '、'.join(f'{k}:{v}' for k, v in results.items()) or '无可测渠道'
+    else:
+        summary = '、'.join(results.values())
+    return {'ok': ok_any, 'msg': summary, 'results': results}
+
 
 
 def _send_windows_toast(reason: str, image_path: str | None = None) -> bool:

@@ -48,8 +48,8 @@
   点 Q宠-* 入口回宠物页面（src/recover.py）-> 最后再试一次；
   连续恢复 RECOVERY_LIMIT 次仍失败则放弃恢复
 - 多次重试仍失败按任务类型分流：
-  学习/打工是主任务 -> 发告警通知（src/notify.py：Windows Toast / OnePush，
-  见 config.yaml 的 notify 段；附当前手机屏幕截图）后退出调度器，
+  学习/打工是主任务 -> 发告警通知（src/notify.py：飞书群机器人 / Telegram Bot /
+  桌面通知 / OnePush，在仪表盘设置页「通知」组配置；附当前手机屏幕截图）后退出调度器，
   不静默挂起空跑——设备/游戏状态异常需要人工介入；
   冒险/踩踩/PK/好友护理/好友雇佣 是支线任务 -> 重新排期延后 SIDE_TASK_RETRY_DELAY 秒重试
   （参考 qq-farm-copilot 的 failure_interval 队列机制），先执行其他任务；
@@ -87,7 +87,7 @@ from src.config import (
     load_config,
 )
 from src.fatigue import fatigue_today
-from src.notify import send_alert
+from src.notify import send_alert, send_career_unlock
 from src import opener
 from src.opener import open_pet_page
 from src.ocr import get_engine
@@ -1614,7 +1614,8 @@ class TaskQueueRunner(Runner):
         """职业解锁哨兵检查一轮：读职业树（三维同步 + 隐藏线解锁判定），失败只记日志。
 
         触发时机：每节课结算后 / 调度器启动时 / 每 check_interval_min 分钟兜底；
-        发现解锁 → 记录事件（仪表盘横幅 + Hermes 定时通知脚本消费）+ 可选自动停止学习。
+        发现解锁 → **就地推送通知**（飞书/Telegram/桌面/OnePush，见仪表盘设置页
+        「通知」组）+ 记录事件（仪表盘横幅）+ 可选自动停止学习。
         """
         ccfg = getattr(self._last_cfg, 'career', None)
         if ccfg is None or not getattr(ccfg, 'watch', False):
@@ -1655,7 +1656,12 @@ class TaskQueueRunner(Runner):
 
     def _career_on_unlock(self, unlocks: dict, attrs: dict, result: dict,
                           tasks: dict | None = None) -> None:
-        """解锁处理：写事件文件（仪表盘 + 通知脚本消费），可选自动停止学习。"""
+        """解锁处理：直接推送通知 + 写事件文件（仪表盘横幅），可选自动停止学习。
+
+        通知走 src/notify.py 的 send_career_unlock（飞书 / Telegram / 桌面 / OnePush，
+        在仪表盘设置页「通知」组配置）；发完把事件的 notified_at 置上，避免
+        外部脚本（历史上是 Hermes cron）重复推送。
+        """
         shots = result.get('unlock_shots') or {}
         ccfg = getattr(self._last_cfg, 'career', None)
         stop = bool(getattr(ccfg, 'stop_study_on_unlock', True))
@@ -1666,15 +1672,47 @@ class TaskQueueRunner(Runner):
             return
         now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         for career, name in fresh:
-            data['events'].append({
+            event = {
                 'career': career, 'name': name, 'ts': now_str, 'attrs': attrs,
                 'shot': shots.get(career), 'stopped': bool(stop), 'notified_at': None,
-            })
+            }
+            data['events'].append(event)
             log(f'🎉 职业解锁：「{career}」（见习·{name}）'
                 + ('——已自动停止学习（职业哨兵触发）' if stop else ''))
+            # 就地推送（含树页截图）；成功才记 notified_at，失败留在事件里便于事后排查
+            if self._notify_career_unlock(career, name, attrs, shots.get(career), stop):
+                event['notified_at'] = now_str
         save_unlock_data(data)
         if stop:
             self._career_stop_study(tasks)
+
+    def _notify_career_unlock(self, career: str, name: str, attrs: dict,
+                              shot: str | None, stopped: bool) -> bool:
+        """推送一条职业解锁通知，返回是否发出成功（失败只记日志，不影响调度）。"""
+        a = attrs or {}
+        lines = [f'「{career}」已解锁（见习：{name}）',
+                 '当前三维：力 {} / 智 {} / 魅 {}'.format(
+                     a.get('力量', '?'), a.get('智力', '?'), a.get('魅力', '?'))]
+        if stopped:
+            lines.append('已自动停止学习（职业哨兵触发）——要接着学，在仪表盘设置里改回')
+        image = None
+        if shot:
+            # 事件里存的是文件名（如 career_unlock_xxx.png），拼 runs/ 下绝对路径；
+            # 万一存的是绝对路径则原样用。不用 pathlib：本文件没导入它。
+            s = str(shot)
+            p = PROJECT_ROOT / 'runs' / os.path.basename(s) if not s.startswith('/') else None
+            if p is not None and p.exists():
+                image = str(p)
+            elif s.startswith('/') and os.path.exists(s):
+                image = s
+        try:
+            ok = send_career_unlock('\n'.join(lines), image)
+            log('职业哨兵: 解锁通知已推送' if ok else
+                '职业哨兵: 解锁通知未发出（检查仪表盘设置页「通知」组的渠道配置）')
+            return ok
+        except Exception as e:  # 通知失败绝不能影响调度
+            log(f'职业哨兵: 解锁通知发送异常: {e}')
+            return False
 
     def _career_stop_study(self, tasks: dict | None = None) -> None:
         """哨兵触发：关闭学习任务（写 config.yaml，下一轮热加载生效；仪表盘可见）。"""

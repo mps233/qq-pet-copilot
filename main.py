@@ -240,6 +240,13 @@ SETTING_FIELDS = [
     ('recover.emulator_restart_cmd', '模拟器重启命令（留空自动探测）', 'str'),
     ('notify.win_toast', '失败告警 Windows 通知', 'bool'),
     ('notify.onepush_config', '失败告警 OnePush 配置', 'text'),
+    ('notify.feishu_enabled', '飞书群机器人推送', 'bool'),
+    ('notify.feishu_webhook', '飞书 webhook（open.feishu.cn/…/hook/xxx）', 'str'),
+    ('notify.feishu_secret', '飞书加签密钥（选签名校验时填）', 'str'),
+    ('notify.telegram_enabled', 'Telegram Bot 推送', 'bool'),
+    ('notify.telegram_token', 'Telegram Bot Token', 'str'),
+    ('notify.telegram_chat_id', 'Telegram Chat ID（私聊数字 / 群 -100…）', 'str'),
+    ('notify.career_notify', '隐藏职业解锁推送（含截图）', 'bool'),
 ]
 
 # 模拟器专用设置项：非模拟器模式在设置页隐藏

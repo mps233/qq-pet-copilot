@@ -344,6 +344,21 @@ class NotifyConfig:
     win_toast: bool = True
     # OnePush 推送配置（YAML，支持多行），如 {provider: bark, key: xxx}；留空不推送
     onepush_config: str = ""
+    # ---- 飞书群机器人（自定义机器人 webhook）----
+    feishu_enabled: bool = False
+    # 形如 https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx
+    feishu_webhook: str = ""
+    # 机器人"加签"密钥（安全设置选"签名校验"时必填；选"自定义关键词"可留空）
+    feishu_secret: str = ""
+    # ---- Telegram Bot ----
+    telegram_enabled: bool = False
+    # @BotFather 给的 token，形如 123456789:AAE...
+    telegram_token: str = ""
+    # 目标会话 id：私聊=你的用户 id（数字）；群/频道=-100xxxxxxxxxx
+    telegram_chat_id: str = ""
+    # ---- 职业解锁通知 ----
+    # 隐藏职业解锁时是否用上面已启用的渠道推送（含树页截图）
+    career_notify: bool = True
 
 
 @dataclass

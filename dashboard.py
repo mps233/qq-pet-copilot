@@ -345,6 +345,19 @@ def config_summary() -> dict:
     control = cfg.get('control') or {}
     notify = cfg.get('notify') or {}
     runner = cfg.get('runner') or {}
+
+    # 通知渠道摘要（设置页"通知"行）：列出真正已启用的渠道
+    def _notify_channels_label(nt: dict) -> str:
+        chans = []
+        if nt.get('feishu_enabled') and str(nt.get('feishu_webhook') or '').strip():
+            chans.append('飞书')
+        if nt.get('telegram_enabled') and str(nt.get('telegram_token') or '').strip():
+            chans.append('Telegram')
+        if nt.get('win_toast', True):
+            chans.append('桌面通知')
+        if str(nt.get('onepush_config') or '').strip():
+            chans.append('OnePush')
+        return ' + '.join(chans) if chans else '未启用任何渠道'
     school_enabled = bool((tasks.get('school') or {}).get('enabled', True))
 
     def n_per_day(n):
@@ -377,7 +390,7 @@ def config_summary() -> dict:
         ['护理', f"{care.get('method', '')} · 阈值 {care.get('energy_threshold', '-')}/{care.get('clean_threshold', '-')}"],
         ['异常恢复', str(recover.get('method', ''))],
         ['设备', f"{adb.get('device_serial') or '自动'} · {control.get('method', '')}"],
-        ['通知', 'macOS 桌面通知' + (' + OnePush' if str(notify.get('onepush_config', '')).strip() else '')],
+        ['通知', _notify_channels_label(notify)],
     ]
     return {
         'strategy': strategy,
@@ -763,6 +776,7 @@ def editable_snapshot() -> dict:
     emp = cfg.get('employed') or {}
     school = cfg.get('school') or {}
     career = cfg.get('career') or {}
+    notify = cfg.get('notify') or {}
     return {
         'school_enabled': bool((tasks.get('school') or {}).get('enabled', True)),
         'school_attribute': str(school.get('attribute') or '力量'),
@@ -804,6 +818,14 @@ def editable_snapshot() -> dict:
         'career_watch': bool(career.get('watch', True)),
         'career_stop_study': bool(career.get('stop_study_on_unlock', True)),
         'career_interval': career.get('check_interval_min', 60),
+        # 通知渠道（飞书群机器人 / Telegram Bot）
+        'notify_feishu_enabled': bool(notify.get('feishu_enabled', False)),
+        'notify_feishu_webhook': str(notify.get('feishu_webhook') or ''),
+        'notify_feishu_secret': str(notify.get('feishu_secret') or ''),
+        'notify_telegram_enabled': bool(notify.get('telegram_enabled', False)),
+        'notify_telegram_token': str(notify.get('telegram_token') or ''),
+        'notify_telegram_chat_id': str(notify.get('telegram_chat_id') or ''),
+        'notify_career': bool(notify.get('career_notify', True)),
     }
 
 
@@ -869,6 +891,14 @@ def apply_settings(updates: dict) -> dict:
         'career_watch': ('career.watch', 'bool'),
         'career_stop_study': ('career.stop_study_on_unlock', 'bool'),
         'career_interval': ('career.check_interval_min', 'int'),
+        # 通知渠道（飞书群机器人 / Telegram Bot）——凭据类走 str，服务端 validate_field 校验
+        'notify_feishu_enabled': ('notify.feishu_enabled', 'bool'),
+        'notify_feishu_webhook': ('notify.feishu_webhook', 'str'),
+        'notify_feishu_secret': ('notify.feishu_secret', 'str'),
+        'notify_telegram_enabled': ('notify.telegram_enabled', 'bool'),
+        'notify_telegram_token': ('notify.telegram_token', 'str'),
+        'notify_telegram_chat_id': ('notify.telegram_chat_id', 'str'),
+        'notify_career': ('notify.career_notify', 'bool'),
     }
     data = S.load_raw()
     applied, rejected = {}, []
@@ -1905,6 +1935,17 @@ function renderSettings(ed){
     '<div class="frow"><span class="k">隐藏职业解锁监控</span><button class="sw'+(ed.career_watch?' on':'')+'" id="swCareer" title="开=每节课结算后读职业树；武术家/梦境旅人/大明星解锁时记录并推送通知"></button></div>',
     '<div class="frow"><span class="k">解锁后自动停学</span><button class="sw'+(ed.career_stop_study?' on':'')+'" id="swCareerStop" title="开=解锁时自动关闭学习任务（等你安排下一阶段）"></button></div>',
     '<div class="frow"><span class="k">兜底检查间隔（分钟）</span><input type="number" id="numCareerInt" min="0" step="10" title="0 = 只每节课后检查" value="'+(ed.career_interval??60)+'"></div>',
+    ])+
+    FG('通知（飞书 / Telegram）',[
+    '<div class="frow"><span class="k">飞书群机器人</span><button class="sw'+(ed.notify_feishu_enabled?' on':'')+'" id="swFeishu" title="开=用飞书自定义机器人推送（需填下面两项）"></button></div>',
+    '<div class="frow"><span class="k">飞书 webhook</span><input type="text" id="txtFsHook" style="width:100%" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" value="'+esc(ed.notify_feishu_webhook)+'"></div>',
+    '<div class="frow"><span class="k">飞书加签密钥</span><input type="text" id="txtFsSecret" placeholder="选「签名校验」时必填，否则留空" value="'+esc(ed.notify_feishu_secret)+'"></div>',
+    '<div class="frow"><span class="k">Telegram Bot</span><button class="sw'+(ed.notify_telegram_enabled?' on':'')+'" id="swTg" title="开=用 Telegram Bot 推送（需填下面两项）"></button></div>',
+    '<div class="frow"><span class="k">Bot Token</span><input type="text" id="txtTgToken" placeholder="123456789:AAE…（@BotFather 获取）" value="'+esc(ed.notify_telegram_token)+'"></div>',
+    '<div class="frow"><span class="k">Chat ID</span><input type="text" id="txtTgChat" placeholder="私聊填数字 id；群填 -100…" value="'+esc(ed.notify_telegram_chat_id)+'"></div>',
+    '<div class="frow"><span class="k">职业解锁推送</span><button class="sw'+(ed.notify_career?' on':'')+'" id="swCareerNotify" title="开=隐藏职业解锁时推送（含树页截图）"></button></div>',
+    '<div class="frow"><span class="k">测试</span><button class="minibtn" id="btnTestNotify">发送测试通知</button><span id="notifyTestMsg" class="err" style="color:var(--sub)"></span></div>',
+    '<div class="frow"><span class="k">说明</span><span style="color:var(--sub);font-size:12px">飞书：群设置→群机器人→添加「自定义机器人」，复制 webhook；选了「签名校验」就把密钥填到加签密钥。Telegram：@BotFather 建 bot 拿 Token，先给 bot 发一条消息，再用 @userinfobot 查 Chat ID。保存后点「发送测试通知」验证</span></div>',
     ]);
   $('#swSchool').onclick=()=>{ $('#swSchool').classList.toggle('on'); setDirty=true; };
   $('#swFC').onclick=()=>{ $('#swFC').classList.toggle('on'); setDirty=true; };
@@ -1913,6 +1954,33 @@ function renderSettings(ed){
   $('#swCareer').onclick=()=>{ $('#swCareer').classList.toggle('on'); setDirty=true; };
   $('#swCareerStop').onclick=()=>{ $('#swCareerStop').classList.toggle('on'); setDirty=true; };
   $('#swPkHf').onclick=()=>{ $('#swPkHf').classList.toggle('on'); setDirty=true; };
+  // 通知渠道开关
+  $('#swFeishu').onclick=()=>{ $('#swFeishu').classList.toggle('on'); setDirty=true; };
+  $('#swTg').onclick=()=>{ $('#swTg').classList.toggle('on'); setDirty=true; };
+  $('#swCareerNotify').onclick=()=>{ $('#swCareerNotify').classList.toggle('on'); setDirty=true; };
+  // 「发送测试通知」：先保存当前表单（否则测的是旧配置），再让服务端按配置发一条
+  const _btnTN=$('#btnTestNotify');
+  if(_btnTN) _btnTN.onclick=async()=>{
+    const msg=$('#notifyTestMsg');
+    msg.style.color='var(--sub)'; msg.textContent='先保存当前设置…';
+    try{
+      // 复用 saveSettings（它按 setInit 差量提交）——有改动才真正 POST
+      await saveSettings();
+      if(setDirty){   // saveSettings 没清掉 dirty = 有字段被拒，放弃测试
+        msg.style.color='#b45309';
+        msg.textContent='设置未全部保存成功，请先修正上面的提示再测试';
+        return;
+      }
+      msg.textContent='正在发送…';
+      const r=await fetch('/api/notify/test',{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({target:'all'})});
+      const d=await r.json();
+      msg.style.color=d.ok?'#16a34a':'#b45309';
+      msg.textContent=(d.ok?'✅ ':'✗ ')+(d.msg||'');
+    }catch(e){
+      msg.style.color='#b45309'; msg.textContent='测试失败：'+e.message;
+    }
+  };
   // 「当前设置」实时提示：把四个数字翻译成一句人话，避免填错组合（如只学习却
   // 忘了把金币阈值调 0 → 金币不足时会先去打工，看着像"没在学习"）
   const qv=id=>{const el=$(id); return el?parseInt(el.value,10):NaN;};
@@ -2006,6 +2074,15 @@ async function saveSettings(){
   txtc('#txtPkOnly','pk_only'); txtc('#txtPkSkip','pk_skip'); num('#numPkLv','pk_max_level'); txtc('#txtPkHelper','pk_helper');
   num('#numEnergy','care_energy'); num('#numClean','care_clean'); num('#numExchange','care_exchange'); num('#numGbInt','gift_bag_interval'); num('#numCareerInt','career_interval');
   txtc('#txtFCName','friend_care_name'); num('#numFCInt','friend_care_interval'); num('#numEmpInt','employed_interval');
+  // 通知渠道：开关 + 凭据文本（凭据改动也走 txtc，服务端 validate_field 校验格式）
+  const fsNew=$('#swFeishu').classList.contains('on');
+  if(!!fsNew !== !!setInit.notify_feishu_enabled) updates.notify_feishu_enabled=fsNew;
+  const tgNew=$('#swTg').classList.contains('on');
+  if(!!tgNew !== !!setInit.notify_telegram_enabled) updates.notify_telegram_enabled=tgNew;
+  const cnNew=$('#swCareerNotify').classList.contains('on');
+  if(!!cnNew !== !!setInit.notify_career) updates.notify_career=cnNew;
+  txtc('#txtFsHook','notify_feishu_webhook'); txtc('#txtFsSecret','notify_feishu_secret');
+  txtc('#txtTgToken','notify_telegram_token'); txtc('#txtTgChat','notify_telegram_chat_id');
   if(!Object.keys(updates).length){ msg.className='saveMsg'; msg.textContent='没有改动'; btn.disabled=false; return; }
   try{
     const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({updates})});
@@ -2246,6 +2323,19 @@ class Handler(BaseHTTPRequestHandler):
                     body = json.dumps(result, ensure_ascii=False).encode('utf-8')
                     self._send(200 if result['ok'] else 400,
                                'application/json; charset=utf-8', body)
+            elif u.path == '/api/notify/test':
+                # 设置页「发送测试通知」：按当前 config.yaml 的 notify 配置发一条
+                length = int(self.headers.get('Content-Length') or 0)
+                try:
+                    payload = json.loads(self.rfile.read(length).decode('utf-8') or '{}')
+                except Exception:
+                    payload = {}
+                from src.notify import test_notify
+                result = test_notify(str(payload.get('target') or 'all'))
+                audit(f'测试通知(来自 {self.client_address[0]}): {result.get("msg")}')
+                body = json.dumps(result, ensure_ascii=False).encode('utf-8')
+                self._send(200 if result.get('ok') else 400,
+                           'application/json; charset=utf-8', body)
             elif u.path == '/api/runner/start':
                 result = scheduler_start()
                 body = json.dumps(result, ensure_ascii=False).encode('utf-8')

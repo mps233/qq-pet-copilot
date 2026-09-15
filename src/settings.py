@@ -84,6 +84,14 @@ DEFAULTS = {
     'recover.emulator_restart_cmd': '',
     'notify.win_toast': True,
     'notify.onepush_config': '',
+    # 飞书群机器人 / Telegram Bot（设置页"通知"组可填，支持「测试通知」按钮）
+    'notify.feishu_enabled': False,
+    'notify.feishu_webhook': '',
+    'notify.feishu_secret': '',
+    'notify.telegram_enabled': False,
+    'notify.telegram_token': '',
+    'notify.telegram_chat_id': '',
+    'notify.career_notify': True,
     'career.watch': True,
     'career.stop_study_on_unlock': True,
     'career.check_interval_min': 60,
@@ -207,8 +215,21 @@ def validate_field(key: str, value):
             return False, default
     if key == 'notify.win_toast' or key == 'adventure.skip_bad_weather' \
             or key == 'emulator.device_spoof' or key == 'gui.mirror' \
-            or key in ('career.watch', 'career.stop_study_on_unlock'):
+            or key in ('career.watch', 'career.stop_study_on_unlock',
+                       'notify.feishu_enabled', 'notify.telegram_enabled',
+                       'notify.career_notify'):
         return (True, value) if isinstance(value, bool) else (False, default)
+    if key == 'notify.feishu_webhook':
+        # 飞书群机器人 webhook：留空，或必须是 open.feishu.cn / open.larksuite.com 的 https 地址
+        text = str(value).strip()
+        if not text:
+            return True, ''
+        ok = text.startswith('https://') and (
+            'open.feishu.cn/' in text or 'open.larksuite.com/' in text)
+        return (True, text) if ok else (False, default)
+    if key in ('notify.feishu_secret', 'notify.telegram_token', 'notify.telegram_chat_id'):
+        # 凭据类：去掉首尾空白即可（token 里可能含冒号，chat_id 可能是负数）
+        return True, str(value).strip()
     if key == 'notify.onepush_config':
         # OnePush 推送配置（YAML，支持多行）：留空，或能解析出含 provider 的字典
         text = str(value).strip()
