@@ -34,7 +34,10 @@
 - 单测：`./run.sh --test coins` 等
 - 手机仪表盘：`./dashboard.sh`（纯标准库零依赖，默认端口 8787，绑定 0.0.0.0）
   内网访问 `http://<Mac 的局域网 IP>:8787`，手机浏览器打开即用；
-  数据源为 runs/ 下的日志/进度/状态/队列文件，日志 3s、数据 6s 自动刷新
+  数据源为 runs/ 下的日志/进度/状态/队列文件，日志 3s、数据 6s 自动刷新。
+  **后台常驻**：脚本用 `start_new_session` 脱离终端启动（关终端不影响），
+  已在运行时提示 PID 不再重复启动；换端口 `./dashboard.sh --port 8888`；
+  停止 `kill $(lsof -nP -iTCP:8787 -sTCP:LISTEN -t)`；日志 runs/dashboard_console.log
 
 ## 真机实测记录（一加 LE2120 / Android 14 / QQ 9.3.60）
 
