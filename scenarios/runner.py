@@ -194,6 +194,14 @@ class Runner:
         # 共享一个 u2 连接，避免每个场景重复连接和打印
         cfg = load_config()
         self._last_cfg = cfg  # 最近一次加载的配置（任务队列调度读 tasks 段用）
+        # 预热通知配置缓存：此刻配置是好的，把渠道配置记下来，之后若 config.yaml
+        # 被改坏（notify_error 最典型的使用场景），错误通知仍能依靠这份缓存发出去
+        # ——否则会死锁：配置坏了要通知，读渠道又需要先读配置（实测踩坑）。
+        try:
+            from src.notify import prime_config as _prime_notify
+            _prime_notify()
+        except Exception as e:
+            log(f'通知配置预热失败（不影响运行）: {e}')
         serial = opener_serial or cfg.adb.device_serial
         if use_opener and serial:
             adb_dev = Device(find_adb(cfg.adb.path), serial)

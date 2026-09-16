@@ -69,6 +69,35 @@ def send_event(title: str, reason: str, image_path: str | None = None) -> bool:
 _ERROR_SENT_AT: dict[str, float] = {}
 # 同一 key 最短发送间隔（秒）——默认 30 分钟；同类错误在这期间只推一次
 ERROR_NOTIFY_COOLDOWN = 1800
+# 最近一次**成功**读取的 notify 配置：配置坏掉时（error_notify 的典型场景就是
+# "config.yaml 解析失败"）用它兜底，否则会陷入死锁——配置坏了要通知用户，而
+# 读渠道配置又需要先读配置（实测踩坑：notify_error 打日志"读取配置失败，跳过推送"，
+# 通知根本发不出去）。进程内缓存，首次成功读取后一直可用。
+_LAST_GOOD_NOTIFY: NotifyConfig | None = None
+
+
+def _notify_cfg() -> NotifyConfig | None:
+    """取 notify 配置：正常读取并缓存；读失败时返回上次成功的副本。"""
+    global _LAST_GOOD_NOTIFY
+    try:
+        cfg = load_config().notify
+        _LAST_GOOD_NOTIFY = cfg
+        return cfg
+    except Exception as e:
+        if _LAST_GOOD_NOTIFY is not None:
+            log(f'通知: 读取配置失败（{e}），改用上次成功的渠道配置发送')
+            return _LAST_GOOD_NOTIFY
+        log(f'通知: 读取配置失败（{e}）且无可用缓存，跳过推送')
+        return None
+
+
+def prime_config() -> bool:
+    """预热通知配置缓存（调度器启动、配置还正常时调用）。
+
+    这样之后 config.yaml 被改坏也能用这份缓存发错误通知（见 _notify_cfg 的说明）。
+    返回是否成功建立缓存。
+    """
+    return _notify_cfg() is not None
 
 
 def notify_error(reason: str, key: str = 'default', cooldown: int = ERROR_NOTIFY_COOLDOWN,
@@ -77,12 +106,13 @@ def notify_error(reason: str, key: str = 'default', cooldown: int = ERROR_NOTIFY
 
     用于"出错了但没崩、会静默降级"的场景——用户最需要知道却最容易漏掉，
     例如配置读取失败后一直沿用旧配置（界面改什么都不生效）。
-    返回是否真的发出了（被限频/开关关闭/发送失败都算未发出）。
+
+    **配置坏掉时也能发**：走 _notify_cfg() 的"上次成功配置"兜底——否则最需要
+    通知的场景（config.yaml 写坏了）反而发不出去。
+    返回是否真的发出了（被限频/开关关闭/无可用渠道/发送失败都算未发出）。
     """
-    try:
-        cfg = load_config().notify
-    except Exception as e:
-        log(f'错误通知: 读取配置失败（{e}），跳过推送')
+    cfg = _notify_cfg()
+    if cfg is None:
         return False
     if not getattr(cfg, 'error_notify', True):
         return False
