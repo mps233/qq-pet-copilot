@@ -87,7 +87,7 @@ from src.config import (
     load_config,
 )
 from src.fatigue import fatigue_today
-from src.notify import send_alert, send_career_unlock, send_event
+from src.notify import notify_error, send_alert, send_career_unlock, send_event
 from src import opener
 from src.opener import open_pet_page
 from src.ocr import get_engine
@@ -787,6 +787,11 @@ class Runner:
             cfg = load_config()
         except Exception as e:
             log(f'配置读取失败，沿用旧配置: {e}')
+            # 配置坏了会一直沿用旧配置、界面改啥都不生效，用户却看不出来
+            # （实测：调度器跑了 7 小时、刷了 1188 次这条日志没人发现）。
+            # 按错误指纹限频推送，让人及时知道"你的设置没生效"。
+            notify_error(f'配置读取失败，正在沿用旧配置（改动不会生效）\n{e}',
+                         key='reload_config', log=log)
             return
         self._last_cfg = cfg
         sched = cfg.schedule

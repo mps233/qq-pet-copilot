@@ -834,6 +834,7 @@ def editable_snapshot() -> dict:
         'notify_career': bool(notify.get('career_notify', True)),
         'notify_quota_done': bool(notify.get('quota_done', True)),
         'notify_event_notify': bool(notify.get('event_notify', True)),
+        'notify_error_notify': bool(notify.get('error_notify', True)),
     }
 
 
@@ -909,6 +910,7 @@ def apply_settings(updates: dict) -> dict:
         'notify_career': ('notify.career_notify', 'bool'),
         'notify_quota_done': ('notify.quota_done', 'bool'),
         'notify_event_notify': ('notify.event_notify', 'bool'),
+        'notify_error_notify': ('notify.error_notify', 'bool'),
     }
     data = S.load_raw()
     applied, rejected = {}, []
@@ -2047,6 +2049,13 @@ function renderNotifyForm(ed){
     '<div class="frow"><span class="k">隐藏职业解锁</span><button class="sw'+(ed.notify_career?' on':'')+'" id="swCareerNotify" title="开=武术家/梦境旅人/大明星解锁时推送（含职业树截图）"></button></div>',
     '<div class="frow"><span class="k">完成类通知总开关</span><button class="sw'+(ed.notify_event_notify?' on':'')+'" id="swEventNotify" title="关掉后所有「完成」类通知（如配额达成）都不发；任务失败告警不受影响"></button></div>',
     ])+
+    FGn('异常提醒',[
+    '<div class="frow"><span class="k">异常降级提醒</span><button class="sw'+(ed.notify_error_notify?' on':'')+'" id="swErrNotify" title="开=出现「没崩但静默降级」的错误时推送，如同类错误 30 分钟内最多一条。典型：配置读取失败后一直沿用旧配置，界面改什么都不生效"></button></div>',
+    '<div class="frow" style="display:block"><span style="color:var(--sub);font-size:12px;line-height:1.6">'
+    +'任务失败告警（学习/打工反复失败后退出调度器）<b>始终会发</b>，不受本页开关影响；'
+    +'这里的开关只控制「完成通知」与「异常降级提醒」。'
+    +'</span></div>',
+    ])+
     FGn('测试与说明',[
     '<div class="frow"><span class="k">测试</span><button class="minibtn" id="btnTestNotify">发送测试通知</button><span id="notifyTestMsg" style="color:var(--sub);font-size:12px"></span></div>',
     '<div class="frow" style="display:block"><span style="color:var(--sub);font-size:12px;line-height:1.7">'
@@ -2057,7 +2066,7 @@ function renderNotifyForm(ed){
     +'任务失败告警始终会发（不受上面开关影响）；职业解锁与配额达成各有一个开关。'
     +'</span></div>',
     ]);
-  ['#swFeishu','#swTg','#swQuotaNotify','#swCareerNotify','#swEventNotify'].forEach(id=>{
+  ['#swFeishu','#swTg','#swQuotaNotify','#swCareerNotify','#swEventNotify','#swErrNotify'].forEach(id=>{
     const el=$(id); if(el) el.onclick=()=>{ el.classList.toggle('on'); };
   });
   const tn=$('#btnTestNotify');
@@ -2091,7 +2100,7 @@ async function saveNotifySettings(silent){
   sw('#swTg','notify_telegram_enabled');     tx('#txtTgToken','notify_telegram_token');
   tx('#txtTgChat','notify_telegram_chat_id');
   sw('#swQuotaNotify','notify_quota_done');  sw('#swCareerNotify','notify_career');
-  sw('#swEventNotify','notify_event_notify');
+  sw('#swEventNotify','notify_event_notify'); sw('#swErrNotify','notify_error_notify');
   if(!Object.keys(updates).length){
     if(!silent&&msg){ msg.className='saveMsg'; msg.textContent='没有改动'; }
     return {ok:true, changed:0};

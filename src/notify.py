@@ -37,6 +37,8 @@ from .progress import log
 TITLE = '[QQ宠物助手告警]'
 # 职业解锁通知的标题（与告警区分，便于在手机上看通知来源）
 CAREER_TITLE = '[QQ宠物·职业解锁]'
+# 错误/降级通知（"出错了但没崩"类，如配置读取失败后沿用旧配置）
+ERROR_TITLE = '[QQ宠物·异常]'
 HTTP_TIMEOUT = 20
 
 
@@ -60,6 +62,40 @@ def send_event(title: str, reason: str, image_path: str | None = None) -> bool:
         log('事件通知: notify.event_notify 已关闭，跳过推送')
         return False
     return send(title, reason, image_path, cfg=cfg)
+
+
+# 错误通知限频：按 key（错误类别）记上次发送时间，避免同一错误刷屏。
+# 调度器是长驻进程，模块级字典即可（进程重启后计数清零，可接受）。
+_ERROR_SENT_AT: dict[str, float] = {}
+# 同一 key 最短发送间隔（秒）——默认 30 分钟；同类错误在这期间只推一次
+ERROR_NOTIFY_COOLDOWN = 1800
+
+
+def notify_error(reason: str, key: str = 'default', cooldown: int = ERROR_NOTIFY_COOLDOWN,
+                 image_path: str | None = None, log=print) -> bool:
+    """发送错误/降级类通知（受 notify.error_notify 开关控制），同一 key 限频。
+
+    用于"出错了但没崩、会静默降级"的场景——用户最需要知道却最容易漏掉，
+    例如配置读取失败后一直沿用旧配置（界面改什么都不生效）。
+    返回是否真的发出了（被限频/开关关闭/发送失败都算未发出）。
+    """
+    try:
+        cfg = load_config().notify
+    except Exception as e:
+        log(f'错误通知: 读取配置失败（{e}），跳过推送')
+        return False
+    if not getattr(cfg, 'error_notify', True):
+        return False
+    now = time.time()
+    last = _ERROR_SENT_AT.get(key)
+    if last is not None and (now - last) < max(0, cooldown):
+        left = int((max(0, cooldown) - (now - last)) / 60) + 1
+        log(f'错误通知: 同类错误（{key}）{left} 分钟内已推送过，本次跳过')
+        return False
+    ok = send(ERROR_TITLE, reason, image_path, cfg=cfg)
+    if ok:
+        _ERROR_SENT_AT[key] = now
+    return ok
 
 
 def send_career_unlock(reason: str, image_path: str | None = None) -> bool:

@@ -364,6 +364,10 @@ class NotifyConfig:
     quota_done: bool = True
     # 事件类通知总开关（关掉后 quota_done 等"完成"类通知一律不发；告警不受影响）
     event_notify: bool = True
+    # ---- 错误/降级通知 ----
+    # "出错了但没崩、静默降级"时推送（同类错误按指纹限频，默认 30 分钟一次）。
+    # 典型场景：配置读取失败后一直沿用旧配置 → 界面改什么都不生效。
+    error_notify: bool = True
 
 
 @dataclass
