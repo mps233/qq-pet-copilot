@@ -231,6 +231,9 @@ class Runner:
         self.recoveries = 0  # 连续异常恢复次数（成功跑完一轮清零；距上次超过 RECOVERY_RESET_AFTER 也清零）
         self.last_recovery_at = 0.0  # 上次发起恢复的 monotonic 时间
         self.retry_after: dict[str, datetime] = {}  # 支线任务名 -> 失败后的下次可执行时间
+        # 主任务（学习/打工）主动延后的时间点（如"等好友空闲再雇佣"读到好友忙碌
+        # 剩余时间）：legacy 主循环到点前不再进小镇空跑，与支线 retry_after 分开
+        self.work_deferred_until: datetime | None = None
         self.visit_dead = False  # 踩踩今天不再可用（执行失败）
         self.pk_dead = False     # PK 今天不再可用（执行失败）
         self.friend_care_dead = False  # 好友护理今天不再可用（执行失败）
@@ -869,6 +872,7 @@ class Runner:
         self.work.times_per_day = cfg.work.times_per_day
         self.work.employ_scroll_limit = cfg.work.employ_scroll_limit
         self.work.hire_name = str(getattr(cfg.work, 'hire_name', '') or '').strip()
+        self.work.hire_wait = bool(getattr(cfg.work, 'hire_wait', False))
         self.visit.times_per_day = cfg.visit.times_per_day
         self.visit_times = cfg.visit.times_per_day
         try:
@@ -1115,10 +1119,25 @@ class Runner:
                     else:
                         log(f'金币 {coins} < 阈值 {self.threshold}，先去打工')
 
-                first = (self.school, '学习', school_dead) if prefer_school else (self.work, '打工', work_dead)
-                second = (self.work, '打工', work_dead) if prefer_school else (self.school, '学习', school_dead)
+                # 打工延后期（"等好友空闲再雇佣"读到好友忙碌剩余时间）：到点前别再去
+                # 打工（进小镇重读面板纯属白跑，一轮约 30s）。学习不受影响——延后只让
+                # "打工本轮不可用"，不置 work_dead（那是"今天不再打工"的持久语义）
+                work_paused = 0.0
+                if self.work_deferred_until and not work_dead:
+                    work_paused = (self.work_deferred_until - datetime.now()).total_seconds()
+                    work_paused = work_paused if work_paused > 0 else 0.0
+                work_blocked = work_dead or bool(work_paused)
+
+                first = (self.school, '学习', school_dead) if prefer_school else (self.work, '打工', work_blocked)
+                second = (self.work, '打工', work_blocked) if prefer_school else (self.school, '学习', school_dead)
                 if over_limit:
                     # 学习工作时长达上限时只打工，不回退到学习
+                    if work_paused:
+                        # 只差打工、但打工在延后期：挂起到延后点（护理/踩踩照常调度）
+                        log(f'等好友空闲再雇佣：打工暂缓 {work_paused:.0f} 秒'
+                            f'（到 {self.work_deferred_until:%H:%M:%S} 再继续）')
+                        time.sleep(min(max(1.0, work_paused), QUEUE_POLL_INTERVAL))
+                        continue
                     if work_dead:
                         if self._wait_for_deferred(adventure_dead):
                             continue
@@ -1139,6 +1158,12 @@ class Runner:
                         school_dead = True
                     else:
                         work_dead = True
+                if work_paused:
+                    # 首选学习已判死，剩下的打工又在延后期：挂起到延后点
+                    log(f'等好友空闲再雇佣：打工暂缓 {work_paused:.0f} 秒'
+                        f'（到 {self.work_deferred_until:%H:%M:%S} 再继续）')
+                    time.sleep(min(max(1.0, work_paused), QUEUE_POLL_INTERVAL))
+                    continue
                 if not second[2] and self.run_one(second[0], second[1]):
                     continue
                 if not second[2]:
@@ -1151,6 +1176,16 @@ class Runner:
                         continue
                     log('学习和打工都已达当天上限，结束')
                     return
+            except TaskDeferred as d:
+                # 主任务主动延后（如"等好友空闲再雇佣"读到好友忙碌剩余时间）：
+                # 不算失败、不重启设备，记到延后期，到点前不再重复进小镇
+                self.work_deferred_until = max(self.work_deferred_until or datetime.min, d.until)
+                log(f'主任务延后: {d}，到点 {d.until:%H:%M:%S} 再继续')
+                try:
+                    self.school.ensure_main_page()
+                except Exception as e:
+                    log(f'主任务延后后回主页面失败: {e}')
+                continue
             except Exception as e:
                 # 兜底：循环体内未捕获的异常（u2 断开、设备卡死等）走重启恢复，
                 # 恢复失败（连续 RECOVERY_LIMIT 次）发告警通知后退出

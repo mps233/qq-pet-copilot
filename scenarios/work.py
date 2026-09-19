@@ -15,6 +15,11 @@
      必须逐行读）；配置了 work.hire_name（宠物名/主人名，部分匹配）时优先雇该名字，
      不可雇时同样回落"收益最高"，加成都没读出才回落最上面一个（排除"被雇佣中"状态标签），
      点击日志附该行文字（谁被雇了一目了然）
+   - 配了 work.hire_name 且开启 work.hire_wait（"等好友空闲再雇佣"）时：目标好友
+     状态是"出门中/被雇佣中"（正忙着打工/学习）就先不换人——点他的头像进主页读
+     剩余时间（hire 区域内倒计时，如 04:37），抛 TaskDeferred 延后到活动结束再回来雇
+     （期间调度器去跑冒险/护理等其他任务，不原地干等）；状态"对方今天很累了"
+     是当天不可雇，等待无意义，仍换收益最高的人；面板里找不到目标也回落收益最高
    - 没有可点按钮（当前页好友不可雇佣时不渲染按钮）-> 点工作面板顶部"智力"坐标
      关闭雇佣面板并确认弹层已关，回到打工面板由下一步点 work_start 直接开工（不雇佣）
 7. 点击 work_start 开始工作，直到出现 work_in
@@ -30,12 +35,14 @@ import os
 import re
 import sys
 import time
+from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.fatigue import mark_fatigue
-from src.locators import OCR_MIN_SCORE, locate_cached
-from src.ocr import find_text, ocr_fullscreen, parse_panel_location
+from src.locators import LOCATORS, OCR_MIN_SCORE, locate_cached, see_bounds
+from src.ocr import (find_text, ocr_fullscreen, ocr_texts,
+                     parse_countdown_seconds, parse_panel_location)
 from src.progress import (
     WORK_PROGRESS_FILE,
     count_cross,
@@ -46,7 +53,7 @@ from src.progress import (
     save_progress,
     set_current_work_duration,
 )
-from src.scenario import CLICK_INTERVAL, DeviceScenario, NAV_TIMEOUT
+from src.scenario import CLICK_INTERVAL, DeviceScenario, NAV_TIMEOUT, TaskDeferred
 
 # 以下坐标均为 720x1280 参考坐标，运行时按当前分辨率自动换算
 PROGRESS_FILE = WORK_PROGRESS_FILE
@@ -59,6 +66,95 @@ DURATION_BOXES = {'10分钟': 'select_box_1', '45分钟': 'select_box_2', '2小�
 
 # 雇佣面板"雇佣"按钮定位（按钮在每行右侧 x >= 屏宽一半）
 EMPLOY_ROW_TOL = 90  # 同行文字（名字/主人）与"雇佣"按钮的最大 y 偏差，像素（实测行距约 195）
+
+# ---- 等好友空闲再雇佣（work.hire_wait）----
+# 面板行状态文字（canvas 自绘，只能 OCR；实测 1080×2412 状态在 x≈939）：
+# "雇佣"=可雇 / "对方今天很累了"=今天不可雇（换人）/ "出门中"、"被雇佣中"=忙碌（可等）
+HIRE_STATUS_TIRED = ('很累', '累了')
+HIRE_STATUS_BUSY = ('出门', '被雇')
+HIRE_FIND_SCROLLS = 6          # 面板里找目标好友时列表下拉次数上限（懒加载，目标常在下方）
+HIRE_HOME_WAIT = 3.0           # 点头像进好友主页后的加载等待（秒）
+HIRE_TIME_RETRIES = 3          # 好友主页倒计时读取重试次数
+HIRE_WAIT_FALLBACK_SECONDS = 60  # 主页读不到剩余时间时的复测间隔（秒）
+HIRE_WAIT_MARGIN_SECONDS = 5   # 剩余时间换算空闲时间点的余量（秒）
+# 好友主页里倒计时是真实控件（content-desc 恰为 "04:37"），作为 OCR 失败的兜底
+COUNTDOWN_DESC_RE = re.compile(r'\d{1,3}:\d{2}(?::\d{2})?')
+
+
+def _is_employ_noise(text: str) -> bool:
+    """雇佣行里的噪声文字（不算名字/主人）：名次数字、"上次雇佣"分组标题、
+    "宠友列表"面板标题、"金币+N%"徽章、排行榜标题。
+
+    注意：职业标签（如"入梦旅人"/"魔法学徒"）不在这里过滤——它常与宠物名连成
+    一个 OCR 块（"张二狗入梦旅人"），过滤会把宠物名一起丢掉；名字匹配用子串，
+    带上职业标签不影响命中。
+    """
+    t = re.sub(r'\s+', '', text or '')
+    if not t or t.isdigit():
+        return True
+    return bool(_employ_row_bonus(t) is not None
+                or '上次雇佣' in t or '宠友列表' in t
+                or '金币' in t or '排行' in t)
+
+
+def parse_employ_rows(items, avatars, buttons, width):
+    """把雇佣面板的整屏 OCR 与控件树坐标组装成行（纯函数，便于离线回归）。
+
+    items: 整屏 OCR [(text, x, y, score)]；avatars: 头像中心点（content-desc
+    "访问宠物主页"，每行都有）；buttons: 雇佣按钮中心点（content-desc "雇佣"，
+    不可雇的行没有该节点）；width: 屏宽。
+
+    返回 [{'x','y','name','owner','text','status','status_xy','button'}]，按 y 排序。
+    行的文字分布（实测 1080×2412，行距约 195）：左侧 x<0.6w = 名次数字/宠物名/
+    职业标签/主人行；中部 0.55~0.7w = "金币+N%"徽章（不算状态）；右侧 x>0.75w =
+    状态文字。"对方今天很累了"常被 OCR 拆成"对方今天很"+"累了"两块，按 y 拼接还原；
+    宠物名与职业标签也可能被 OCR 并成一块（如"张二狗入梦旅人"），此时按整块返回。
+    """
+    left_max = int(width * 0.6)
+    right_min = int(width * 0.75)
+    rows = []
+    for ax, ay in avatars:
+        near = [(text.strip(), x, y, score) for text, x, y, score in items
+                if abs(y - ay) <= EMPLOY_ROW_TOL and score >= OCR_MIN_SCORE and text.strip()]
+        near.sort(key=lambda m: (m[2], m[1]))
+        left = [(t, x) for t, x, _y, _s in near
+                if x < left_max and not _is_employ_noise(t)]
+        left.sort(key=lambda m: m[1])  # 按 x 从左到右：宠物名在最左，职业标签在其右
+        right = [(t, x, y) for t, x, y, _s in near if x > right_min]
+        btn = None
+        if buttons:
+            cand = min(buttons, key=lambda b: abs(b[1] - ay))
+            btn = cand if abs(cand[1] - ay) <= EMPLOY_ROW_TOL else None
+        if not left and not right and btn is None:
+            continue  # 屏幕边缘被裁掉一半的空行（无文字/无按钮），跳过
+        status_xy = (right[0][1], right[0][2]) if right else None
+        names = [t for t, _x in left if not t.startswith('主人')]
+        rows.append({
+            'x': ax, 'y': ay,
+            'name': names[0] if names else '',
+            'owner': next((t for t, _x in left if t.startswith('主人')), ''),
+            'text': ''.join(t for t, _x in left),
+            'status': ''.join(t for t, _x, _y in right),
+            'status_xy': status_xy,
+            'button': btn,
+        })
+    rows.sort(key=lambda r: r['y'])
+    return rows
+
+
+def classify_hire_status(row) -> str:
+    """行状态：'free' 可雇 / 'tired' 对方今天很累了 / 'busy' 出门中或被雇佣中 / 'unknown'。
+
+    "被雇佣中"含"雇佣"二字，必须先判 busy 再判 free，否则会被当成可雇按钮。
+    """
+    text = re.sub(r'\s+', '', (row.get('status') or '') + (row.get('text') or ''))
+    if any(k in text for k in HIRE_STATUS_TIRED):
+        return 'tired'
+    if any(k in text for k in HIRE_STATUS_BUSY):
+        return 'busy'
+    if row.get('button') is not None or '雇佣' in text:
+        return 'free'
+    return 'unknown'
 
 
 def pick_employ_button(items, width, prefer_name: str = ''):
@@ -156,9 +252,12 @@ class WorkScenario(DeviceScenario):
         self.employ_scroll_limit = self.cfg.work.employ_scroll_limit
         # 优先雇佣的名字（宠物名/主人名，部分匹配）；空 = 自动选金币加成最高的可雇行
         self.hire_name = str(getattr(self.cfg.work, 'hire_name', '') or '').strip()
+        # 等好友空闲再雇佣：目标好友"出门中/被雇佣中"时不换人，读剩余时间延后到结束
+        self.hire_wait = bool(getattr(self.cfg.work, 'hire_wait', False))
         log(f'打工地点: {self.location}，打工时长: {self.duration}，每天打工次数: '
             f'{self.times_per_day if self.times_per_day else "不限"}'
-            + (f'，优先雇佣: {self.hire_name}' if self.hire_name else '，雇佣策略: 自动选收益最高'))
+            + (f'，优先雇佣: {self.hire_name}' if self.hire_name else '，雇佣策略: 自动选收益最高')
+            + ('，忙就等好友空闲' if self.hire_wait and self.hire_name else ''))
 
     # ---- 各阶段 ----
 
@@ -295,10 +394,19 @@ class WorkScenario(DeviceScenario):
         """雇佣好友：自动选金币加成最高的可雇行（配了 work.hire_name 则优先该名字，
         不可雇时回落收益最高），加成都读不出才回落最上面一个；都没有则关闭雇佣页面直接开工。
 
+        配了 work.hire_name 且开启 work.hire_wait 时（"等好友空闲再雇佣"）：
+        目标好友在面板里的状态是"出门中/被雇佣中"（正忙着打工/学习）就先不换人——
+        点他的头像进主页读剩余时间，抛 TaskDeferred 延后到活动结束再回来雇佣
+        （期间调度器去跑冒险/护理等其他任务，不原地干等）；状态"对方今天很累了"
+        是当天不可雇，等待无意义，按老逻辑换收益最高的人。
+
         当前页好友不可雇佣时列表不渲染雇佣按钮（纯图片/无按钮）：OCR 检测一次
         没有可点按钮就直接关闭雇佣面板，由 run() 点 work_start 直接开工。
         点击时日志附该行文字（谁被雇了一目了然）。
         """
+        if self.hire_wait and self.hire_name:
+            self._hire_target_or_wait()
+            return
         screen = self.screen()
         picked = pick_employ_button(ocr_fullscreen(screen), screen.shape[1], self.hire_name)
         if not picked:
@@ -316,6 +424,152 @@ class WorkScenario(DeviceScenario):
             prefix = '加成未读出，回落最上面'
         desc = f' ({bx}, {by})' + (f' [{row_text}]' if row_text else '')
         log(f'{prefix}，点击{desc}')
+        self.click(bx, by)
+        time.sleep(CLICK_INTERVAL)
+
+    # ---- 等好友空闲再雇佣（work.hire_wait）----
+
+    def employ_rows(self):
+        """读当前雇佣面板的所有行（整屏 OCR + 控件树头像/按钮坐标）。
+
+        返回 (rows, items)；rows 见 parse_employ_rows。控件树 dump 较慢（1~4s），
+        只在需要识别状态时调用（hire_wait 开启且配了 hire_name 才走这条路）；
+        头像与按钮共用同一次 dump。
+        """
+        screen = self.screen()
+        items = ocr_fullscreen(screen)
+        source = self.dev.hierarchy()
+        avatars = self.dev.find_xpath_all(LOCATORS['employ_avatar']['xpath'][0], source)
+        buttons = self.dev.find_xpath_all(LOCATORS['employ']['xpath'][0], source)
+        return parse_employ_rows(items, avatars, buttons, screen.shape[1]), items
+
+    def _find_employ_row(self, name: str):
+        """在雇佣面板里找目标好友所在行（列表懒加载，必要时向下滚动）。
+
+        匹配宠物名或主人名（去空格后部分匹配，同 work.hire_name 语义）。
+        返回 (row, kind)：kind='free'/'tired'/'busy'/'unknown'；找不到返回 (None, None)。
+        """
+        target_name = re.sub(r'\s+', '', name or '')
+        for attempt in range(1, HIRE_FIND_SCROLLS + 1):
+            rows, _items = self.employ_rows()
+            for row in rows:
+                hay = re.sub(r'\s+', '', f"{row['name']}{row['owner']}{row['text']}")
+                if target_name and target_name in hay:
+                    return row, classify_hire_status(row)
+            if attempt < HIRE_FIND_SCROLLS:
+                log(f'雇佣面板本屏没有「{name}」，向下滚动查找 ({attempt}/{HIRE_FIND_SCROLLS})')
+                w, h = self.dev.window_size()
+                self.dev.swipe(w // 2, int(h * 0.82), w // 2, int(h * 0.42), duration=0.4)
+                time.sleep(CLICK_INTERVAL)
+        return None, None
+
+    def read_friend_busy_seconds(self) -> int | None:
+        """在好友主页读忙碌剩余时间（当前页必须是好友宠物页）。
+
+        好友正忙着打工/学习时，主页 hire 按钮位置显示倒计时（实测形如 04:37，
+        逐秒递减，归零后变成"雇佣"）。先按 hire 控件 range 裁图 OCR（快），
+        OCR 读不到时最后再用控件树兜底（dump 一次 1~4s，只做一次）。
+        识别不到返回 None（调用方按兜底间隔复测）。
+        """
+        for attempt in range(1, HIRE_TIME_RETRIES + 1):
+            bounds = see_bounds(self.dev, 'hire')
+            if bounds:
+                x1, y1, x2, y2 = bounds
+                crop = self.screen()[y1:y2, x1:x2]
+                for text, *_ in ocr_texts(crop):
+                    secs = parse_countdown_seconds(text)
+                    if secs is not None:
+                        return secs
+            if attempt < HIRE_TIME_RETRIES:
+                time.sleep(1.0)
+        # OCR 三次都读不到：控件树兜底（倒计时是 hire 内的真实控件）
+        for desc in self._countdown_descs():
+            secs = parse_countdown_seconds(desc)
+            if secs is not None:
+                return secs
+        return None
+
+    def _countdown_descs(self) -> list[str]:
+        """控件树里 hire 按钮内 content-desc 恰为倒计时（如 04:32）的节点文字。
+
+        好友主页的忙碌倒计时是真实控件（hire 节点内的 TextView，content-desc 就是
+        倒计时文本，实测 bounds 在 hire 范围内）——OCR 读不到时用它兜底；
+        限定 hire 子树，避免误取页面上别处的倒计时。
+        """
+        source = self.dev.hierarchy()
+        if source is None:
+            return []
+        out = []
+        for e in source.find_elements('//*[@content-desc="hire"]//*[@content-desc]'):
+            desc = str((e.attrib or {}).get('content-desc') or '').strip()
+            if COUNTDOWN_DESC_RE.fullmatch(desc):
+                out.append(desc)
+        return out
+
+    def _friend_busy_until(self, row) -> datetime:
+        """点头像进好友主页读忙碌剩余时间，返回空闲时间点（成功后退回雇佣面板）。
+
+        读不到剩余时间按 HIRE_WAIT_FALLBACK_SECONDS 兜底复测（不猜时间、不干等）。
+        """
+        log(f'「{self.hire_name}」{row["status"] or "忙碌中"}，点头像进主页读剩余时间')
+        self.click(row['x'], row['y'])
+        time.sleep(HIRE_HOME_WAIT)
+        secs = self.read_friend_busy_seconds()
+        # 退回雇佣面板（实测 back 一次即回面板，面板仍在原滚动位置附近）
+        self.go_back()
+        time.sleep(CLICK_INTERVAL)
+        if secs is None:
+            log(f'未读到忙碌剩余时间，{HIRE_WAIT_FALLBACK_SECONDS} 秒后复测')
+            return datetime.now() + timedelta(seconds=HIRE_WAIT_FALLBACK_SECONDS)
+        until = datetime.now() + timedelta(seconds=secs + HIRE_WAIT_MARGIN_SECONDS)
+        mins, s = divmod(secs, 60)
+        log(f'好友忙碌剩余 {mins} 分 {s} 秒，延后到 {until:%H:%M:%S} 再雇佣')
+        return until
+
+    def _hire_target_or_wait(self) -> None:
+        """等好友空闲再雇佣：目标忙（出门中/被雇佣中）就延后到活动结束。
+
+        - 目标是"雇佣"（可雇）：直接点掉；
+        - 目标"对方今天很累了"：当天不可雇，换收益最高的人（等也没用）；
+        - 目标"出门中/被雇佣中"：读剩余时间抛 TaskDeferred（调度层到点再调度）；
+        - 目标状态没读出来且没有雇佣按钮：按忙碌处理（宁可等，不擅自换人）——
+          可雇的行必定有按钮（classify_hire_status 认按钮判 free），
+          没按钮又读不出状态说明多半在忙（面板加载中/OCR 抖动）；
+        - 面板里没有目标：回落老逻辑（收益最高），日志说明。
+        """
+        row, kind = self._find_employ_row(self.hire_name)
+        if row is not None and kind == 'free':
+            btn = row['button'] or (row['x'], row['y'])
+            log(f'优先雇佣「{self.hire_name}」可雇 [{row["text"]}]，点击 {btn}')
+            self.click(btn[0], btn[1])
+            time.sleep(CLICK_INTERVAL)
+            return
+        if row is not None and kind in ('busy', 'unknown'):
+            if kind == 'unknown':
+                log(f'「{self.hire_name}」状态未识别到且没有雇佣按钮，按忙碌处理（不换人）')
+            until = self._friend_busy_until(row)
+            # 收掉雇佣面板回到打工面板（离开页面状态干净，调度层回主页面更稳）；
+            # 关闭失败只记日志，不影响延后本身
+            try:
+                self._close_employ_panel()
+            except Exception as e:
+                log(f'延后前关闭雇佣面板失败（忽略）: {e}')
+            raise TaskDeferred(
+                until, f'想雇的「{self.hire_name}」正{row["status"] or "忙碌"}'
+                       f'（不换人，等到空闲再雇）')
+        if row is not None:
+            log(f'优先雇佣「{self.hire_name}」{row["status"]}（今天不可雇），等也没用，换收益最高的人')
+        else:
+            log(f'雇佣面板里没找到「{self.hire_name}」，回落收益最高的人')
+        # 回落选人只要整屏 OCR（不必再 dump 控件树）
+        items = ocr_fullscreen(self.screen())
+        picked = pick_employ_button(items, self.screen().shape[1], '')
+        if not picked:
+            log('未找到雇佣按钮，直接关闭雇佣页面')
+            self._close_employ_panel()
+            return
+        bx, by, row_text, _mode, bonus = picked
+        log(f'改雇收益最高（金币+{bonus}%） ({bx}, {by})' + (f' [{row_text}]' if row_text else ''))
         self.click(bx, by)
         time.sleep(CLICK_INTERVAL)
 

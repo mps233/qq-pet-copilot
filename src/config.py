@@ -114,6 +114,10 @@ class WorkConfig:
     employ_scroll_limit: int = 5
     # 打工时优先雇佣的名字（宠物名/主人名，部分匹配）；空 = 雇佣列表最上面一个
     hire_name: str = ""
+    # 等好友空闲再雇佣：hire_name 指定好友在雇佣面板里"出门中/被雇佣中"（正忙着
+    # 打工/学习）时不换人——点头像进主页读剩余时间，延后到好友空闲再雇佣
+    # （期间调度器跑其他任务）；"对方今天很累了"是当天不可雇，等待无意义仍换人
+    hire_wait: bool = False
 
 
 @dataclass

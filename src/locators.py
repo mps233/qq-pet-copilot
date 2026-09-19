@@ -183,10 +183,16 @@ LOCATORS: dict[str, dict] = {
             '/android.widget.FrameLayout[4]',
         ],
     },
-    # 雇佣按钮：OCR 文字"雇佣"。面板标题"宠友雇佣加成排行榜（实时刷新）"也含"雇佣"
-    # 但在左侧；work._find_employ_button 按 x>=屏宽一半排除标题后取右侧最上面一个。
-    # 整屏 OCR 约 0.5s，比原深路径 xpath + dump 控件树（4s+）快得多。
-    'employ': {'ocr': ['雇佣']},
+    # 雇佣按钮：OCR 文字"雇佣"（面板标题"宠友雇佣加成排行榜"也含"雇佣"但在左侧）。
+    # 挑哪个按钮点的逻辑在 work.pick_employ_button（按整屏 OCR 结果选行）；
+    # 整屏 OCR 约 0.5s，比深路径 xpath + dump 控件树（4s+）快得多。
+    # xpath 供 hire_wait 按行枚举按钮（find_xpath_all，见 work.employ_rows）。
+    'employ': {'xpath': ['//*[@content-desc="雇佣"]'], 'ocr': ['雇佣']},
+    # 雇佣面板每行的头像（content-desc "访问宠物主页"）：点头像进该好友主页
+    # （好友忙碌时可看剩余时间，见 work.py 的 hire_wait）；每行一个，用于把
+    # OCR 出来的状态文字（雇佣/出门中/被雇佣中/对方今天很累了）配到具体行。
+    # 与 'employ' 一样是"多点枚举"用（find_xpath_all），不要走 see() 取首点。
+    'employ_avatar': {'xpath': ['//*[@content-desc="访问宠物主页"]']},
 
     # ---- 冒险 ----
     'adventure': {

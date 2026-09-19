@@ -33,6 +33,7 @@ DEFAULTS = {
     'work.times_per_day': 0,
     'work.employ_scroll_limit': 5,
     'work.hire_name': '',
+    'work.hire_wait': False,
     'schedule.coin_threshold': 2000,
     'schedule.daily_hour_limit': 8,
     'schedule.work_stop_hours': 12,
@@ -150,7 +151,7 @@ def validate_field(key: str, value):
         except (TypeError, ValueError):
             return False, default
     if key in ('friend_care.enabled', 'hire_friend.enabled', 'employed.enabled',
-               'pk.helper_fallback'):
+               'pk.helper_fallback', 'work.hire_wait'):
         return (True, value) if isinstance(value, bool) else (False, default)
     if key == 'runner.engine':
         return (True, value) if value in ('task_queue', 'legacy') else (False, default)

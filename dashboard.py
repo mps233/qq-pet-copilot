@@ -15,6 +15,7 @@
 访问:  http://<本机内网IP>:8787
 """
 
+import errno
 import io
 import json
 import os
@@ -71,12 +72,37 @@ def read_json(name: str) -> dict:
         return {}
 
 
+_SECRET_KEY_RE = re.compile(
+    r'(token|secret|password|passwd|pwd|api_?key|webhook|chat_id|send_?key|bark_?key)',
+    re.IGNORECASE,
+)
+_SECRET_VAL_RE = re.compile(r'(\d{6,}:[A-Za-z0-9_-]{20,})')   # Telegram bot token 形态
+
+
+def _redact(msg: str) -> str:
+    """抹掉审计日志里的凭据（token/webhook/chat_id 等）。
+
+    设置保存会把提交内容整条记进 runs/logs/dashboard.log，凭据因此长期明文落盘
+    （曾把 Telegram bot token 完整写进日志）。token 等同渠道控制权，必须脱敏。
+    """
+    # 形态匹配：Telegram token 这类"数字:长串"无论键名如何都抹掉
+    msg = _SECRET_VAL_RE.sub(lambda m: m.group(1)[:4] + '***已隐藏***', msg)
+    # 键值匹配：'key': 'value' / key=value / "key": "value"
+    def _sub_kv(m):
+        return f'{m.group(1)}{m.group(2)}{m.group(3)}***已隐藏***{m.group(4)}'
+    return re.sub(
+        r"(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1(\s*[:=]\s*)(['\"])([^'\"]*)\4",
+        lambda m: _sub_kv(m) if _SECRET_KEY_RE.search(m.group(2)) else m.group(0),
+        msg,
+    )
+
+
 def audit(msg: str) -> None:
-    """关键操作审计日志（谁什么时候改了什么），写 runs/logs/dashboard.log。"""
+    """关键操作审计日志（谁什么时候改了什么），写 runs/logs/dashboard.log（凭据自动脱敏）。"""
     try:
         LOGS.mkdir(parents=True, exist_ok=True)
         with open(LOGS / 'dashboard.log', 'a', encoding='utf-8') as f:
-            f.write(f'[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}\n')
+            f.write(f'[{datetime.now():%Y-%m-%d %H:%M:%S}] {_redact(str(msg))}\n')
     except Exception:
         pass
 
@@ -792,6 +818,7 @@ def editable_snapshot() -> dict:
         'work_locations': locations,
         'work_duration': work.get('duration'),
         'hire_name': str(work.get('hire_name') or ''),
+        'hire_wait': bool(work.get('hire_wait', False)),
         'coin_threshold': sched.get('coin_threshold', 2000),
         'daily_hour_limit': sched.get('daily_hour_limit', 8),
         'work_stop_hours': sched.get('work_stop_hours', 12),
@@ -867,6 +894,7 @@ def apply_settings(updates: dict) -> dict:
         'work_location': ('work.location', None),
         'work_duration': ('work.duration', None),
         'hire_name': ('work.hire_name', None),
+        'hire_wait': ('work.hire_wait', 'bool'),
         'coin_threshold': ('schedule.coin_threshold', 'int'),
         'daily_hour_limit': ('schedule.daily_hour_limit', 'int'),
         'work_stop_hours': ('schedule.work_stop_hours', 'int'),
@@ -1892,6 +1920,7 @@ function renderSettings(ed){
     '<div class="frow"><span class="k">打工地点</span>'+sel('selLoc', ed.work_locations||[], ed.work_location)+'</div>',
     '<div class="frow"><span class="k">打工时长</span>'+sel('selDur', ['10分钟','45分钟','2小时'], ed.work_duration)+'</div>',
     '<div class="frow"><span class="k">优先雇佣</span><input type="text" id="txtHire" placeholder="宠物名/主人名，空=自动选收益最高" value="'+esc(ed.hire_name||'')+'"></div>',
+    '<div class="frow"><span class="k">等TA空闲</span><button class="sw'+(ed.hire_wait?' on':'')+'" id="swHireWait" title="开=优先雇佣的好友正在打工/学习（面板显示 出门中/被雇佣中）时不换人，点头像进主页读剩余时间，等到他结束再雇（期间先跑冒险/护理等其他任务）；显示 对方今天很累了 时等待无意义，仍换收益最高的人。需先填「优先雇佣」"></button></div>',
     ])+
     FG('学习 / 打工 总控（8h 共享预算）',[
     '<div class="frow"><span class="k">今日学习</span><input type="number" id="numStudyQuota" min="0" max="24" step="1" title="今天最多学几小时。0 = 今天不学习。学习与打工共享同一份合计预算" value="'+(ed.study_quota_hours??8)+'"><span class="u">小时</span></div>',
@@ -1965,6 +1994,7 @@ function renderSettings(ed){
   $('#swCareer').onclick=()=>{ $('#swCareer').classList.toggle('on'); setDirty=true; };
   $('#swCareerStop').onclick=()=>{ $('#swCareerStop').classList.toggle('on'); setDirty=true; };
   $('#swPkHf').onclick=()=>{ $('#swPkHf').classList.toggle('on'); setDirty=true; };
+  $('#swHireWait').onclick=()=>{ $('#swHireWait').classList.toggle('on'); setDirty=true; };
   // 「当前设置」实时提示：把四个数字翻译成一句人话，避免填错组合（如只学习却
   // 忘了把金币阈值调 0 → 金币不足时会先去打工，看着像"没在学习"）
   const qv=id=>{const el=$(id); return el?parseInt(el.value,10):NaN;};
@@ -2149,6 +2179,8 @@ async function saveSettings(){
   if(!!csNew !== !!setInit.career_stop_study) updates.career_stop_study=csNew;
   const hfNew = $('#swPkHf').classList.contains('on');
   if(!!hfNew !== !!setInit.pk_helper_fallback) updates.pk_helper_fallback=hfNew;
+  const hwNew = $('#swHireWait').classList.contains('on');
+  if(!!hwNew !== !!setInit.hire_wait) updates.hire_wait=hwNew;
   const getv=id=>($(id)?$(id).value.trim():'');
   const num=(id,key)=>{const v=getv(id); if(v==='')return; const n=parseInt(v,10); if(!isNaN(n)&&n!==setInit[key]) updates[key]=n;};
   const selc=(id,key)=>{const v=getv(id); if(v&&v!==setInit[key]) updates[key]=v;};
@@ -2442,13 +2474,65 @@ def main():
     port = DEFAULT_PORT
     if '--port' in sys.argv:
         port = int(sys.argv[sys.argv.index('--port') + 1])
-    srv = ThreadingHTTPServer(('0.0.0.0', port), Handler)
-    print(f'QQ宠物托管仪表盘已启动: http://0.0.0.0:{port} (Ctrl+C 停止)')
+
+    # 端口占用时不要甩一堆 traceback 就死——给出可操作的提示（常见于重复启动/上次没退干净）
     try:
-        srv.serve_forever()
+        srv = ThreadingHTTPServer(('0.0.0.0', port), Handler)
+    except OSError as e:
+        if e.errno in (errno.EADDRINUSE, errno.EACCES):
+            print(f'端口 {port} 已被占用，仪表盘未启动。'
+                  f'先停掉占用进程：kill $(lsof -nP -iTCP:{port} -sTCP:LISTEN -t)',
+                  file=sys.stderr, flush=True)
+            audit(f'启动失败：端口 {port} 被占用（{e}）')
+            return 1
+        raise
+
+    # 记录生命周期：进程是"被谁杀/何时死"的唯一线索（此前日志被启动脚本覆盖，无从排查）
+    audit(f'仪表盘启动: pid={os.getpid()} port={port} '
+          f'ppid={os.getppid()} argv={" ".join(sys.argv[1:]) or "-"}')
+    print(f'QQ宠物托管仪表盘已启动: http://0.0.0.0:{port} (Ctrl+C 停止)', flush=True)
+
+    # 客户端的半截连接（刷新/切页/手机休眠断连）不该打堆栈刷屏——静音，交给下面统一记账
+    def _quiet_conn_error(request, client_address):
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (BrokenPipeError, ConnectionResetError, TimeoutError)):
+            return
+        srv._real_handle_error(request, client_address)
+
+    srv._real_handle_error = srv.handle_error
+    srv.handle_error = _quiet_conn_error
+
+    def _on_signal(signum, _frame):
+        raise KeyboardInterrupt
+
+    # 关终端/被 launchd 或 kill 收走时留下死因（SIGTERM/SIGHUP 默认直接死，静默无痕）
+    for _sig in (signal.SIGTERM, signal.SIGHUP):
+        try:
+            signal.signal(_sig, _on_signal)
+        except (ValueError, OSError):
+            pass
+
+    code = 0
+    try:
+        srv.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
-        pass
+        audit('仪表盘退出: 收到中断信号（Ctrl+C / SIGTERM / SIGHUP）')
+    except SystemExit:
+        audit('仪表盘退出: SystemExit')
+        raise
+    except BaseException as e:
+        # 兜底：任何意外都不许静默死掉，记录后以非零码退出，便于外部守护脚本分辨
+        audit(f'仪表盘异常退出: {type(e).__name__}: {e}')
+        raise
+    else:
+        audit('仪表盘退出: serve_forever 正常返回')
+    finally:
+        try:
+            srv.server_close()
+        except Exception:
+            pass
+    return code
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

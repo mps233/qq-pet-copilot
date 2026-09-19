@@ -281,6 +281,7 @@ TASK_SETTING_FIELDS = [
     ('work.times_per_day', '每天打工次数（0 不限）', 'int'),
     ('work.employ_scroll_limit', '雇佣拖动上限', 'int'),
     ('work.hire_name', '打工优先雇佣（宠物名/主人名，空=自动选收益最高）', 'str'),
+    ('work.hire_wait', '等好友空闲再雇佣（优先好友在打工/学习时等他结束，不换人）', 'bool'),
     ('adventure.times_per_day', '每天冒险次数（0 不冒险）', 'int'),
     ('adventure.start_time', '冒险调度时间', 'str'),
     ('adventure.skip_bad_weather', '冒险跳过"天色不对"', 'bool'),

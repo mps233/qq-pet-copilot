@@ -371,6 +371,28 @@ def parse_panel_location(
     return best[0]
 
 
+COUNTDOWN_HMS_RE = re.compile(r'(\d{1,2}):(\d{2}):(\d{2})')
+COUNTDOWN_MS_RE = re.compile(r'(\d{1,3}):(\d{2})')
+
+
+def parse_countdown_seconds(text: str) -> int | None:
+    """把倒计时文本解析成剩余秒数，支持 HH:MM:SS 与 MM:SS（分钟可超 59，如 120:00）。
+
+    用于好友主页 hire 按钮上的忙碌剩余时间（实测形如 04:37，逐秒递减）与被雇佣
+    面板的"剩余 00:44:00"；解析不到返回 None（调用方按兜底间隔复测）。
+    先匹配 HH:MM:SS：否则 "00:44:00" 会被 MM:SS 规则读成 44 秒。
+    """
+    t = re.sub(r'\s+', '', str(text or ''))
+    m = COUNTDOWN_HMS_RE.search(t)
+    if m:
+        h, mm, ss = (int(g) for g in m.groups())
+        return h * 3600 + mm * 60 + ss
+    m = COUNTDOWN_MS_RE.search(t)
+    if m:
+        return int(m.group(1)) * 60 + int(m.group(2))
+    return None
+
+
 def parse_employed_remaining(
     results: list[tuple[str, int, int, float]],
 ) -> tuple[int, int, int, float] | None:
