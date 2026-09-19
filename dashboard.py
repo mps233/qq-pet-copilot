@@ -1029,37 +1029,28 @@ html,body{margin:0;padding:0;background:linear-gradient(180deg,#FFFBF2 0,var(--q
      右侧浮动功能栏（原卡片内启停按钮迁出）
    JS 契约不变：#tabbar button[data-tab] 与 main > [data-page]。
    ============================================================ */
-.app{display:flex;align-items:flex-start;gap:0;max-width:1000px;margin:0 auto}
+.app{display:flex;align-items:flex-start;gap:0;max-width:1000px;margin:0 auto;padding:0 8px}
 /* 三栏：左圆钮 72 + 中间内容自适应 + 右功能栏 72（窄屏用 media 收窄） */
 
-header{position:sticky;top:0;z-index:20;width:100%;
-  background:rgba(252,247,237,.82);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
-  padding:10px 12px 8px;padding-top:calc(10px + env(safe-area-inset-top))}
-/* 胶囊资料卡：半透明白底 + 全圆角（QQ 宠物顶部那条） */
-.profile{display:flex;align-items:center;gap:9px;background:rgba(255,255,255,.72);
-  border-radius:999px;padding:6px 14px 6px 6px;max-width:560px;margin:0 auto}
+/* 头像（资料卡内 + 顶栏）：橘猫 SVG */
 .avatar{width:40px;height:40px;border-radius:50%;background:#ffedd5;flex:none;overflow:hidden;
   display:flex;align-items:center;justify-content:center;box-shadow:0 1px 3px rgba(140,100,40,.18)}
 .avatar svg{display:block;width:100%;height:100%}
-/* 调度器运行状态：头像外圈描边（原 .dot.on/off 的圆点在头像上不显眼） */
+/* 调度器运行状态：头像外圈描边 */
 .avatar.on{box-shadow:0 0 0 2.5px var(--ok),0 1px 4px rgba(140,100,40,.2)}
 .avatar.off{box-shadow:0 0 0 2.5px #ef4444,0 1px 4px rgba(140,100,40,.2)}
-.pinfo{flex:1;min-width:0}
-.pname{font-weight:680;font-size:15px;line-height:1.25}
-.psub{font-size:11.5px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ring{font-size:12px;color:var(--sub);font-variant-numeric:tabular-nums;flex:none}
 .meta{font-size:12px;color:var(--sub);font-variant-numeric:tabular-nums}
 .dot{width:8px;height:8px;border-radius:50%;background:#9ca3af;flex:none}
 .dot.on{background:var(--ok);box-shadow:0 0 0 3px rgba(22,163,74,.15)}
 .dot.off{background:#ef4444;box-shadow:0 0 0 3px rgba(239,68,68,.12)}
 
 /* 左侧竖列圆钮导航（QQ 宠物主页左侧那一列）——移动端贴屏幕左缘，桌面随版心 */
-.tabs{display:flex;flex-direction:column;gap:10px;padding:10px 8px;flex:none;
-  position:sticky;top:130px;z-index:15}
-.tabs button{width:56px;height:56px;border:0;background:rgba(255,255,255,.78);border-radius:50%;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
+/* 顶部横向圆钮行（照 QQ 首页：圆钮散布在顶部，不占整列宽度） */
+.tabs{display:flex;gap:7px;padding:0;margin-top:10px;flex:none;justify-content:space-between}
+.tabs button{flex:1;height:52px;border:0;background:rgba(255,255,255,.78);border-radius:14px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
   padding:0;cursor:pointer;box-shadow:0 1px 4px rgba(140,100,40,.14);
-  color:var(--sub);font-size:10px;line-height:1;transition:transform .12s,box-shadow .12s}
+  color:#5B5B5B;font-size:9.5px;line-height:1;transition:transform .12s,box-shadow .12s}
 .tabs button img{width:24px;height:24px;display:block}
 .tabs button span{display:block}
 .tabs button.on{background:var(--accent);color:#fff;font-weight:650;
@@ -1068,17 +1059,110 @@ header{position:sticky;top:0;z-index:20;width:100%;
    brightness(0) invert(1) 会把实心圆形图标（如 coin）糊成纯白块 */
 .tabs button.on img{filter:none}
 
-main{padding:12px 12px 12px 0;flex:1;min-width:0;display:flex;flex-direction:column;gap:10px}
+main{padding:12px 0;flex:1;min-width:0;display:flex;flex-direction:column;gap:10px;min-height:calc(100vh - 60px)}
+
+/* ============================================================
+   总览页：照 QQ 宠物首页 1:1 还原
+   参考 01_ui_screenshots/02_pet_home.png（1080x2412），坐标换算成百分比：
+     顶部资料卡 y 4.3~10.0%，左返回钮 x 5.6~17.2%，右装扮钮 x 82.8~94.4%
+     胶囊条   y 11.7~15.2%，每颗宽 18.6%，间距 1.1%
+     徽章条   y 16.7~20.2%
+     右功能栏 x 81.7~95.6%，三段 y 39.7~48.4 / 48.4~57.1 / 59.6~68.3%
+     底部抽屉 y >= 85%（拖拽把手 + 图标 + 名称 + 倒计时）
+   ============================================================ */
+
+/* --- 顶部资料卡行：左圆钮 + 头像卡 + 右圆钮 --- */
+.homebar{display:flex;align-items:center;gap:10px}
+.rbtn{width:44px;height:44px;flex:none;border:0;border-radius:50%;
+  background:rgba(255,255,255,.82);display:flex;align-items:center;justify-content:center;
+  padding:0;cursor:pointer;box-shadow:0 1px 4px rgba(140,100,40,.16)}
+.rbtn img{width:22px;height:22px;display:block}
+.rbtn:active{transform:scale(.95)}
+.idcard{flex:1;min-width:0;display:flex;align-items:center;gap:9px;
+  background:rgba(255,255,255,.82);border-radius:999px;padding:5px 12px 5px 5px;
+  box-shadow:0 1px 4px rgba(140,100,40,.14)}
+.idava{width:38px;height:38px;border-radius:50%;flex:none;background:#ffedd5}
+.idtxt{flex:1;min-width:0}
+/* 必须显式设色：资料卡是浅底，深色主题下继承的 --text 是浅色，
+   会导致"浅字压浅底"、几乎看不见（曾踩坑） */
+.idname{font-weight:680;font-size:14.5px;line-height:1.2;color:#1F1F1F;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.idsub{font-size:11px;color:#6B6B6B;line-height:1.25;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 状态环：照 QQ 宠物资料卡右侧那个圆环（用 conic-gradient 表示运行状态） */
+.idring{width:26px;height:26px;border-radius:50%;flex:none;
+  background:conic-gradient(var(--ok) 0 75%, rgba(0,0,0,.10) 75% 100%);
+  -webkit-mask:radial-gradient(circle, transparent 8px, #000 8px);
+  mask:radial-gradient(circle, transparent 8px, #000 8px)}
+.idring.off{background:conic-gradient(#ef4444 0 100%)}
+
+/* --- 胶囊条：图标 + 数值 + 单位（照 QQ 宠物 等级/踩踩/金币 那三颗） --- */
+.caps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:10px}
+.cap{display:flex;align-items:center;gap:5px;min-width:0;
+  background:rgba(255,255,255,.78);border-radius:999px;
+  padding:6px 10px;box-shadow:0 1px 3px rgba(140,100,40,.10);position:relative}
+.cap .cico{width:20px;height:20px;flex:none;border-radius:50%}
+/* 数值优先：不省略、不换行（窄屏下 6 颗胶囊三列排，单位文字会把数值挤成 "9…"） */
+.cap .cval{font-weight:680;font-size:14.5px;font-variant-numeric:tabular-nums;
+  color:#1F1F1F;white-space:nowrap;flex:1;min-width:0;overflow:visible}
+.cap .cunit{font-size:10px;color:#6B6B6B;white-space:nowrap;flex:none}
+/* 胶囊内的细进度条（贴胶囊底缘，照 QQ 宠物等级胶囊的橙色条） */
+.cap .bar{position:absolute;left:12px;right:12px;bottom:3px;height:3px;margin:0;
+  background:rgba(0,0,0,.09);border-radius:2px}
+.cap .bar>i{background:var(--accent)}
+
+/* --- 中部场景：手机画面当"宠物"，卡片化 --- */
+/* 场景卡：固定为"一屏中部"的高度（照 QQ 首页场景占比 ~11%~85%）。
+   不能让手机画面按原始 9:16 撑满——那会把底部抽屉推出首屏。 */
+/* 场景区：照参考图占约 65% 屏高（y 20%~85%） */
+.scene{margin-top:10px;flex:1;min-height:min(58vh,520px);display:flex}
+.scenecard.card{position:relative;flex:1;display:flex;flex-direction:column;padding:0;overflow:hidden;
+  border-radius:18px;box-shadow:0 2px 10px rgba(140,100,40,.12);min-height:0}
+.scenecard #shotLink{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;
+  line-height:0;overflow:hidden;background:#eef0f4}
+/* 画面等比缩放填满卡片高度（contain，不裁切内容） */
+.scenecard #phoneShot{display:block;max-width:100%;max-height:100%;width:auto;height:auto;
+  object-fit:contain;background:transparent}
+.scenecard .shoterr{padding:0 12px;font-size:11px;flex:none}
+.shotmeta{position:absolute;top:8px;right:10px;z-index:2;font-size:10.5px;color:#fff;
+  background:rgba(0,0,0,.34);border-radius:999px;padding:2px 9px;backdrop-filter:blur(4px)}
+
+/* --- 底部抽屉：拖拽把手 + 图标 + 名称 + 倒计时 --- */
+.drawer{background:rgba(255,255,255,.86);border-radius:20px 20px 0 0;
+  padding:8px 14px 12px;box-shadow:0 -2px 10px rgba(140,100,40,.12);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.dhandle{width:52px;height:5px;border-radius:3px;background:rgba(0,0,0,.14);
+  margin:0 auto 10px}
+.drow{display:flex;align-items:flex-start;gap:10px}
+.dico{width:38px;height:38px;flex:none;border-radius:50%;background:rgba(255,255,255,.9);
+  padding:5px;box-shadow:0 1px 4px rgba(140,100,40,.16);margin-top:1px}
+.dcol{flex:1;min-width:0}
+/* 标题行允许换行（窄屏下"雇佣打工中 + 预计 19:27 结束"会挤成竖排，
+   给 dhint 允许折行 + 限制不换行的只有主状态） */
+.dtitle{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;font-weight:680;font-size:15.5px;min-width:0}
+.dhint{font-size:11px;font-weight:400;color:var(--sub);white-space:nowrap}
+.dsub{font-size:11px;color:var(--sub);font-variant-numeric:tabular-nums;margin-top:2px;
+  word-break:break-word}
+.dmeta{font-size:10px;color:var(--sub);flex:none;text-align:right;max-width:32%;
+  word-break:break-word}
+@media(max-width:480px){.dmeta{display:none}}
+
+/* --- 任务队列卡（总览页保留，样式与抽屉统一） --- */
+.qcard{border-radius:18px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px 14px}
 /* 右侧浮动功能栏（QQ 宠物右侧 喂食/洗澡/好友 位） */
-.funcbar{display:flex;flex-direction:column;gap:10px;padding:10px 8px;flex:none;
-  position:sticky;top:130px;z-index:15}
-.fab{width:56px;height:56px;border:0;background:rgba(255,255,255,.78);border-radius:50%;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
-  cursor:pointer;color:var(--text);font-size:10px;padding:0;
-  box-shadow:0 1px 4px rgba(140,100,40,.14);transition:transform .12s}
+/* 右侧功能栏：照 QQ 首页那一体磨砂长胶囊（三段共用半透明容器） */
+.funcbar{display:flex;flex-direction:column;gap:0;padding:8px 5px;flex:none;
+  position:sticky;top:8px;z-index:15;
+  background:rgba(255,255,255,.42);border-radius:999px;
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  box-shadow:0 1px 6px rgba(140,100,40,.12)}
+.fab{width:46px;height:60px;border:0;background:transparent;border-radius:999px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+  cursor:pointer;color:#1F1F1F;font-size:10px;padding:0;
+  transition:transform .12s}
 .fab .fi{font-size:17px;line-height:1}
-.fab .ft{font-size:10px;line-height:1;color:var(--sub)}
+.fab .ft{font-size:10px;line-height:1;color:#5B5B5B}
 .fab:active{transform:scale(.95)}
 .fab:disabled{opacity:.45;cursor:default}
 .fab.stop .fi{color:#dc2626}
@@ -1277,17 +1361,16 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
    但这里内容更宽，竖栏会挤掉正文，故横排贴底）。 */
 @media(max-width:639px){
   .app{max-width:none}
-  .tabs{padding:8px 4px;gap:8px;top:120px}
-  .tabs button{width:48px;height:48px;font-size:9px}
-  .tabs button img{width:21px;height:21px}
+  .tabs{gap:5px}
+  .tabs button{height:46px;font-size:9px}
+  .tabs button img{width:19px;height:19px}
   main{padding:10px 10px 84px 0}
-  /* 右功能栏贴底（fixed），横排三个圆钮 */
-  .funcbar{position:fixed;left:0;right:0;bottom:0;top:auto;z-index:30;
-    flex-direction:row;justify-content:center;gap:14px;padding:8px 10px;
-    padding-bottom:calc(8px + env(safe-area-inset-bottom));
-    background:rgba(252,247,237,.92);backdrop-filter:blur(10px);
-    -webkit-backdrop-filter:blur(10px);border-top:1px solid var(--line)}
-  .fab{width:48px;height:48px}
+  /* 窄屏保留右侧竖栏（QQ 宠物手机端也是右侧竖栏）：
+     贴底横排会盖住内容且不符合参考图。内容区已收窄，竖栏放得下。 */
+  .funcbar{padding:8px 4px;gap:8px}
+  .fab{width:46px;height:46px}
+  .fab .fi{font-size:15px}
+  main{padding:10px 8px 24px 0}
   /* 窄屏：手机画面与任务队列改上下堆叠。
      原来并排时 .duoshot-wrap 固定 44%，剩下的宽度放不下任务队列
      （实测 390px 视口队列右侧被裁掉），故窄屏改单列。 */
@@ -1313,16 +1396,13 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
 }
 /* 小屏手机（≤360px）：收紧字号与内边距，主页截图/队列改上下堆叠 */
 @media(max-width:360px){
-  header{padding:8px 10px;padding-top:calc(8px + env(safe-area-inset-top))}
-  .pname{font-size:14px}
   .avatar{width:34px;height:34px}
-  .tabs{gap:7px;padding:8px 5px}
-  .tabs button{width:46px;height:46px;font-size:9px}
-  .tabs button img{width:20px;height:20px}
+  .tabs{gap:4px}
+  .tabs button{height:42px;font-size:8.5px}
+  .tabs button img{width:18px;height:18px}
   .funcbar{gap:7px;padding:8px 5px}
   .fab{width:46px;height:46px}
   .fab .fi{font-size:15px}
-  .profile{padding:5px 11px 5px 5px;gap:7px}
   .avatar{width:34px;height:34px}
   main{padding:8px}
   .card{padding:10px 11px;border-radius:10px}
@@ -1337,10 +1417,9 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
 }
 /* 桌面/网页版（≥920px）：手机布局原样保留，宽屏下加宽 + 多列 */
 @media(min-width:920px){
-  header{padding:12px 20px}
-  .tabs{gap:12px;padding:12px 10px}
-  .tabs button{width:64px;height:64px;font-size:11px}
-  .tabs button img{width:28px;height:28px}
+  .tabs{gap:10px}
+  .tabs button{height:58px;font-size:10.5px}
+  .tabs button img{width:24px;height:24px}
   .funcbar{gap:12px;padding:12px 10px}
   .fab{width:64px;height:64px}
   .fab .fi{font-size:19px}
@@ -1362,10 +1441,20 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
   header{background:rgba(17,19,24,.88)}
   .logctl button,.shotctl button,.minibtn,.savebtn.ghost,.advlist{background:#1b1e26;color:var(--text)}
   /* QQ 宠物式布局元素（圆钮/胶囊卡/功能栏）在深色下的底色 */
-  header{background:rgba(23,21,18,.82)}
   .funcbar{background:rgba(23,21,18,.92)}
-  .profile{background:rgba(255,255,255,.07)}
-  .tabs button,.fab{background:rgba(255,255,255,.08);color:var(--text)}
+  /* home 系列元素：浅底磨砂在深色下改成深色磨砂，否则"浅字压浅底"读不出来 */
+  .tabs button{background:rgba(255,255,255,.08);color:var(--text)}
+  .funcbar{background:rgba(255,255,255,.07)}
+  .idcard,.cap,.drawer{background:rgba(32,29,24,.72)}
+  .idname,.cap .cval{color:#F0E9DD}
+  .idsub,.cap .cunit{color:#A89E8D}
+  .tabs button,.fab{color:#C9C0B0}
+  .fab .ft{color:#A89E8D}
+  .fab{color:#E7EAF0}
+  .rbtn{background:rgba(255,255,255,.10)}
+  .dico{background:rgba(255,255,255,.10)}
+  .dhandle{background:rgba(255,255,255,.20)}
+  .idring{background:conic-gradient(var(--ok) 0 75%, rgba(255,255,255,.14) 75% 100%)}
   .tabs button.on{background:var(--accent);color:#fff}
   .avatar{background:#3a2f22}
   .logctl input,.form select,.form input[type=number],.form input[type=text],.plinedit input{background:#15171e;color:var(--text);border-color:var(--line)}
@@ -1393,35 +1482,10 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
 </style>
 </head>
 <body>
-<header>
-  <div class="profile">
-    <span class="avatar" id="schedDot"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#ffedd5"/><path d="M7.5 12.5 L6 3.5 L14.5 8 Z" fill="#f59e0b"/><path d="M24.5 12.5 L26 3.5 L17.5 8 Z" fill="#f59e0b"/><path d="M8.3 10.6 L7.5 6 L12 8.3 Z" fill="#fbcfe8"/><path d="M23.7 10.6 L24.5 6 L20 8.3 Z" fill="#fbcfe8"/><circle cx="16" cy="18" r="10" fill="#f59e0b"/><ellipse cx="16" cy="21.6" rx="6.6" ry="5" fill="#fff7ed"/><circle cx="11.8" cy="16.4" r="1.7" fill="#1f2937"/><circle cx="20.2" cy="16.4" r="1.7" fill="#1f2937"/><path d="M14.7 19.4 h3.2 l-1.6 2 Z" fill="#f97316"/><path d="M16 21.4 v1.1 M16 22.5 q-1.2 1.3 -2.4 .3 M16 22.5 q1.2 1.3 2.4 .3" stroke="#92400e" stroke-width=".9" fill="none" stroke-linecap="round"/><path d="M6.5 18.5 h3 M6.8 21.5 h2.6 M25.5 18.5 h-3 M25.2 21.5 h-2.6" stroke="#d97706" stroke-width=".9" stroke-linecap="round"/></svg></span>
-    <div class="pinfo">
-      <div class="pname">QQ宠物托管</div>
-      <div class="psub" id="schedTxt"></div>
-    </div>
-    <div class="ring meta" id="clock">--:--:--</div>
-  </div>
-</header>
-
 <div class="app">
 <!-- 左侧竖列圆钮导航（QQ 宠物主页的左侧圆钮位）：图标取自 qqpet_assets，title 做无障碍 -->
-<nav class="tabs" id="tabbar">
-  <button data-tab="main" class="on" title="总览"><img src="/qp-icons/coin-24.png" alt=""><span>总览</span></button>
-  <button data-tab="adv" title="冒险"><img src="/qp-icons/logo_adventure-24.png" alt=""><span>冒险</span></button>
-  <button data-tab="plan" title="职业"><img src="/qp-icons/logo_work-24.png" alt=""><span>职业</span></button>
-  <button data-tab="notify" title="通知"><img src="/qp-icons/bubble_button-24.png" alt=""><span>通知</span></button>
-  <button data-tab="set" title="设置"><img src="/qp-icons/line/skills-24.png" alt=""><span>设置</span></button>
-  <button data-tab="log" title="日志"><img src="/qp-icons/bubble_text-24.png" alt=""><span>日志</span></button>
-</nav>
+
 <main>
-  <section class="card" id="runnerCard" data-page="main">
-    <h2>调度器 · 主任务 <span id="runnerMeta" style="font-weight:400;font-size:10.5px"></span></h2>
-    <div class="workline"><span class="dot" id="runnerDot"></span><span class="big" id="runnerState">--</span><span class="hint" id="runnerHint"></span></div>
-    <div class="subline" id="runnerSub"></div>
-    <div class="saveMsg" id="runnerMsg"></div>
-    <div class="subline" id="workSub"></div>
-  </section>
 
   <section class="card" id="advCard" data-page="adv">
     <h2>冒险记录 <span id="advMeta" style="font-weight:400;font-size:10.5px"></span></h2>
@@ -1456,30 +1520,98 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
     <div class="planlines" id="planLines"></div>
   </section>
 
-  <section class="grid" data-page="main">
-    <div class="tile"><div class="v" id="coins">--</div><div class="k">金币 <span id="coinsAt" style="opacity:.75"></span></div></div>
-    <div class="tile"><div class="v" id="visitTxt">--</div><div class="k">今日踩踩</div><div class="bar"><i id="visitBar"></i></div></div>
-    <div class="tile"><div class="v" id="pkTxt">--</div><div class="k">今日PK</div><div class="bar"><i id="pkBar"></i></div></div>
-    <div class="tile"><div class="v" id="advTxt">--</div><div class="k">今日冒险</div></div>
-    <div class="tile"><div class="v" id="swTxt">--</div><div class="k" id="swLbl">今日学习 / 打工</div><div class="bar bar-split"><i id="swBarSchool"></i><i id="swBarWork"></i></div></div>
-    <div class="tile"><div class="v" id="expTxt">--</div><div class="k">经验日常</div></div>
-  </section>
+  <!-- ===== 总览：照 QQ 宠物首页 1:1 还原 =====
+       顶部资料卡（左返回钮 + 头像卡 + 右装扮钮）
+       胶囊条（图标 + 数值 + 细分进度）
+       中部场景（手机画面 = 我们的"宠物"）
+       底部抽屉（当前任务 + 倒计时）
+       右侧磨砂功能栏见 .funcbar（在 .app 内） -->
+  <section class="home" data-page="main">
+    <!-- 顶部资料卡（照 QQ 首页：头像 + 双行文字 + 状态环 + 时钟） -->
+    <div class="homebar">
+      <div class="idcard">
+        <span class="avatar" id="schedDot"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#ffedd5"/><path d="M7.5 12.5 L6 3.5 L14.5 8 Z" fill="#f59e0b"/><path d="M24.5 12.5 L26 3.5 L17.5 8 Z" fill="#f59e0b"/><path d="M8.3 10.6 L7.5 6 L12 8.3 Z" fill="#fbcfe8"/><path d="M23.7 10.6 L24.5 6 L20 8.3 Z" fill="#fbcfe8"/><circle cx="16" cy="18" r="10" fill="#f59e0b"/><ellipse cx="16" cy="21.6" rx="6.6" ry="5" fill="#fff7ed"/><circle cx="11.8" cy="16.4" r="1.7" fill="#1f2937"/><circle cx="20.2" cy="16.4" r="1.7" fill="#1f2937"/><path d="M14.7 19.4 h3.2 l-1.6 2 Z" fill="#f97316"/><path d="M16 21.4 v1.1 M16 22.5 q-1.2 1.3 -2.4 .3 M16 22.5 q1.2 1.3 2.4 .3" stroke="#92400e" stroke-width=".9" fill="none" stroke-linecap="round"/><path d="M6.5 18.5 h3 M6.8 21.5 h2.6 M25.5 18.5 h-3 M25.2 21.5 h-2.6" stroke="#d97706" stroke-width=".9" stroke-linecap="round"/></svg></span>
+        <div class="idtxt">
+          <div class="idname">QQ宠物托管</div>
+          <div class="idsub" id="schedTxt">--</div>
+        </div>
+        <span class="idring" id="idRing"></span>
+        <span class="meta" id="clock">--:--:--</span>
+      </div>
+    </div>
+    <nav class="tabs" id="tabbar">
+  <button data-tab="main" class="on" title="总览"><img src="/qp-icons/coin-24.png" alt=""><span>总览</span></button>
+  <button data-tab="adv" title="冒险"><img src="/qp-icons/logo_adventure-24.png" alt=""><span>冒险</span></button>
+  <button data-tab="plan" title="职业"><img src="/qp-icons/logo_work-24.png" alt=""><span>职业</span></button>
+  <button data-tab="notify" title="通知"><img src="/qp-icons/bubble_button-24.png" alt=""><span>通知</span></button>
+  <button data-tab="set" title="设置"><img src="/qp-icons/line/skills-24.png" alt=""><span>设置</span></button>
+  <button data-tab="log" title="日志"><img src="/qp-icons/bubble_text-24.png" alt=""><span>日志</span></button>
+</nav>
+    <div class="caps">
+    <div class="cap" title="金币" id="capCoins">
+      <img class="cico" src="/qp-icons/coin-24.png" alt="">
+      <span class="cval" id="coins">--</span>
+      <span class="cunit" id="coinsAt"></span>
+    </div>
+    <div class="cap" title="今日踩踩" id="capVisit">
+      <img class="cico" src="/qp-icons/logo_hangout-24.png" alt="">
+      <span class="cval" id="visitTxt">--</span>
+      <div class="bar"><i id="visitBar"></i></div>
+    </div>
+    <div class="cap" title="今日PK" id="capPk">
+      <img class="cico" src="/qp-icons/logo_pk-24.png" alt="">
+      <span class="cval" id="pkTxt">--</span>
+      <div class="bar"><i id="pkBar"></i></div>
+    </div>
+    <div class="cap" title="今日冒险" id="capAdv">
+      <img class="cico" src="/qp-icons/logo_adventure-24.png" alt="">
+      <span class="cval" id="advTxt">--</span>
+    </div>
+    <div class="cap" title="今日学习 / 打工" id="capSw">
+      <img class="cico" src="/qp-icons/logo_study-24.png" alt="">
+      <span class="cval" id="swTxt">--</span>
+      <!-- swLbl 原为可见标签；胶囊放不下长文案，改为隐藏元素供 JS 写入，
+           其内容由 JS 同步到 capSw 的 title（悬浮可看） -->
+      <span class="cunit" id="swLbl" hidden></span>
+      <div class="bar bar-split"><i id="swBarSchool"></i><i id="swBarWork"></i></div>
+    </div>
+    <div class="cap" title="经验日常" id="capExp">
+      <img class="cico" src="/qp-icons/emoji-24.png" alt="">
+      <span class="cval" id="expTxt">--</span>
+    </div>
+    </div><!-- /.caps -->
 
-  <section class="duo" data-page="main">
-    <div class="duoshot-wrap">
-      <div class="card duoshot">
-        <h2><span class="shotttl">手机画面 <span id="shotMeta" style="font-weight:400;font-size:10.5px"></span></span></h2>
+    <!-- 中部场景：手机画面（QQ 首页这里是 3D 宠物，我们用实时画面） -->
+    <div class="scene">
+      <div class="scenecard duoshot" id="shotCardWrap">
+        <span class="shotmeta" id="shotMeta"></span>
         <a id="shotLink" class="loading" href="/api/screenshot" target="_blank" rel="noopener"><img id="phoneShot" alt="加载中…"></a>
         <div id="shotErr" class="err shoterr"></div>
       </div>
     </div>
-    <div class="card duoque">
-      <h2>任务队列</h2>
-      <div class="qhead"><span id="qTop">--</span><span id="qUpd"></span></div>
-      <div class="tasklist" id="taskList"></div>
-      <div id="qHidden" style="display:none;font-size:10.5px;color:var(--sub);margin-top:5px"></div>
-    </div>
-  </section>
+
+    <!-- 底部抽屉（照 QQ 宠物首页底部那条）：当前任务 + 倒计时 -->
+    <section class="drawer" id="runnerCard" data-page="main">
+      <div class="dhandle"></div>
+      <div class="drow">
+        <img class="dico" id="runnerIcon" src="/qp-icons/logo_work-24.png" alt="">
+        <div class="dcol">
+          <div class="dtitle"><span class="dot" id="runnerDot"></span><span id="runnerState">--</span><span class="dhint" id="runnerHint"></span></div>
+          <div class="dsub" id="workSub"></div>
+          <div class="dsub" id="runnerSub"></div>
+        </div>
+        <span class="dmeta" id="runnerMeta"></span>
+      </div>
+      <div class="saveMsg" id="runnerMsg"></div>
+    </section>
+  </section><!-- /.home -->
+
+  <section class="card qcard" data-page="main">
+    <h2>任务队列</h2>
+    <div class="qhead"><span id="qTop">--</span><span id="qUpd"></span></div>
+    <div class="tasklist" id="taskList"></div>
+    <div id="qHidden" style="display:none;font-size:10.5px;color:var(--sub);margin-top:5px"></div>
+    </section>
 
   <section class="card" data-page="notify">
     <h2>通知 <span style="font-weight:400;color:var(--sub)">推送渠道与事件开关</span></h2>
@@ -1519,12 +1651,16 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
     <div class="thumbs" id="shots"></div>
   </section>
   </div>
+
 </main>
 <!-- 右侧功能栏（QQ 宠物右侧 喂食/洗澡/好友 位）：启动/停止/刷新画面 -->
-<aside class="funcbar">
-  <button class="fab" id="btnRunnerStart" title="启动调度器"><span class="fi">▶</span><span class="ft">启动</span></button>
-  <button class="fab stop" id="btnRunnerStop" title="停止调度器"><span class="fi">■</span><span class="ft">停止</span></button>
-  <button class="fab ghost" id="btnShot" title="刷新手机画面"><span class="fi">↻</span><span class="ft">画面</span></button>
+<!-- 右侧功能栏（照 QQ 首页右侧磨砂长胶囊）。
+     注意：手机画面里游戏自带的 喂食/洗澡/好友 是操作宠物的；
+     这里是控制调度器的，语义不同故并列保留。 -->
+<aside class="funcbar" aria-label="调度器控制">
+  <button class="fab" id="btnRunnerStart" title="启动调度器"><span class="fi">&#9654;</span><span class="ft">启动</span></button>
+  <button class="fab stop" id="btnRunnerStop" title="停止调度器"><span class="fi">&#9632;</span><span class="ft">停止</span></button>
+  <button class="fab ghost" id="btnShot" title="刷新手机画面"><span class="fi">&#8635;</span><span class="ft">画面</span></button>
 </aside>
 </div><!-- /.app -->
 <footer>
@@ -1553,6 +1689,7 @@ function renderData(d){
   // 头部
   const dot=$('#schedDot');
   dot.className='avatar '+(d.scheduler.alive?'on':'off');
+  const _ring=$('#idRing'); if(_ring) _ring.className='idring'+(d.scheduler.alive?'':' off');
   $('#schedTxt').textContent=d.scheduler.alive?('运行中 · 已跑 '+(d.scheduler.uptime||'')):'未运行';
   // 调度器卡片
   if($('#runnerState')){
@@ -1634,8 +1771,11 @@ function renderData(d){
   const pct=v=>totalQuota?Math.min(100,Math.max(0,v/totalQuota*100)):0;
   $('#swBarSchool').style.width=pct(scHrs)+'%';
   $('#swBarWork').style.width=pct(wkHrs)+'%';
-  $('#swLbl').textContent='学习 / 打工'
+  const swLblTxt='学习 / 打工'
     +(totalQuota?(' · '+totalUsed.toFixed(1).replace(/\.0$/,'')+'/'+totalQuota+'h'):'');
+  $('#swLbl').textContent=swLblTxt;
+  // 胶囊太窄放不下，长文案转到 title 上（悬浮可见）
+  const _capSw=$('#capSw'); if(_capSw) _capSw.title='今日 '+swLblTxt;
   $('#swTxt').title='学习 '+sc+' 节（'+scHrs+'h'
     +(scQuota?('/'+scQuota+'h'):'')+'）· 打工 '+wk+' 次（'+wkHrs+'h'
     +(wkQuota?('/'+wkQuota+'h'):'')+'）'
@@ -1731,7 +1871,8 @@ function renderData(d){
 
 async function refreshData(){
   try{ renderData(await j('/api/data')); }
-  catch(e){ $('#schedDot').className='avatar off'; $('#schedTxt').textContent='连接失败'; }
+  catch(e){ $('#schedDot').className='avatar off'; $('#schedTxt').textContent='连接失败';
+    const _r2=$('#idRing'); if(_r2) _r2.className='idring off'; }
 }
 
 function svgSet(id,inner){const el=document.getElementById(id);if(el)el.innerHTML=inner;}
