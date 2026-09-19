@@ -1150,12 +1150,10 @@ body{
   transition:transform .12s;
 }
 /* 左侧圆钮：米白底 + 棕色图标（官方 #F9F1E2 / #BE6321） */
-.col-l .rbtn img{width:56%;height:56%;object-fit:contain;
-  filter:brightness(0) saturate(100%) invert(38%) sepia(58%) saturate(1050%) hue-rotate(347deg) brightness(92%) contrast(88%)}
+.col-l .rbtn img{width:43%;height:43%;object-fit:contain}
 /* 右侧圆钮：半透明深褐底 + 亮黄图标（官方 #B18E49 / #FFEA70） */
 .col-r .rbtn{background:var(--btn-r-bg)}
-.col-r .rbtn img{width:56%;height:56%;object-fit:contain;
-  filter:brightness(0) saturate(100%) invert(92%) sepia(38%) saturate(900%) hue-rotate(357deg) brightness(103%)}
+.col-r .rbtn img{width:43%;height:43%;object-fit:contain}
 .rbtn:active{transform:scale(.94)}
 .rbtn.on{background:var(--accent);box-shadow:0 2px 8px rgba(200,130,20,.4)}
 .rbtn.on img{filter:brightness(0) invert(1)}
@@ -1220,7 +1218,7 @@ body{
   background:var(--cap-bg);border-radius:calc(var(--u) * 14);
   color:var(--cap-fg);position:relative;box-sizing:border-box;
 }
-.cap .cico{width:calc(var(--u) * 15);height:calc(var(--u) * 15);flex:none;border-radius:50%}
+.cap .cico{width:calc(var(--u) * 19);height:calc(var(--u) * 19);flex:none;border-radius:50%}
 .cap .cval{
   font-weight:680;font-size:calc(var(--u) * 11);color:#fff;
   font-variant-numeric:tabular-nums;white-space:nowrap;
@@ -1682,58 +1680,18 @@ footer{
   pre#logbox{height:58vh}
 }
 
-/* ---------- 15. 深色主题 ---------- */
-/* 官方房间背景带暗色版；组件底色统一转深色磨砂，避免"浅字压浅底" */
+/* ---------- 15. 深色模式 ---------- */
+/* 官方【没有独立深色主题】—— 深色下只是把房间背景换成偏暗的版本，
+   组件（胶囊/圆钮/资料卡/文字）颜色**完全不变**。
+   所以这里只切背景图，不改任何 token，保证与官方一致。 */
 @media(prefers-color-scheme:dark){
   :root{
-    --bg:#171512;
-    --qp-bg2:#241F18;
-    --card:rgba(38,33,25,.86);
-    --line:#3A3226;
-    --text:#F0E9DD;
-    --sub:#B5A88F;
-    --strong:#F5EEE0;
-    --accent:#FF9440;
-    --ok:#7BD12A;
-    --gold:#E6C35C;
-    --btn-l-bg:rgba(255,255,255,.10);
-    --btn-l-fg:#E8C79A;
-    --btn-r-bg:rgba(120,95,50,.55);
-    --btn-r-fg:#FFE68A;
-    --cap-bg:rgba(140,105,55,.62);
-    --track:rgba(120,100,70,.45);
-    --sh-1:0 1px 10px rgba(0,0,0,.25);
-    --sh-2:0 2px 12px rgba(0,0,0,.35);
-    --qp-room:var(--qp-room-main);
+    /* 只替换背景图；其余 token 一律沿用浅色值 */
+    --qp-room-main:url('/qp-icons/bg/room-main-dark.jpg');
+    --qp-room-feed:url('/qp-icons/bg/room-feed-dark.jpg');
+    --qp-room-shower:url('/qp-icons/bg/room-shower-dark.jpg');
+    --qp-room-record:url('/qp-icons/bg/room-record-dark.jpg');
   }
-  .idcard,.stagecap{background:rgba(46,40,30,.82)}
-  .drawer{background:rgba(38,33,25,.80)}
-  .idname{color:var(--strong)}
-  .tabs button,.fab{color:var(--sub)}
-  .tabs button.on{background:var(--accent);color:#fff}
-  .avatar{background:#3a2f22}
-  .dhandle{background:rgba(255,255,255,.20)}
-  .dico{background:rgba(255,255,255,.10)}
-  .savebtn.ghost{color:var(--accent);background:transparent}
-  .logctl button,.minibtn,.shotpage-ctl .savebtn.ghost{background:rgba(255,255,255,.07);color:var(--text)}
-  .logctl input,.form select,.form input[type=number],.form input[type=text],.plinedit input{
-    background:rgba(255,255,255,.06);color:var(--text);border-color:var(--line);
-  }
-  .advchart,.advtip,.advlist,.cfg .row{background:transparent}
-  .advchart,.advtip,.advlist{background:rgba(255,255,255,.04)}
-  .chip{background:rgba(255,255,255,.10);color:var(--sub)}
-  .chip.ready{background:rgba(123,209,42,.20);color:#A5E06A}
-  .chip.wait{background:rgba(255,148,64,.22);color:#FFB877}
-  .chip.off{background:rgba(255,255,255,.06);color:#8A7F6C}
-  .chip.done{background:rgba(255,255,255,.06);color:#A79C88}
-  .sw{background:#4A4438}
-  .plansteps .st.cur{background:rgba(255,148,64,.16)}
-  .planlines .chipx{background:rgba(255,255,255,.08);color:#8A7F6C}
-  .planlines .chipx.ok{background:rgba(123,209,42,.20);color:#A5E06A}
-  ::-webkit-scrollbar-thumb{background:#3F3A30}
-  ::-webkit-scrollbar-thumb:hover{background:#544E42}
-  html{scrollbar-color:#3F3A30 transparent}
-  #shotLink.loading::before{background:rgba(38,33,25,.85);color:var(--sub)}
 }
 
 /* 房间背景按 `html[data-scene]` 切换。
@@ -1805,17 +1763,17 @@ html[data-scene="record"]{--qp-room:var(--qp-room-record)}
 
     <!-- 左列圆钮（官方 4 个：返回/设置/消息/日记，x=20 y=28/86/146/206） -->
     <nav class="flt col-l" id="tabbar">
-      <button class="rbtn on" data-tab="main" title="总览"><img src="/qp-icons/coin-24.png" alt=""></button>
-      <button class="rbtn" data-tab="adv" title="冒险"><img src="/qp-icons/logo_adventure-24.png" alt=""></button>
-      <button class="rbtn" data-tab="plan" title="职业"><img src="/qp-icons/logo_work-24.png" alt=""></button>
-      <button class="rbtn" data-tab="notify" title="通知"><img src="/qp-icons/bubble_button-24.png" alt=""></button>
+      <button class="rbtn on" data-tab="main" title="总览"><img src="/qp-icons/cdn/mood_happy_paw.png" alt=""></button>
+      <button class="rbtn" data-tab="adv" title="冒险"><img src="/qp-icons/cdn/mood_fire.png" alt=""></button>
+      <button class="rbtn" data-tab="plan" title="职业"><img src="/qp-icons/cdn/medal_gold.png" alt=""></button>
+      <button class="rbtn" data-tab="notify" title="通知"><img src="/qp-icons/cdn/mood_laugh.png" alt=""></button>
     </nav>
 
     <!-- 右列圆钮（官方 3 个：装扮/会员/盲盒，x=418 y=28/86/146） -->
     <nav class="flt col-r" id="tabbar2">
-      <button class="rbtn r" data-tab="set" title="设置"><img src="/qp-icons/line/skills-24.png" alt=""></button>
-      <button class="rbtn r" data-tab="log" title="日志"><img src="/qp-icons/bubble_text-24.png" alt=""></button>
-      <button class="rbtn r" data-tab="shot" title="实时画面"><img src="/qp-icons/emoji-24.png" alt=""></button>
+      <button class="rbtn r" data-tab="set" title="设置"><img src="/qp-icons/cdn/care_wand.png" alt=""></button>
+      <button class="rbtn r" data-tab="log" title="日志"><img src="/qp-icons/cdn/icon_ring.png" alt=""></button>
+      <button class="rbtn r" data-tab="shot" title="实时画面"><img src="/qp-icons/cdn/medi_doctor.png" alt=""></button>
     </nav>
 
     <!-- 资料卡（官方 x=74 y=26 207×46） -->
@@ -1831,12 +1789,12 @@ html[data-scene="record"]{--qp-room:var(--qp-room-record)}
 
     <!-- 胶囊（官方 y=86 三颗 + y=126 两颗，每颗 67×28 间距 4） -->
     <div class="flt caps">
-      <div class="cap" title="金币"><img class="cico" src="/qp-icons/coin-24.png" alt=""><span class="cval" id="coins">--</span><span class="cunit" id="coinsAt"></span></div>
-      <div class="cap" title="今日踩踩"><img class="cico" src="/qp-icons/logo_hangout-24.png" alt=""><span class="cval" id="visitTxt">--</span><div class="bar"><i id="visitBar"></i></div></div>
-      <div class="cap" title="今日PK"><img class="cico" src="/qp-icons/logo_pk-24.png" alt=""><span class="cval" id="pkTxt">--</span><div class="bar"><i id="pkBar"></i></div></div>
-      <div class="cap" title="今日冒险"><img class="cico" src="/qp-icons/logo_adventure-24.png" alt=""><span class="cval" id="advTxt">--</span></div>
-      <div class="cap" title="学习/打工" id="capSw"><img class="cico" src="/qp-icons/logo_study-24.png" alt=""><span class="cval" id="swTxt">--</span><span class="cunit" id="swLbl" hidden></span><div class="bar bar-split"><i id="swBarSchool"></i><i id="swBarWork"></i></div></div>
-      <div class="cap" title="经验日常"><img class="cico" src="/qp-icons/emoji-24.png" alt=""><span class="cval" id="expTxt">--</span></div>
+      <div class="cap" title="金币"><img class="cico" src="/qp-icons/cdn/coin_paw.png" alt=""><span class="cval" id="coins">--</span><span class="cunit" id="coinsAt"></span></div>
+      <div class="cap" title="今日踩踩"><img class="cico" src="/qp-icons/cdn/mood_happy_star.png" alt=""><span class="cval" id="visitTxt">--</span><div class="bar"><i id="visitBar"></i></div></div>
+      <div class="cap" title="今日PK"><img class="cico" src="/qp-icons/cdn/mood_smirk.png" alt=""><span class="cval" id="pkTxt">--</span><div class="bar"><i id="pkBar"></i></div></div>
+      <div class="cap" title="今日冒险"><img class="cico" src="/qp-icons/cdn/mood_fire.png" alt=""><span class="cval" id="advTxt">--</span></div>
+      <div class="cap" title="学习/打工" id="capSw"><img class="cico" src="/qp-icons/cdn/leaf_exp.png" alt=""><span class="cval" id="swTxt">--</span><span class="cunit" id="swLbl" hidden></span><div class="bar bar-split"><i id="swBarSchool"></i><i id="swBarWork"></i></div></div>
+      <div class="cap" title="经验日常"><img class="cico" src="/qp-icons/cdn/dot_diamond.png" alt=""><span class="cval" id="expTxt">--</span></div>
     </div>
 
     <!-- 中部场景层（官方是 3D 宠物；此处放任务队列） -->
@@ -1858,7 +1816,7 @@ html[data-scene="record"]{--qp-room:var(--qp-room-record)}
 
     <!-- 底部入口（官方 x=215 y=728 50×54） -->
     <div class="flt drawer" id="runnerCard">
-      <img class="dico" id="runnerIcon" src="/qp-icons/logo_work-24.png" alt="">
+      <img class="dico" id="runnerIcon" src="/qp-icons/cdn/coin_paw.png" alt="">
       <div class="dcol">
         <div class="dtitle"><span class="dot" id="runnerDot"></span><span id="runnerState">--</span><span class="dhint" id="runnerHint"></span></div>
         <div class="dsub" id="workSub"></div>
