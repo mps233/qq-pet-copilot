@@ -1018,9 +1018,12 @@ HTML = r"""<!doctype html>
   /* —— QQ 宠物暖色系 —— */
   --qp-bg2:#EDD18F;--qp-card-warm:#F9EFDF;--qp-edge:#EFE3CF;
   --qp-energy:#07AAFC;--qp-clean:#66C904;--qp-mood:#E6B668;--qp-track:#DEB86E;
-  --qp-icon-line:#374151}
+  --qp-icon-line:#374151;
+  /* QQ 宠物首页房间背景（素材 pet_bg_main.jpg，1080x2908）；暗色版另有一套 */
+  --qp-room:url('/qp-icons/bg/room.jpg')}
 *{box-sizing:border-box}
-html,body{margin:0;padding:0;background:linear-gradient(180deg,#FFFBF2 0,var(--qp-bg2) 300px,var(--bg) 760px) fixed;color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%;overflow-x:hidden}html{overscroll-behavior-y:contain}
+html{margin:0;padding:0;min-height:100%;background-color:var(--qp-room-fallback,var(--bg));background-image:var(--qp-room);background-position:center top;background-size:cover;background-repeat:no-repeat;background-attachment:fixed}
+body{margin:0;padding:0;min-height:100vh;background:transparent;color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%;overflow-x:hidden}html{overscroll-behavior-y:contain}
 /* ============================================================
    布局骨架：照 QQ 宠物主页
      顶部 sticky 胶囊资料卡（头像 + 名称/状态 + 时间环）
@@ -1115,14 +1118,23 @@ main{padding:12px 0;flex:1;min-width:0;display:flex;flex-direction:column;gap:10
 /* 场景卡：固定为"一屏中部"的高度（照 QQ 首页场景占比 ~11%~85%）。
    不能让手机画面按原始 9:16 撑满——那会把底部抽屉推出首屏。 */
 /* 场景区：照参考图占约 65% 屏高（y 20%~85%） */
-.scene{margin-top:10px;flex:1;min-height:min(58vh,520px);display:flex}
-.scenecard.card{position:relative;flex:1;display:flex;flex-direction:column;padding:0;overflow:hidden;
-  border-radius:18px;box-shadow:0 2px 10px rgba(140,100,40,.12);min-height:0}
-.scenecard #shotLink{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;
-  line-height:0;overflow:hidden;background:#eef0f4}
-/* 画面等比缩放填满卡片高度（contain，不裁切内容） */
-.scenecard #phoneShot{display:block;max-width:100%;max-height:100%;width:auto;height:auto;
-  object-fit:contain;background:transparent}
+/* 场景区：铺 QQ 宠物首页的房间背景（条纹墙 + 沙发 + 爪印地毯 + 木地板）。
+   背景图比例 508:1368（≈0.371），屏幕通常更宽；用 cover 铺满并裁切，
+   顶部对齐让条纹墙/踢脚线落在视觉合理位置。 */
+/* 场景区：背景已由整页承载（body 的 --qp-room），这里保持透明，
+   让房间连续透出；只负责给"宠物"（手机画面）留出舞台空间。 */
+.scene{margin-top:10px;flex:1;min-height:min(56vh,520px);display:flex;
+  border-radius:18px;overflow:hidden}
+.scenecard.card{position:relative;flex:1;display:flex;flex-direction:column;padding:0;
+  background:transparent;border:0;box-shadow:none;min-height:0}
+.scenecard #shotLink{flex:1;min-height:0;width:100%;display:block;
+  line-height:0;overflow:hidden;background:transparent}
+/* 画面铺满场景区（cover）。
+   为什么不用 contain：手机画面本身就是 QQ 宠物首页（含宠物/沙发/地毯/功能栏），
+   而页面背景又是同一间屋子——contain 会在两侧露出背景房间，
+   导致沙发和地毯"出现两次"且错位。cover 让画面里的房间直接充当场景。 */
+.scenecard #phoneShot{display:block;width:100%;height:100%;
+  object-fit:cover;object-position:center center;background:transparent}
 .scenecard .shoterr{padding:0 12px;font-size:11px;flex:none}
 .shotmeta{position:absolute;top:8px;right:10px;z-index:2;font-size:10.5px;color:#fff;
   background:rgba(0,0,0,.34);border-radius:999px;padding:2px 9px;backdrop-filter:blur(4px)}
@@ -1255,7 +1267,10 @@ footer{color:#9ca3af;font-size:11px;text-align:center;padding:14px 16px 28px;lin
 #shotLink{grid-area:shot;display:block;position:relative;line-height:0}
 /* 画面贴满：无圆角、无边框（截图比例与设备一致、无黑边） */
 #phoneShot{display:block;width:100%;height:auto;border-radius:0;background:#eef0f4;min-height:48px;color:transparent}
-#shotLink.loading::before{content:"画面加载中…";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--sub);background:#eef0f4;min-height:64px}
+/* 场景卡内：加载/失败提示做成浮层小胶囊，不铺底色（否则会盖住房间背景） */
+#shotLink.loading::before{content:"画面加载中…";position:absolute;left:50%;top:50%;
+  transform:translate(-50%,-50%);font-size:11.5px;color:#6B6B6B;
+  background:rgba(255,255,255,.78);border-radius:999px;padding:4px 12px;white-space:nowrap}
 #shotLink.loading.failed::before{content:"获取失败，稍后自动重试…";color:#b45309}
 #shotLink.loading #phoneShot{visibility:hidden}
 /* 刷新按钮（常规控件样式，跟随主题；不像浮层那样遮挡画面） */
@@ -1437,7 +1452,8 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
   /* QQ 宠物暖色 · 深色适配 */
   :root{--bg:#171512;--card:#201D18;--line:#332C22;--text:#f0e9dd;--sub:#a89e8d;
     --qp-bg2:#241F18;--qp-card-warm:#262119;--qp-edge:#332C22;--qp-track:#544535;
-    --qp-icon-line:#E7EAF0}
+    --qp-icon-line:#E7EAF0;
+    --qp-room:url('/qp-icons/bg/room-dark.jpg')}
   header{background:rgba(17,19,24,.88)}
   .logctl button,.shotctl button,.minibtn,.savebtn.ghost,.advlist{background:#1b1e26;color:var(--text)}
   /* QQ 宠物式布局元素（圆钮/胶囊卡/功能栏）在深色下的底色 */
@@ -1468,7 +1484,8 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
   .planlines .chipx{background:#20232c;color:#6b7280}
   .planlines .chipx.ok{background:#12291a;color:#4ade80}
   .advtip,.advchart{background:#15171e}
-  #phoneShot,#shotLink.loading::before{background:#15171e}
+  #phoneShot{background:transparent}
+  #shotLink.loading::before{background:rgba(32,29,24,.8);color:#A89E8D}
   .bar{background:#262a35}
   .sw{background:#3a3f4d}
   .plansteps .st.cur{background:#382713}
@@ -2575,8 +2592,11 @@ class Handler(BaseHTTPRequestHandler):
                 #   的 parts 里同样含 'qp-icons'，会放行穿越，实测返回 200）
                 fp = (BASE / 'static' / path.lstrip('/')).resolve()
                 root = (BASE / 'static' / 'qp-icons').resolve()
-                if fp.exists() and fp.suffix == '.png' and fp.is_relative_to(root):
-                    self._send(200, 'image/png', fp.read_bytes(), 'max-age=604800')
+                # 白名单扩展名（背景是 .jpg；仍不接受任意后缀，避免误发其它文件）
+                CTYPE = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                         '.webp': 'image/webp'}
+                if fp.exists() and fp.suffix.lower() in CTYPE and fp.is_relative_to(root):
+                    self._send(200, CTYPE[fp.suffix.lower()], fp.read_bytes(), 'max-age=604800')
                 else:
                     self._send(404, 'text/plain', b'not found')
             elif path in ('/icon-192.png', '/icon-512.png'):
