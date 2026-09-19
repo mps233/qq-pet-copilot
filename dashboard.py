@@ -1019,8 +1019,21 @@ HTML = r"""<!doctype html>
   --qp-bg2:#EDD18F;--qp-card-warm:#F9EFDF;--qp-edge:#EFE3CF;
   --qp-energy:#07AAFC;--qp-clean:#66C904;--qp-mood:#E6B668;--qp-track:#DEB86E;
   --qp-icon-line:#374151;
-  /* QQ 宠物首页房间背景（素材 pet_bg_main.jpg，1080x2908）；暗色版另有一套 */
-  --qp-room:url('/qp-icons/bg/room.jpg')}
+  /* QQ 宠物房间背景（素材按场景分 4 套，各有暗色版）。
+     由 html[data-scene] 选择，JS 按当前任务切换（见 applyScene）。
+     store 那张是纯天空渐变、不是房间，故不使用。 */
+  --qp-room-main:url('/qp-icons/bg/room-main.jpg');
+  --qp-room-feed:url('/qp-icons/bg/room-feed.jpg');
+  --qp-room-shower:url('/qp-icons/bg/room-shower.jpg');
+  --qp-room-record:url('/qp-icons/bg/room-record.jpg');
+  --qp-room:var(--qp-room-main)}
+/* 按当前任务切房间背景。
+   必须写在 html 上：背景图 background-image 作用在 html 元素，
+   而 CSS 变量只向下继承——写在 body 上的覆写对父级 html 无效（曾踩坑，
+   表现为 data-scene 变了但背景纹丝不动）。JS 用 documentElement 写属性。 */
+html[data-scene="feed"]{--qp-room:var(--qp-room-feed)}
+html[data-scene="shower"]{--qp-room:var(--qp-room-shower)}
+html[data-scene="record"]{--qp-room:var(--qp-room-record)}
 *{box-sizing:border-box}
 html{margin:0;padding:0;min-height:100%;background-color:var(--qp-room-fallback,var(--bg));background-image:var(--qp-room);background-position:center top;background-size:cover;background-repeat:no-repeat;background-attachment:fixed}
 body{margin:0;padding:0;min-height:100vh;background:transparent;color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%;overflow-x:hidden}html{overscroll-behavior-y:contain}
@@ -1121,10 +1134,6 @@ main{padding:12px 0;flex:1;min-width:0;display:flex;flex-direction:column;gap:10
 /* 场景区：铺 QQ 宠物首页的房间背景（条纹墙 + 沙发 + 爪印地毯 + 木地板）。
    背景图比例 508:1368（≈0.371），屏幕通常更宽；用 cover 铺满并裁切，
    顶部对齐让条纹墙/踢脚线落在视觉合理位置。 */
-/* 场景区：背景已由整页承载（body 的 --qp-room），这里保持透明，
-   让房间连续透出；只负责给"宠物"（手机画面）留出舞台空间。 */
-.scene{margin-top:10px;flex:1;min-height:min(56vh,520px);display:flex;
-  border-radius:18px;overflow:hidden}
 .scenecard.card{position:relative;flex:1;display:flex;flex-direction:column;padding:0;
   background:transparent;border:0;box-shadow:none;min-height:0}
 .scenecard #shotLink{flex:1;min-height:0;width:100%;display:block;
@@ -1136,6 +1145,30 @@ main{padding:12px 0;flex:1;min-width:0;display:flex;flex-direction:column;gap:10
 .scenecard #phoneShot{display:block;width:100%;height:100%;
   object-fit:cover;object-position:center center;background:transparent}
 .scenecard .shoterr{padding:0 12px;font-size:11px;flex:none}
+/* ===== 中部舞台（照 QQ 首页中央宠物位）===== */
+.stage{flex:1;min-height:min(40vh,340px);display:flex;flex-direction:column;
+  align-items:center;justify-content:flex-end;gap:8px;padding:12px 0 4px;position:relative}
+.stagepet{max-height:100%;max-width:46%;object-fit:contain;display:block;
+  filter:drop-shadow(0 10px 18px rgba(120,85,30,.28));
+  animation:stagebob 3.2s ease-in-out infinite}
+/* 轻微上下浮动，让待机中的宠物有"活着"的感觉（QQ 首页宠物也会呼吸/摇摆） */
+@keyframes stagebob{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+@media(prefers-reduced-motion:reduce){.stagepet{animation:none}}
+.stagecap{font-size:12px;color:#6B4E23;background:rgba(255,255,255,.66);
+  border-radius:999px;padding:3px 12px;backdrop-filter:blur(4px);white-space:nowrap}
+/* ===== 实时画面页（独立成页）：画面尽量大，纵向铺满 ===== */
+/* ===== 画面页：整张截图完整可见 =====
+   用"按宽度铺满、按原始比例给高度"的方式（不写死高度）：
+   手机截图是 9:16 竖图，宽度铺满后高度自然确定，不会在下方留大片空白。
+   object-fit:contain 只作兜底，正常比例下不会触发。 */
+.shotpage{display:flex;flex-direction:column;gap:10px}
+.shotpage .scenecard{display:block;border-radius:16px;overflow:hidden;
+  box-shadow:0 2px 10px rgba(140,100,40,.18);background:#0e0f12}
+.shotpage #shotLink{display:block;width:100%;overflow:hidden;background:transparent}
+.shotpage #phoneShot{display:block;width:100%;height:auto;object-fit:contain;
+  background:transparent;min-height:120px}
+.shotpage-ctl{display:flex;gap:8px;flex:none;justify-content:center}
+.shotpage-ctl .savebtn{text-decoration:none;display:inline-block;text-align:center}
 .shotmeta{position:absolute;top:8px;right:10px;z-index:2;font-size:10.5px;color:#fff;
   background:rgba(0,0,0,.34);border-radius:999px;padding:2px 9px;backdrop-filter:blur(4px)}
 
@@ -1453,7 +1486,10 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
   :root{--bg:#171512;--card:#201D18;--line:#332C22;--text:#f0e9dd;--sub:#a89e8d;
     --qp-bg2:#241F18;--qp-card-warm:#262119;--qp-edge:#332C22;--qp-track:#544535;
     --qp-icon-line:#E7EAF0;
-    --qp-room:url('/qp-icons/bg/room-dark.jpg')}
+    --qp-room-main:url('/qp-icons/bg/room-main-dark.jpg');
+    --qp-room-feed:url('/qp-icons/bg/room-feed-dark.jpg');
+    --qp-room-shower:url('/qp-icons/bg/room-shower-dark.jpg');
+    --qp-room-record:url('/qp-icons/bg/room-record-dark.jpg')}
   header{background:rgba(17,19,24,.88)}
   .logctl button,.shotctl button,.minibtn,.savebtn.ghost,.advlist{background:#1b1e26;color:var(--text)}
   /* QQ 宠物式布局元素（圆钮/胶囊卡/功能栏）在深色下的底色 */
@@ -1558,6 +1594,7 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
     </div>
     <nav class="tabs" id="tabbar">
   <button data-tab="main" class="on" title="总览"><img src="/qp-icons/coin-24.png" alt=""><span>总览</span></button>
+  <button data-tab="shot" title="实时画面"><img src="/qp-icons/emoji-24.png" alt=""><span>画面</span></button>
   <button data-tab="adv" title="冒险"><img src="/qp-icons/logo_adventure-24.png" alt=""><span>冒险</span></button>
   <button data-tab="plan" title="职业"><img src="/qp-icons/logo_work-24.png" alt=""><span>职业</span></button>
   <button data-tab="notify" title="通知"><img src="/qp-icons/bubble_button-24.png" alt=""><span>通知</span></button>
@@ -1598,13 +1635,12 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
     </div>
     </div><!-- /.caps -->
 
-    <!-- 中部场景：手机画面（QQ 首页这里是 3D 宠物，我们用实时画面） -->
-    <div class="scene">
-      <div class="scenecard duoshot" id="shotCardWrap">
-        <span class="shotmeta" id="shotMeta"></span>
-        <a id="shotLink" class="loading" href="/api/screenshot" target="_blank" rel="noopener"><img id="phoneShot" alt="加载中…"></a>
-        <div id="shotErr" class="err shoterr"></div>
-      </div>
+    <!-- 中部舞台：照 QQ 首页中央的宠物位。
+         宠物贴图由宠物视频合成（左半立绘 + 右半 alpha 遮罩），
+         见 tools/make_pet_cutouts.py。 -->
+    <div class="stage">
+      <img class="stagepet" id="stagePet" src="/qp-icons/pets/pet00.png" alt="">
+      <div class="stagecap" id="stageCap">待机中</div>
     </div>
 
     <!-- 底部抽屉（照 QQ 宠物首页底部那条）：当前任务 + 倒计时 -->
@@ -1622,6 +1658,19 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
       <div class="saveMsg" id="runnerMsg"></div>
     </section>
   </section><!-- /.home -->
+
+  <!-- 实时画面（独立页）：手机画面单独一屏，便于放大看 / 点开原图 -->
+  <section class="shotpage" data-page="shot">
+    <div class="scenecard duoshot" id="shotCardWrap">
+      <span class="shotmeta" id="shotMeta"></span>
+      <a id="shotLink" class="loading" href="/api/screenshot" target="_blank" rel="noopener"><img id="phoneShot" alt="加载中…"></a>
+      <div id="shotErr" class="err shoterr"></div>
+    </div>
+    <div class="shotpage-ctl">
+      <a class="savebtn" id="shotOpen" href="/api/screenshot" target="_blank" rel="noopener">在新标签打开原图</a>
+    </div>
+  </section>
+
 
   <section class="card qcard" data-page="main">
     <h2>任务队列</h2>
@@ -1692,6 +1741,34 @@ const TASKNAME={care:'护理',school:'学习',friend_care:'好友护理',gift_ba
 // 任务 -> 图标文件名（static/qp-icons/ 下，必须用 colored/ 里存在的名字）
 const TASKICON={care:'soap',school:'logo_study',friend_care:'emoji',gift_bag:'coin',
   hire_friend:'logo_work',adventure:'logo_adventure',visit:'logo_hangout',pk:'logo_pk',work:'logo_work'};
+// 把当前任务映射到房间场景，切 html[data-scene]（CSS 变量作用域要求写在 html 上）。
+// 场景图只有 4 套（main/feed/shower/record）；store 那张是纯天空渐变、不是房间，不用。
+// 映射依据：喂食->feed、洗澡/护理->shower、学习/记录类->record，其余回 main。
+// 注意 etaKind 是"上课/打工/冒险"这类进行中活动名，优先级高于队列里的当前任务名
+// （队列的 current 可能还是上一项，进行中活动才是"此刻在干什么"）。
+const SCENE_OF={care:'feed',friend_care:'feed',school:'record',work:'record',
+                hire_friend:'record',adventure:'main',visit:'main',pk:'main',gift_bag:'main'};
+let lastScene='';
+function applyScene(curKey, etaKind){
+  let scene='main';
+  if(etaKind.indexOf('洗澡')>=0||etaKind.indexOf('护理')>=0) scene='shower';
+  else if(etaKind.indexOf('上课')>=0||etaKind.indexOf('学习')>=0) scene='record';
+  else if(etaKind.indexOf('打工')>=0) scene='record';
+  else if(curKey) scene=SCENE_OF[curKey]||'main';
+  if(scene!==lastScene){
+    lastScene=scene;
+    document.documentElement.setAttribute('data-scene',scene);  // 必须写 html（见 CSS 注释）
+    // 按任务换一只宠物（12 张贴图循环取，同一任务固定同一只，避免每轮都跳）
+    const idx=Math.abs([...scene].reduce((a,c)=>a+c.charCodeAt(0),0))%12;
+    const pet=document.getElementById('stagePet');
+    if(pet) pet.src='/qp-icons/pets/pet'+String(idx).padStart(2,'0')+'.png';
+    const cap=document.getElementById('stageCap');
+    if(cap){
+      const NICE={main:'待机中',feed:'吃饭时间',shower:'洗澡时间',record:'学习中'};
+      cap.textContent=NICE[scene]||'待机中';
+    }
+  }
+}
 let etaRemain=null, etaClock='', schedOn=false;
 let logAuto=true, logFilter='';
 try{ logAuto = localStorage.getItem('qpet_logAuto')!=='0'; }catch(e){}
@@ -1811,6 +1888,7 @@ function renderData(d){
                 '护理':'care','踩踩':'visit','PK':'pk','好友护理':'friend_care',
                 '福袋':'gift_bag','雇佣好友':'hire_friend'};
   const curKey=cur?(curMap[cur]||Object.keys(TASKNAME).find(k=>TASKNAME[k]===cur)||''):null;
+  applyScene(curKey, (d.work_eta&&d.work_eta.kind)?String(d.work_eta.kind):'');
   // 任务类型标签：循环=按间隔反复巡检；每日=每天定时一轮；主线=主任务组
   const TTAG={care:'循环',friend_care:'循环',gift_bag:'循环',
               visit:'每日',pk:'每日',
