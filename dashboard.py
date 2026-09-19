@@ -1014,9 +1014,13 @@ HTML = r"""<!doctype html>
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>QQ宠物托管</title>
 <style>
-:root{--bg:#f6f7f9;--card:#fff;--line:#e6e8ee;--text:#111827;--sub:#6b7280;--accent:#ea580c;--ok:#16a34a;--warn:#b45309;--gold:#D4A017;--gold-d:#B8860B}
+:root{--bg:#FCF7ED;--card:#fff;--line:#EFE3CF;--text:#111827;--sub:#6b7280;--accent:#ea580c;--ok:#16a34a;--warn:#b45309;--gold:#D4A017;--gold-d:#B8860B;
+  /* —— QQ 宠物暖色系 —— */
+  --qp-bg2:#EDD18F;--qp-card-warm:#F9EFDF;--qp-edge:#EFE3CF;
+  --qp-energy:#07AAFC;--qp-clean:#66C904;--qp-mood:#E6B668;--qp-track:#DEB86E;
+  --qp-icon-line:#374151}
 *{box-sizing:border-box}
-html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%;overflow-x:hidden}html{overscroll-behavior-y:contain}
+html,body{margin:0;padding:0;background:linear-gradient(180deg,#FFFBF2 0,var(--qp-bg2) 300px,var(--bg) 760px) fixed;color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%;overflow-x:hidden}html{overscroll-behavior-y:contain}
 header{position:sticky;top:0;z-index:10;background:rgba(246,247,249,.9);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--line);padding:10px 14px;display:flex;flex-direction:column;align-items:stretch;gap:0;padding-top:calc(10px + env(safe-area-inset-top))}
 .hrow{display:flex;justify-content:space-between;align-items:center;width:100%}
 .tabs{display:flex;gap:6px;margin-top:8px;width:100%}
@@ -1059,6 +1063,8 @@ main{padding:12px;max-width:560px;margin:0 auto;display:flex;flex-direction:colu
 .mcb{width:20px;height:20px;border-radius:6px;background:var(--line);flex:none;cursor:pointer;position:relative;user-select:none}
 .mcb.on{background:var(--accent)}
 .mcb.on::after{content:"✓";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;font-weight:700}
+/* 任务队列图标（放在 .mcb 与 .mname 之间，左右各收 3px 抵消 .mrow 的 10px gap） */
+.qico{width:18px;height:18px;flex:none;border-radius:5px;margin:0 -3px}
 .mname{font-weight:650;font-size:14px}
 .mname.off{color:var(--sub);font-weight:500}
 .mdet{margin-left:auto;font-size:12.5px;color:var(--sub);font-variant-numeric:tabular-nums;text-align:right}
@@ -1271,6 +1277,10 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
 /* 跟随系统深色模式：变量整体换肤 + 硬编码底色的控件逐个覆盖 */
 @media(prefers-color-scheme:dark){
   :root{--bg:#111318;--card:#1b1e26;--line:#2a2e3a;--text:#e7eaf0;--sub:#98a0ae;--accent:#ff9440;--ok:#22c55e;--gold:#D4A017;--gold-d:#E6C35C}
+  /* QQ 宠物暖色 · 深色适配 */
+  :root{--bg:#171512;--card:#201D18;--line:#332C22;--text:#f0e9dd;--sub:#a89e8d;
+    --qp-bg2:#241F18;--qp-card-warm:#262119;--qp-edge:#332C22;--qp-track:#544535;
+    --qp-icon-line:#E7EAF0}
   header{background:rgba(17,19,24,.88)}
   .tabs button,.logctl button,.shotctl button,.minibtn,.savebtn.ghost,.advlist{background:#1b1e26;color:var(--text)}
   .logctl input,.form select,.form input[type=number],.form input[type=text],.plinedit input{background:#15171e;color:var(--text);border-color:var(--line)}
@@ -1429,6 +1439,9 @@ html{scrollbar-width:thin;scrollbar-color:#cfd3db transparent}
 const $=s=>document.querySelector(s);
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 const TASKNAME={care:'护理',school:'学习',friend_care:'好友护理',gift_bag:'福袋',hire_friend:'雇佣好友',adventure:'冒险',visit:'踩踩',pk:'PK',work:'打工'};
+// 任务 -> 图标文件名（static/qp-icons/ 下，必须用 colored/ 里存在的名字）
+const TASKICON={care:'soap',school:'logo_study',friend_care:'emoji',gift_bag:'coin',
+  hire_friend:'logo_work',adventure:'logo_adventure',visit:'logo_hangout',pk:'logo_pk',work:'logo_work'};
 let etaRemain=null, etaClock='', schedOn=false;
 let logAuto=true, logFilter='';
 try{ logAuto = localStorage.getItem('qpet_logAuto')!=='0'; }catch(e){}
@@ -1563,6 +1576,7 @@ function renderData(d){
     const tag=TTAG[k]?('<span class="ttag">'+TTAG[k]+'</span>'):'';
     return '<div class="mrow'+(done?' done':'')+(isRun?' run':'')+'">'
       +'<span class="mcb'+(on&&st!=='disabled'?' on':'')+'" data-k="'+k+'"></span>'
+      +'<img class="qico" src="/qp-icons/'+(TASKICON[k]||'coin')+'-24.png" alt="">'
       +'<span class="mname'+(on?'':' off')+'">'+(TASKNAME[k]||k)+'</span>'+tag
       +'<span class="mdet">'+(on?det:'<span class="off-t">已禁用</span>')+'</span></div>';
   };
@@ -2317,6 +2331,16 @@ class Handler(BaseHTTPRequestHandler):
                            MANIFEST_JSON.encode('utf-8'))
             elif path == '/sw.js':
                 self._send(200, 'application/javascript', SW_JS.encode('utf-8'))
+            elif path.startswith('/qp-icons/'):
+                # 路径归属校验：resolve 后必须仍在 static/qp-icons 内
+                # （不要用 `'qp-icons' in fp.parts` 那种写法——`/qp-icons/../x.png`
+                #   的 parts 里同样含 'qp-icons'，会放行穿越，实测返回 200）
+                fp = (BASE / 'static' / path.lstrip('/')).resolve()
+                root = (BASE / 'static' / 'qp-icons').resolve()
+                if fp.exists() and fp.suffix == '.png' and fp.is_relative_to(root):
+                    self._send(200, 'image/png', fp.read_bytes(), 'max-age=604800')
+                else:
+                    self._send(404, 'text/plain', b'not found')
             elif path in ('/icon-192.png', '/icon-512.png'):
                 fp = BASE / 'static' / path.lstrip('/')
                 if fp.exists():
