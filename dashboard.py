@@ -1057,7 +1057,7 @@ HTML = r"""<!doctype html>
   --btn-r-fg:#FFEA70;   /* 右圆钮图标亮黄 */
 
   /* 胶囊（官方 #99E1B053 → alpha 0.6，本色 #E1B053） */
-  --cap-bg:rgba(225,176,83,.60);
+  --cap-bg:#B69251;
   --cap-fg:#FFFFFF;
 
   /* 进度条 */
@@ -1150,13 +1150,15 @@ body{
   transition:transform .12s;
 }
 /* 左侧圆钮：米白底 + 棕色图标（官方 #F9F1E2 / #BE6321） */
-.col-l .rbtn img{width:43%;height:43%;object-fit:contain}
+.col-l .rbtn img{width:55%;height:55%;object-fit:contain}
 /* 右侧圆钮：半透明深褐底 + 亮黄图标（官方 #B18E49 / #FFEA70） */
 .col-r .rbtn{background:var(--btn-r-bg)}
 .col-r .rbtn img{width:43%;height:43%;object-fit:contain}
 .rbtn:active{transform:scale(.94)}
-.rbtn.on{background:var(--accent);box-shadow:0 2px 8px rgba(200,130,20,.4)}
-.rbtn.on img{filter:brightness(0) invert(1)}
+/* 官方圆钮没有"选中态"：所有钮同底色 + 原色图标。
+   选中仅用轻微白色描边提示，不改底色（改底色与官方观感差很远）。 */
+.rbtn.on{box-shadow:0 0 0 calc(var(--u) * 2) rgba(255,255,255,.85),var(--sh-1)}
+.rbtn.on img{filter:none}
 
 /* ---------- 4. 资料卡（官方 x=74 y=26 207×46） ---------- */
 .idcard{
@@ -1203,60 +1205,96 @@ body{
 
 /* ---------- 5. 胶囊两行（官方 y=86 三颗 + y=126 两颗，每颗 67×28 间距 4） ---------- */
 .caps{
-  left:calc(var(--u) * 70);
-  top:calc(var(--u) * 94.3);
-  display:grid;
-  /* 官方每颗 67×28（x=74 起，间距 4）。但官方胶囊里只放"图标+短数字"，
-     我们的数值更长（如 170/500、学 7·工 3），67dp 会裁字（实测 5 颗里 3 颗溢出）。
-     三颗占满中部可用区 74~294：每颗 (220-2*4)/3 ≈ 70.6dp，仍偏紧，
-     故用 minmax 允许按内容伸展到 74dp，并允许数值横向压缩。 */
-  grid-template-columns:repeat(3,minmax(0,calc(var(--u) * 74)));
-  grid-auto-rows:calc(var(--u) * 28);
-  gap:calc(var(--u) * 12) calc(var(--u) * 4);
+  /* 与资料卡同宽同左右缘（官方：资料卡 74~281，胶囊区 74~283，右缘基本齐平）。
+     行内三颗等分（官方每颗 67.1dp），gap 4dp -> (207-8)/3 = 66.3dp。 */
+  left:calc(var(--u) * 74);
+  width:calc(var(--u) * 207);
+  top:calc(var(--u) * 92.5);
+  display:flex;flex-direction:column;
+  gap:calc(var(--u) * 17) 0;
 }
+.caps-row{display:flex;gap:calc(var(--u) * 4)}
+/* 两行都等分，保证左右缘与资料卡对齐（不再按内容自适应 -> 右边参差） */
+.caps-row .cap{flex:1 1 0;min-width:0}
+
+.cap{flex:0 1 auto;min-width:calc(var(--u) * 63)}
+.caps-row:nth-child(2) .cap{flex:0 0 auto}
+
 .cap{
-  display:flex;align-items:center;gap:calc(var(--u) * 3);
-  min-width:0;padding:0 calc(var(--u) * 5);
-  background:var(--cap-bg);border-radius:calc(var(--u) * 14);
-  color:var(--cap-fg);position:relative;box-sizing:border-box;
+  /* 官方结构：图标在胶囊【外面】且比胶囊大（22.3 vs 19.7dp），上下凸出；
+     图标左缘 = 胶囊左缘（胶囊左端被图标压住）。
+     .cap 高 = 图标高 23dp；::before 画 20dp 胶囊体，垂直居中。 */
+  position:relative;
+  display:flex;align-items:center;
+  height:calc(var(--u) * 23);
+  padding:0;box-sizing:border-box;
+  color:var(--cap-fg);
 }
-.cap .cico{width:calc(var(--u) * 15);height:calc(var(--u) * 15);flex:none;border-radius:50%}
+.cap::before{
+  content:"";position:absolute;
+  left:0;right:0;
+  top:50%;transform:translateY(-50%);
+  height:calc(var(--u) * 20);
+  background:var(--cap-bg);
+  border-radius:calc(var(--u) * 10);
+  box-shadow:inset 0 calc(var(--u)*1) calc(var(--u)*2) rgba(255,255,255,.28);
+  z-index:0;
+}
+/* 文字层：占满胶囊体区域，水平+垂直居中（底部进度条由 .bar 绝对定位） */
+.cap .capbody{
+  position:relative;z-index:1;
+  flex:1;min-width:0;height:100%;
+  display:flex;align-items:center;justify-content:center;
+  gap:calc(var(--u) * 2);
+  padding-left:calc(var(--u) * 2);
+  padding-right:calc(var(--u) * 4);
+}
+.cap .cico{
+  width:calc(var(--u) * 23);height:calc(var(--u) * 23);
+  flex:none;position:relative;z-index:2;object-fit:contain;
+  /* 图标圆心 与 胶囊圆头圆心 对齐：
+       胶囊高 20dp（半径 10），left=0 -> 圆头圆心在 10dp
+       图标直径 23dp -> margin-left = 10 - 23/2 = -1.5dp
+     这样图标正好把胶囊左端的圆头完全盖住。 */
+  margin-left:calc(var(--u) * -1.5);
+}
 .cap .cval{
-  font-weight:680;font-size:calc(var(--u) * 10);color:#fff;
+  font-weight:680;font-size:calc(var(--u) * 10.5);color:#fff;
   font-variant-numeric:tabular-nums;white-space:nowrap;
-  flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;letter-spacing:-.03em;
+  flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  letter-spacing:-.02em;text-align:center;line-height:1;
 }
-.cap .cunit{font-size:calc(var(--u) * 8.5);color:rgba(255,255,255,.85);white-space:nowrap;
-  flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;max-width:42%}
+.cap .cunit{
+  font-size:calc(var(--u) * 8.5);color:rgba(255,255,255,.85);
+  white-space:nowrap;flex:0 1 auto;min-width:0;overflow:hidden;
+  text-overflow:ellipsis;max-width:46%;line-height:1;
+}
 .cap .bar{
-  position:absolute;left:calc(var(--u) * 7);right:calc(var(--u) * 7);
-  bottom:calc(var(--u) * 3);height:calc(var(--u) * 3);
-  margin:0;background:rgba(255,255,255,.28);border-radius:2px;
+  position:absolute;z-index:1;
+  left:calc(var(--u) * 17);right:calc(var(--u) * 4);
+  bottom:calc(var(--u) * 3.5);height:calc(var(--u) * 2);
+  margin:0;background:rgba(255,255,255,.30);border-radius:1px;
 }
 .cap .bar>i{background:var(--accent)}
-/* 长数值（金币 5 位数、冒险 170/500、学工 3 段）单独收小字号，避免裁字 */
-.cap .cval#coins,.cap .cval#advTxt{font-size:calc(var(--u) * 9.5)}
-.cap .cval#swTxt{font-size:calc(var(--u) * 9)}
-/* 金币胶囊里的"· 21:41"（最后更新时刻）在 72dp 胶囊里放不下，会挤掉数值。
-   官方金币胶囊也只放数值（2.2w），时钟已在资料卡上显示 —— 故隐藏。
-   JS 仍在给 #coinsAt 赋值，元素保留避免空引用。 */
+/* 长数值单独收小，避免裁字 */
+.cap .cval#coins,.cap .cval#advTxt{font-size:calc(var(--u) * 9)}
+.cap .cval#swTxt,.cap .cval#expTxt,.cap .cval#visitTxt,.cap .cval#pkTxt{font-size:calc(var(--u) * 9)}
+/* 金币的最后更新时刻在 67dp 胶囊里放不下（官方金币胶囊也只放数值），隐藏 */
 .cap .cunit#coinsAt{display:none}
 
 /* ---------- 5b. 中部场景层（官方是 3D 宠物；这里放任务队列） ---------- */
 .scene{
-  /* 官方中部内容区：x=74 ~ 294（右侧 294~344 留给功能栏）。
-     面板居中于该区间：left=74，width=220 -> 中心 184 ≈ 画布中心 180。
-     之前用 width=340（74~414）会压住右功能栏，已修正。 */
+  /* 内容区（74~281，与资料卡同宽）。高度按内容自适应 —— 原来用 bottom 固定
+     撑到页面底部，任务少时下方留大片空白（截图反馈）。 */
   left:calc(var(--u) * 74);
-  width:calc(var(--u) * 220);
+  width:calc(var(--u) * 207);
   top:calc(var(--u) * 162);
-  bottom:calc(var(--u) * 96);
   display:flex;flex-direction:column;
   overflow:hidden;
 }
 /* 任务队列面板：占据场景层剩余空间，可滚动 */
 .qpanel{
-  flex:1;min-height:0;display:flex;flex-direction:column;
+  display:flex;flex-direction:column;
   background:rgba(255,255,255,.62);
   border-radius:calc(var(--u) * 14);
   padding:calc(var(--u) * 8) calc(var(--u) * 9);
@@ -1272,17 +1310,23 @@ body{
   left:calc(var(--u) * 294);
   top:calc(var(--u) * 319.3);
   width:calc(var(--u) * 50);
-  z-index:5;                 /* 功能栏在面板之上，不被半透明遮住 */
-  display:flex;flex-direction:column;gap:0;
-  /* 官方结构：feed+shower 同一子容器（无缝），friend 单独一组、前隔 20dp */
+  z-index:5;
+  display:flex;flex-direction:column;
+  gap:calc(var(--u) * 20);   /* 官方：两段之间空 20dp */
+}
+/* 分组容器承载磨砂底与圆角：组内按钮无缝连成一个胶囊体。
+   官方 View 树就是两段（上段 feed+shower 共用容器、下段 friend 独立）。 */
+.fb-group{
+  display:flex;flex-direction:column;
+  background:rgba(255,255,255,.55);
+  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  border-radius:calc(var(--u) * 25);
+  box-shadow:var(--sh-1);
+  overflow:hidden;
 }
 .fab{
   width:calc(var(--u) * 50);height:calc(var(--u) * 70);
-  border:0;border-radius:calc(var(--u) * 25);
-  /* 官方右功能栏是半透明白磨砂块（feed/shower 同组无缝、friend 独立） */
-  background:rgba(255,255,255,.55);
-  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
-  box-shadow:var(--sh-1);
+  border:0;border-radius:0;background:transparent;box-shadow:none;
   display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:calc(var(--u) * 2);
   cursor:pointer;color:var(--button-fg,var(--strong));
@@ -1764,17 +1808,17 @@ html[data-scene="record"]{--qp-room:var(--qp-room-record)}
 
     <!-- 左列圆钮（官方 4 个：返回/设置/消息/日记，x=20 y=28/86/146/206） -->
     <nav class="flt col-l" id="tabbar">
-      <button class="rbtn on" data-tab="main" title="总览"><img src="/qp-icons/cdn/mood_happy_paw.png" alt=""></button>
-      <button class="rbtn" data-tab="adv" title="冒险"><img src="/qp-icons/cdn/mood_fire.png" alt=""></button>
-      <button class="rbtn" data-tab="plan" title="职业"><img src="/qp-icons/cdn/medal_gold.png" alt=""></button>
-      <button class="rbtn" data-tab="notify" title="通知"><img src="/qp-icons/cdn/mood_laugh.png" alt=""></button>
+      <button class="rbtn on" data-tab="main" title="总览"><img src="/qp-icons/official/off_l1_back.png" alt=""></button>
+      <button class="rbtn" data-tab="adv" title="冒险"><img src="/qp-icons/official/off_l2_gear.png" alt=""></button>
+      <button class="rbtn" data-tab="plan" title="职业"><img src="/qp-icons/official/off_l3_diary.png" alt=""></button>
+      <button class="rbtn" data-tab="notify" title="通知"><img src="/qp-icons/official/off_l4_bell.png" alt=""></button>
     </nav>
 
     <!-- 右列圆钮（官方 3 个：装扮/会员/盲盒，x=418 y=28/86/146） -->
     <nav class="flt col-r" id="tabbar2">
-      <button class="rbtn r" data-tab="set" title="设置"><img src="/qp-icons/cdn/care_wand.png" alt=""></button>
-      <button class="rbtn r" data-tab="log" title="日志"><img src="/qp-icons/cdn/icon_ring.png" alt=""></button>
-      <button class="rbtn r" data-tab="shot" title="实时画面"><img src="/qp-icons/cdn/medi_doctor.png" alt=""></button>
+      <button class="rbtn r" data-tab="set" title="设置"><img src="/qp-icons/official/off_r1_tshirt.png" alt=""></button>
+      <button class="rbtn r" data-tab="log" title="日志"><img src="/qp-icons/official/off_r2_hat.png" alt=""></button>
+      <button class="rbtn r" data-tab="shot" title="实时画面"><img src="/qp-icons/official/off_r3_diamond.png" alt=""></button>
     </nav>
 
     <!-- 资料卡（官方 x=74 y=26 207×46） -->
@@ -1788,14 +1832,20 @@ html[data-scene="record"]{--qp-room:var(--qp-room-record)}
       <span class="meta" id="clock">--:--</span>
     </div>
 
-    <!-- 胶囊（官方 y=86 三颗 + y=126 两颗，每颗 67×28 间距 4） -->
+    <!-- 胶囊（官方结构：图标在胶囊【外面】且比胶囊大 22.3 vs 19.7dp；文字在胶囊内居中）
+         第1行 = 金币/踩踩/PK   第2行 = 冒险/学习打工/经验
+         行内 4dp 间距，行间 40dp 步进（官方 y 94.3 -> 134.3） -->
     <div class="flt caps">
-      <div class="cap" title="金币"><img class="cico" src="/qp-icons/cdn/coin_paw.png" alt=""><span class="cval" id="coins">--</span><span class="cunit" id="coinsAt"></span></div>
-      <div class="cap" title="今日踩踩"><img class="cico" src="/qp-icons/cdn/mood_happy_star.png" alt=""><span class="cval" id="visitTxt">--</span><div class="bar"><i id="visitBar"></i></div></div>
-      <div class="cap" title="今日PK"><img class="cico" src="/qp-icons/cdn/mood_smirk.png" alt=""><span class="cval" id="pkTxt">--</span><div class="bar"><i id="pkBar"></i></div></div>
-      <div class="cap" title="今日冒险"><img class="cico" src="/qp-icons/cdn/mood_fire.png" alt=""><span class="cval" id="advTxt">--</span></div>
-      <div class="cap" title="学习/打工" id="capSw"><img class="cico" src="/qp-icons/cdn/leaf_exp.png" alt=""><span class="cval" id="swTxt">--</span><span class="cunit" id="swLbl" hidden></span><div class="bar bar-split"><i id="swBarSchool"></i><i id="swBarWork"></i></div></div>
-      <div class="cap" title="经验日常"><img class="cico" src="/qp-icons/cdn/dot_diamond.png" alt=""><span class="cval" id="expTxt">--</span></div>
+      <div class="caps-row">
+        <div class="cap" title="金币"><img class="cico" src="/qp-icons/official/cap_coin.png" alt=""><div class="capbody"><span class="cval" id="coins">--</span><span class="cunit" id="coinsAt"></span></div></div>
+        <div class="cap" title="今日踩踩"><img class="cico" src="/qp-icons/official/cap_paw.png" alt=""><div class="capbody"><span class="cval" id="visitTxt">--</span><div class="bar"><i id="visitBar"></i></div></div></div>
+        <div class="cap" title="今日PK"><img class="cico" src="/qp-icons/official/cap_coin_hand.png" alt=""><div class="capbody"><span class="cval" id="pkTxt">--</span><div class="bar"><i id="pkBar"></i></div></div></div>
+      </div>
+      <div class="caps-row">
+        <div class="cap" title="今日冒险"><img class="cico" src="/qp-icons/official/cap_compass.png" alt=""><div class="capbody"><span class="cval" id="advTxt">--</span></div></div>
+        <div class="cap" title="学习/打工" id="capSw"><img class="cico" src="/qp-icons/official/cap_cookie.png" alt=""><div class="capbody"><span class="cval" id="swTxt">--</span><span class="cunit" id="swLbl" hidden></span><div class="bar bar-split"><i id="swBarSchool"></i><i id="swBarWork"></i></div></div></div>
+        <div class="cap" title="经验日常"><img class="cico" src="/qp-icons/official/cap_diamond.png" alt=""><div class="capbody"><span class="cval" id="expTxt">--</span></div></div>
+      </div>
     </div>
 
     <!-- 中部场景层（官方是 3D 宠物；此处放任务队列） -->
@@ -1809,14 +1859,18 @@ html[data-scene="record"]{--qp-room:var(--qp-room-record)}
 
     <!-- 右功能栏（官方 x=414 y=335/405/495，各 50×70） -->
     <div class="flt funcbar" aria-label="调度器控制">
-      <button class="fab" id="btnRunnerStart" title="启动调度器"><span class="fi">&#9654;</span><span class="ft">启动</span></button>
-      <button class="fab stop" id="btnRunnerStop" title="停止调度器"><span class="fi">&#9632;</span><span class="ft">停止</span></button>
-      <button class="fab ghost" id="btnShot" title="刷新画面"><span class="fi">&#8635;</span><span class="ft">画面</span></button>
+      <div class="fb-group">
+        <button class="fab" id="btnRunnerStart" title="启动调度器"><span class="fi">&#9654;</span><span class="ft">启动</span></button>
+        <button class="fab stop" id="btnRunnerStop" title="停止调度器"><span class="fi">&#9632;</span><span class="ft">停止</span></button>
+      </div>
+      <div class="fb-group">
+        <button class="fab ghost" id="btnShot" title="刷新画面"><span class="fi">&#8635;</span><span class="ft">画面</span></button>
+      </div>
     </div>
 
     <!-- 底部入口（官方 x=215 y=728 50×54） -->
     <div class="flt drawer" id="runnerCard">
-      <img class="dico" id="runnerIcon" src="/qp-icons/cdn/coin_paw.png" alt="">
+      <img class="dico" id="runnerIcon" src="/qp-icons/official/cap_coin.png" alt="">
       <div class="dcol">
         <div class="dtitle"><span class="dot" id="runnerDot"></span><span id="runnerState">--</span><span class="dhint" id="runnerHint"></span></div>
         <div class="dsub" id="workSub"></div>
