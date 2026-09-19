@@ -1079,6 +1079,8 @@ HTML = r"""<!doctype html>
   --qp-room-shower:url('/qp-icons/bg/room-shower.jpg');
   --qp-room-record:url('/qp-icons/bg/room-record.jpg');
   --qp-room:var(--qp-room-main);
+  /* 1dp = 可用宽度/360（全局：设置页等非 .home 页面也要用） */
+  --u:var(--vu, calc(100vw / 360));
 }
 
 /* ---------- 2. 基础 ---------- */
@@ -1113,7 +1115,7 @@ body{
      按钮 42dp 占屏宽 11.67%。若按 480dp（平板/模拟器版）做，按钮只占 8.75%，
      会明显偏小（实测小了 25%）。
      不用 100vw：它含滚动条宽度，会让坐标偏大约 2%。由 JS 写入 --vu。 */
-  --u:var(--vu, calc(100vw / 360));
+
   position:relative;
   width:100%;max-width:100vw;
   box-sizing:border-box;
@@ -1527,31 +1529,46 @@ body{
 #shotLink.loading.failed::before{content:"获取失败，稍后自动重试…";color:#b45309}
 #shotLink.loading #phoneShot{visibility:hidden}
 
-/* ---------- 9. 表单与控件 ---------- */
+/* ---------- 9. 表单与控件（照 QQ 宠物设置页：浅灰底 + 白卡分组） ---------- */
+/* 分组容器 = 一张白色圆角卡片；组标题（.fsect）在卡片【外】上方 */
+.form .fgrp{margin:calc(var(--u) * 14) 0 0}
+.form .fgrp:first-child{margin-top:calc(var(--u) * 8)}
+/* 卡片外的小标题（QQ 宠物设置页风格：灰色小字，在卡片上方） */
+.form .fsect{
+  font-size:calc(var(--u) * 11.5);
+  color:#8A8A8E;
+  padding:0 calc(var(--u) * 16) calc(var(--u) * 6);
+  user-select:none;
+}
+.form .fsect::before{content:none}
+/* 白色圆角卡片 */
+.form .fsec{
+  background:#fff;
+  border-radius:calc(var(--u) * 12);
+  margin:0 calc(var(--u) * 12);
+  overflow:hidden;
+  box-shadow:0 1px 2px rgba(0,0,0,.04);
+}
 .form .frow{
-  display:flex;justify-content:space-between;align-items:center;gap:10px;
-  padding:8px 0;border-top:1px dashed var(--line);
+  display:flex;justify-content:space-between;align-items:center;
+  gap:calc(var(--u) * 10);
+  min-height:calc(var(--u) * 50);
+  padding:calc(var(--u) * 10) calc(var(--u) * 16);
+  border-top:1px solid #F0F0F2;
+  font-size:calc(var(--u) * 14);
 }
 .form .frow:first-child{border-top:0}
-.form .k{color:var(--sub);font-size:13.5px;flex:none}
+.form .k{color:#1C1C1E;font-size:calc(var(--u) * 14);flex:none}
+.form .u{color:#8A8A8E;font-size:calc(var(--u) * 12);margin-left:calc(var(--u) * 3)}
 .form select,.form input[type=number],.form input[type=text]{
-  border:1px solid var(--line);border-radius:var(--r-sm);
-  padding:6px 8px;font-size:13px;background:#FFFDF8;color:var(--text);max-width:58%;
+  border:0;background:transparent;color:#8A8A8E;
+  font-size:calc(var(--u) * 14);text-align:right;
+  padding:calc(var(--u) * 4) 0;max-width:58%;
 }
-.form input[type=number]{width:86px;text-align:right}
-.form input[type=text]{width:150px;text-align:right}
-.form .fsec{margin-top:16px}
-.form .fsec:first-child{margin-top:0}
-.form .fsect{
-  font-size:11px;font-weight:600;color:var(--sub);letter-spacing:.06em;
-  padding:0 0 6px;display:flex;align-items:center;gap:6px;user-select:none;
-}
-.form .fsect::before{
-  content:"";width:3px;height:9px;border-radius:2px;
-  background:var(--accent);opacity:.6;flex:none;
-}
-.form .two{display:flex;gap:6px}
-.form .two input{width:64px}
+.form input[type=number]{width:calc(var(--u) * 70)}
+.form input[type=text]{width:calc(var(--u) * 140)}
+.form .two{display:flex;gap:calc(var(--u) * 6)}
+.form .two input{width:calc(var(--u) * 56)}
 
 /* 开关 */
 .sw{
@@ -1733,8 +1750,6 @@ pre#logbox{
 @media(min-width:640px){
   .grid{grid-template-columns:repeat(6,minmax(0,1fr))}
   .thumbs{grid-template-columns:repeat(4,minmax(0,1fr))}
-  #setForm{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 28px;align-items:start}
-  #setForm .fsec:nth-child(1),#setForm .fsec:nth-child(2){margin-top:0}
 }
 /* 桌面（≥920px）：加宽版心 */
 @media(min-width:920px){
@@ -1763,6 +1778,99 @@ pre#logbox{
 html[data-scene="feed"]{--qp-room:var(--qp-room-feed)}
 html[data-scene="shower"]{--qp-room:var(--qp-room-shower)}
 html[data-scene="record"]{--qp-room:var(--qp-room-record)}
+
+/* ---------- 设置页：照 QQ 宠物设置页（iOS 风格浅灰底 + 白卡分组） ---------- */
+section[data-page="set"]{
+  background:#F2F2F7;
+  min-height:100dvh;
+  margin:0;padding:0 0 calc(var(--u) * 20);
+  border:0;border-radius:0;box-shadow:none;
+}
+section[data-page="set"] > h2{
+  display:none;   /* 原「设置 保存后下一轮调度生效」标题移除（改用分组标题） */
+}
+
+
+
+/* ---------- 设置页（照 QQ 宠物：顶栏 + 分组卡片） ---------- */
+/* 顶部导航栏：白底、返回箭头在左、标题居中 */
+.navhead{
+  position:relative;
+  display:flex;align-items:center;
+  height:calc(var(--u) * 48);
+  background:#fff;
+  border-bottom:1px solid #EDEDF0;
+  padding:0 calc(var(--u) * 12);
+}
+.navhead .backbtn{
+  width:calc(var(--u) * 34);height:calc(var(--u) * 34);
+  border:0;background:transparent;padding:0;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;flex:none;
+}
+.navhead .backbtn img{width:62%;height:62%;object-fit:contain}
+.navhead .backbtn:active{opacity:.55}
+.navhead .navtitle{
+  position:absolute;left:50%;transform:translateX(-50%);
+  font-size:calc(var(--u) * 17);font-weight:600;color:#1C1C1E;
+  white-space:nowrap;
+}
+/* 一级列表：小节（标题在卡外 + 白卡内多行） */
+.msec{margin-top:calc(var(--u) * 16)}
+.msec:first-child{margin-top:calc(var(--u) * 10)}
+.menurow{cursor:pointer}
+.menurow:active{background:#F5F5F7}
+.menurow .chev{
+  color:#C7C7CC;font-size:calc(var(--u) * 18);line-height:1;
+  margin-left:auto;padding-left:calc(var(--u) * 6);
+}
+
+/* 顶栏右侧的附加信息（如日志的条数、冒险的场次） */
+.navhead .navmeta{
+  margin-left:auto;
+  font-size:calc(var(--u) * 11);
+  color:#8A8A8E;font-weight:400;
+  white-space:nowrap;
+  padding-right:calc(var(--u) * 4);
+}
+
+/* ---------- 内页统一排版（照设置页：浅灰底 + 白卡分节） ---------- */
+main > section[data-page]:not([data-page="main"]){
+  background:#F2F2F7;
+  min-height:100dvh;
+  margin:0;padding:0 0 calc(var(--u) * 24);
+  border:0;border-radius:0;box-shadow:none;
+}
+/* 分节：小标题（卡外） + 白卡（卡内） */
+.pgsec{margin-top:calc(var(--u) * 14)}
+.pgsec:first-of-type{margin-top:calc(var(--u) * 10)}
+.pgsec > .pgsec-t{
+  font-size:calc(var(--u) * 11.5);color:#8A8A8E;
+  padding:0 calc(var(--u) * 16) calc(var(--u) * 6);
+}
+.pgsec > .pgsec-c{
+  background:#fff;
+  border-radius:calc(var(--u) * 12);
+  margin:0 calc(var(--u) * 12);
+  padding:calc(var(--u) * 12) calc(var(--u) * 14);
+  box-shadow:0 1px 2px rgba(0,0,0,.04);
+  overflow:hidden;
+}
+/* 卡内的标题/图表不再自带边框与底色 */
+.pgsec-c .advchart,.pgsec-c .advlist,.pgsec-c .advtip{background:transparent;border:0}
+.pgsec-c .advcap:first-child{margin-top:0}
+.pgsec-t + .pgsec-c > .advcap:first-child{margin-top:0}
+/* 内页里原橙色竖条小节标题 -> 灰色小字 */
+main > section[data-page]:not([data-page="main"]) .subh{
+  font-size:calc(var(--u) * 11.5);color:#8A8A8E;letter-spacing:0;
+  margin:calc(var(--u) * 14) calc(var(--u) * 16) calc(var(--u) * 2);padding:0;
+}
+/* 内页按钮/提示与卡片对齐 */
+main > section[data-page]:not([data-page="main"]) > .savebtn,
+main > section[data-page]:not([data-page="main"]) > .btnrow2,
+main > section[data-page]:not([data-page="main"]) > .saveMsg,
+main > section[data-page]:not([data-page="main"]) > .plannote{
+  margin-left:calc(var(--u) * 12);margin-right:calc(var(--u) * 12);
+}
 </style>
 </head>
 <body>
@@ -1772,7 +1880,8 @@ html[data-scene="record"]{--qp-room:var(--qp-room-record)}
 <main>
 
   <section class="card" id="advCard" data-page="adv">
-    <h2>冒险记录 <span id="advMeta" style="font-weight:400;font-size:10.5px"></span></h2>
+    
+      <div class="navhead"><button class="backbtn" data-back="main" title="返回总览"><img src="/qp-icons/official/off_l1_back.png" alt=""></button><span class="navtitle">冒险记录</span><span class="navmeta"><span id="advMeta" style="font-weight:400;font-size:10.5px"></span></span></div>
     <div class="advcap" id="advDateRow" style="margin:-2px 0 4px"></div>
     <div class="workline"><span class="big" id="advNet">--</span><span class="hint" id="advNetHint"></span></div>
     <div class="subline" id="advSub"></div>
@@ -1789,7 +1898,8 @@ html[data-scene="record"]{--qp-room:var(--qp-room-record)}
   </section>
 
   <section class="card" id="planCard" data-page="plan">
-    <h2>职业解锁计划 <span id="planMeta" style="font-weight:400;font-size:10.5px"></span></h2>
+    
+      <div class="navhead"><button class="backbtn" data-back="main" title="返回总览"><img src="/qp-icons/official/off_l1_back.png" alt=""></button><span class="navtitle">职业解锁计划</span><span class="navmeta"><span id="planMeta" style="font-weight:400;font-size:10.5px"></span></span></div>
     <div class="planbars" id="planBars"></div>
     <div class="subh">隐藏职业哨兵 <span id="watchMeta" style="font-weight:400;font-size:10.5px"></span></div>
     <div class="watchbox" id="watchBox"></div>
@@ -1827,15 +1937,15 @@ html[data-scene="record"]{--qp-room:var(--qp-room-record)}
     <!-- 左列圆钮（官方 4 个：返回/设置/消息/日记，x=20 y=28/86/146/206） -->
     <nav class="flt col-l" id="tabbar">
       <button class="rbtn on" data-tab="main" title="总览"><img src="/qp-icons/official/off_l1_back.png" alt=""></button>
-      <button class="rbtn" data-tab="adv" title="冒险"><img src="/qp-icons/official/off_l2_gear.png" alt=""></button>
-      <button class="rbtn" data-tab="plan" title="职业"><img src="/qp-icons/official/off_l3_diary.png" alt=""></button>
+      <button class="rbtn" data-tab="set" title="设置"><img src="/qp-icons/official/off_l2_gear.png" alt=""></button>
+      <button class="rbtn" data-tab="log" title="日志"><img src="/qp-icons/official/off_l3_diary.png" alt=""></button>
       <button class="rbtn" data-tab="notify" title="通知"><img src="/qp-icons/official/off_l4_bell.png" alt=""></button>
     </nav>
 
     <!-- 右列圆钮（官方 3 个：装扮/会员/盲盒，x=418 y=28/86/146） -->
     <nav class="flt col-r" id="tabbar2">
-      <button class="rbtn r" data-tab="set" title="设置"><img src="/qp-icons/official/off_r1_tshirt.png" alt=""></button>
-      <button class="rbtn r" data-tab="log" title="日志"><img src="/qp-icons/official/off_r2_hat.png" alt=""></button>
+      <button class="rbtn r" data-tab="adv" title="冒险"><img src="/qp-icons/official/cap_compass.png" alt=""></button>
+      <button class="rbtn r" data-tab="plan" title="职业"><img src="/qp-icons/official/off_r2_hat.png" alt=""></button>
       <button class="rbtn r" data-tab="shot" title="实时画面"><img src="/qp-icons/official/off_r3_diamond.png" alt=""></button>
     </nav>
 
@@ -1903,6 +2013,10 @@ html[data-scene="record"]{--qp-room:var(--qp-room-record)}
 
   <!-- 实时画面（独立页）：手机画面单独一屏，便于放大看 / 点开原图 -->
   <section class="shotpage" data-page="shot">
+    <div class="navhead">
+      <button class="backbtn" data-back="main" title="返回总览"><img src="/qp-icons/official/off_l1_back.png" alt=""></button>
+      <span class="navtitle">实时画面</span>
+    </div>
     <div class="scenecard duoshot" id="shotCardWrap">
       <span class="shotmeta" id="shotMeta"></span>
       <a id="shotLink" class="loading" href="/api/screenshot" target="_blank" rel="noopener"><img id="phoneShot" alt="加载中…"></a>
@@ -1917,17 +2031,30 @@ html[data-scene="record"]{--qp-room:var(--qp-room-record)}
 
 
   <section class="card" data-page="notify">
-    <h2>通知 <span style="font-weight:400;color:var(--sub)">推送渠道与事件开关</span></h2>
+    
+      <div class="navhead"><button class="backbtn" data-back="main" title="返回总览"><img src="/qp-icons/official/off_l1_back.png" alt=""></button><span class="navtitle">通知</span><span class="navmeta"><span style="font-weight:400;color:var(--sub)">推送渠道与事件开关</span></span></div>
     <div class="form" id="notifyForm"></div>
-    <button class="savebtn" id="btnNotifySave">保存通知设置</button>
     <div class="saveMsg" id="notifySaveMsg"></div>
   </section>
 
   <section class="card" data-page="set">
-    <h2>设置 <span style="font-weight:400;color:var(--sub)">保存后下一轮调度生效</span></h2>
-    <div class="form" id="setForm"></div>
-    <button class="savebtn" id="btnSave">保存设置</button>
-    <div class="saveMsg" id="saveMsg"></div>
+    <!-- 第一级：分类列表（点进某项 -> 第二级该分类的设置项） -->
+    <div id="setIndex">
+      <div class="navhead">
+        <button class="backbtn" data-back="main" title="返回总览"><img src="/qp-icons/official/off_l1_back.png" alt=""></button>
+        <span class="navtitle">设置</span>
+      </div>
+      <div class="form" id="setMenu"></div>
+    </div>
+    <!-- 第二级：某个分类的设置项 -->
+    <div id="setDetail" class="hide">
+      <div class="navhead">
+        <button class="backbtn" id="btnSetBack" title="返回设置列表"><img src="/qp-icons/official/off_l1_back.png" alt=""></button>
+        <span class="navtitle" id="setDetailTitle">设置</span>
+      </div>
+      <div class="form" id="setForm"></div>
+      <div class="saveMsg" id="saveMsg"></div>
+    </div>
     <div class="form" style="margin-top:16px">
       <div class="fsec"><div class="fsect">小号工具人</div>
         <div class="frow"><span class="k">大号名称</span><input type="text" id="txtAltMain" placeholder="大号的主人昵称或宠物名（服务端匹配）"></div>
@@ -1940,7 +2067,8 @@ html[data-scene="record"]{--qp-room:var(--qp-room-record)}
   </section>
 
   <section class="card" data-page="log">
-    <h2>实时日志 <span id="logMeta" style="font-weight:400"></span></h2>
+    
+      <div class="navhead"><button class="backbtn" data-back="main" title="返回总览"><img src="/qp-icons/official/off_l1_back.png" alt=""></button><span class="navtitle">实时日志</span><span class="navmeta"><span id="logMeta" style="font-weight:400"></span></span></div>
     <div class="logctl">
       <button id="btnAuto" class="on">自动滚动</button>
       <input id="logFilter" placeholder="过滤关键字…">
@@ -2157,6 +2285,7 @@ function renderData(d){
     $('#shots').innerHTML=shots.map(s=>'<a href="/files/'+encodeURIComponent(s.name)+'" target="_blank"><img loading="lazy" src="/files/'+encodeURIComponent(s.name)+'"><span class="cap">'+s.mtime+'</span></a>').join('');
   }
   if(d.editable && !setDirty) renderSettings(d.editable);
+  if(window.__wrapPages) window.__wrapPages();
   renderCfg((d.config||{}).rows);
   // 页面底部的策略行（footer）已按需求移除，这里不再拼文案
 }
@@ -2439,6 +2568,49 @@ function renderCfg(rows){
   $('#cfgList').innerHTML=rows.map(r=>'<div class="row"><span class="k">'+r[0]+'</span><span class="v">'+r[1]+'</span></div>').join('');
 }
 
+// ---- 设置页两级切换：一级分类列表 <-> 二级分类详情 ----
+function showSetIndex(skipHistory){
+  const a=document.getElementById('setIndex'), b=document.getElementById('setDetail');
+  if(a) a.classList.remove('hide');
+  if(b) b.classList.add('hide');
+  window.__setGrp=null;
+  if(!skipHistory){
+    try{ history.pushState({tab:'set'}, '', '?tab=set'); }catch(e){}
+  }
+}
+function openSetGroup(key, skipHistory){
+  const a=document.getElementById('setIndex'), b=document.getElementById('setDetail');
+  if(!a||!b) return;
+  const grp=document.getElementById('grp_'+key);
+  if(!grp) return;
+  if(!skipHistory){
+    try{ history.pushState({tab:'set',grp:key}, '', '?tab=set&grp='+key); }catch(e){}
+  }
+  // 只显示这一组，其余隐藏
+  document.querySelectorAll('#setForm .fgrp').forEach(g=>g.classList.toggle('hide', g.id!=='grp_'+key));
+  const t=document.getElementById('setDetailTitle');
+  if(t) t.textContent=grp.dataset.title||'设置';
+  a.classList.add('hide'); b.classList.remove('hide');
+  window.__setGrp=key;
+}
+document.addEventListener('click',function(e){
+  const b=e.target.closest && e.target.closest('#btnSetBack');
+  if(b){ showSetIndex(); }
+},true);
+
+// ---- 共用卡片生成器（设置页与通知页共用，保证两页排版完全一致） ----
+// 结构：.fgrp（小节）> .fsect（卡外小标题） + .fsec（白卡，内含 .frow 行）
+function card(title, rows, key){
+  return '<div class="fgrp"'+(key?(' id="grp_'+key+'" data-title="'+title+'"'):'')
+    +'><div class="fsect">'+title+'</div>'
+    +'<div class="fsec">'+rows.join('')+'</div></div>';
+}
+// 行：左键值 + 右侧任意控件（开关/输入/下拉），设置页与通知页通用
+function rowKv(label, ctrl, tip){
+  return '<div class="frow"'+(tip?(' title="'+tip+'"'):'')+'>'
+    +'<span class="k">'+label+'</span>'+ctrl+'</div>';
+}
+
 let setInit=null, setDirty=false;
 function renderSettings(ed){
   if(!ed) return;
@@ -2448,7 +2620,8 @@ function renderSettings(ed){
   // 且各任务能否执行还取决于自身条件——金币/时长上限/疲劳/次数，见 _school_due 等）
   const moOpts=[['school>hire_friend>work>adventure','先打工，打满 8h 再冒险'],['school>hire_friend>adventure>work','先冒险，冒险没次数了再打工']];
   const moSel=(cur)=>'<select id="selMainOrder" title="主任务组（学习/雇佣/冒险/打工）互斥时的执行优先级：按 > 顺序逐个检查，第一个条件满足的执行。学习与雇佣好友在两组预设里都固定排在最前，此处切换的只是打工与冒险的先后；每个任务还要自身条件满足才会执行（金币达标/未超时长上限/未疲劳/次数未满），改完下一轮调度生效">'+moOpts.map(o=>'<option value="'+o[0]+'"'+(o[0]===cur?' selected':'')+'>'+o[1]+'</option>').join('')+(moOpts.some(o=>o[0]===cur)?'':'<option value="'+esc(cur||'')+'" selected>自定义：'+esc(cur||'')+'</option>')+'</select>';
-  const FG=(t,rows)=>'<div class="fsec"><div class="fsect">'+t+'</div>'+rows.join('')+'</div>';
+  // 复用全局 card()：组标题在卡片【外】，行在白色卡片【内】
+  const FG=(t,rows,key)=>card(t,rows,key);
   $('#setForm').innerHTML=
     FG('学习',[
     '<div class="frow"><span class="k">只打工不学习</span><button class="sw'+(ed.school_enabled?'':' on')+'" id="swSchool" title="开=只打工；关=学习+打工"></button></div>',
@@ -2458,13 +2631,13 @@ function renderSettings(ed){
     '<div class="frow"><span class="k">当前选择</span><span id="schoolHint" style="color:var(--sub);font-size:12px"></span></div>',
     '<div class="frow"><span class="k">档位说明</span><span style="color:var(--sub);font-size:12px">课程轮播固定 7 张：卡1-3 短课（力量/智力/魅力）、卡4-6 长课（同序）、卡7 萌芽夏令营。各学院具体分钟数不同（初级10/30、高级30/90），实际时长选课后从面板自动读取，升级学院不用改配置</span></div>',
     '<div class="frow"><span class="k">课时说明</span><span style="color:var(--sub);font-size:12px">短课单位消耗收益更高（每30分钟 +6属性/+30学分 vs 长课 +5/+25）</span></div>',
-    ])+
+    ],'school')+
     FG('打工',[
     '<div class="frow"><span class="k">打工地点</span>'+sel('selLoc', ed.work_locations||[], ed.work_location)+'</div>',
     '<div class="frow"><span class="k">打工时长</span>'+sel('selDur', ['10分钟','45分钟','2小时'], ed.work_duration)+'</div>',
     '<div class="frow"><span class="k">优先雇佣</span><input type="text" id="txtHire" placeholder="宠物名/主人名，空=自动选收益最高" value="'+esc(ed.hire_name||'')+'"></div>',
     '<div class="frow"><span class="k">等TA空闲</span><button class="sw'+(ed.hire_wait?' on':'')+'" id="swHireWait" title="开=优先雇佣的好友正在打工/学习（面板显示 出门中/被雇佣中）时不换人，点头像进主页读剩余时间，等到他结束再雇（期间先跑冒险/护理等其他任务）；显示 对方今天很累了 时等待无意义，仍换收益最高的人。需先填「优先雇佣」"></button></div>',
-    ])+
+    ],'work')+
     FG('学习 / 打工 总控（8h 共享预算）',[
     '<div class="frow"><span class="k">今日学习</span><input type="number" id="numStudyQuota" min="0" max="24" step="1" title="今天最多学几小时。0 = 今天不学习。学习与打工共享同一份合计预算" value="'+(ed.study_quota_hours??8)+'"><span class="u">小时</span></div>',
     '<div class="frow"><span class="k">今日打工</span><input type="number" id="numWorkQuota" min="0" max="24" step="1" title="今天最多打几小时。0 = 今天不打工。学习与打工共享同一份合计预算" value="'+(ed.work_quota_hours??8)+'"><span class="u">小时</span></div>',
@@ -2479,18 +2652,18 @@ function renderSettings(ed){
       +'<button class="minibtn" data-quota="half" title="学习4 / 打工4 / 合计8 / 打工停8 / 金币2000">各半 4+4</button>'
       +'<button class="minibtn" data-quota="both" title="学习8 / 打工8 / 合计8 / 打工停8 / 金币2000（默认：按金币自动选）">都行 8+8</button>'
       +'</span></div>',
-    ])+
+    ],'quota')+
     FG('疲劳分两层（8h 降收益仍可跑 / 12h 完全停止）',[
     '<div class="frow"><span class="k">第一层门槛</span><input type="number" id="numEffT1" min="0" max="24" step="1" title="学习+打工合计达到该时长进入【第一层】：收益效率降到 25%，但仍可继续学习/打工。游戏在 8h/12h 的提示文案相同，分层以本工具的时长账本为准" value="'+(ed.efficiency_tier1_hours??8)+'"><span class="u">小时 → 25%，仍可跑</span></div>',
     '<div class="frow"><span class="k">第二层门槛</span><input type="number" id="numEffT2" min="0" max="24" step="1" title="学习+打工合计达到该时长进入【第二层】：收益效率降到 10%，且完全禁止学习/打工（转冒险）。0 = 不设第二层" value="'+(ed.efficiency_tier2_hours??12)+'"><span class="u">小时 → 10%，完全停</span></div>',
     '<div class="frow"><span class="k">说明</span><span style="color:var(--sub);font-size:12px">第一层只降收益、不拦任务；第二层才禁止学习/打工。游戏疲劳提示会记录，但是否停由上面的合计时长决定</span></div>',
-    ])+
+    ],'fatigue')+
     FG('调度',[
     '<div class="frow"><span class="k">主任务优先级</span>'+moSel(ed.main_order)+'</div>',
-    ])+
+    ],'schedule')+
     FG('踩踩',[
     '<div class="frow"><span class="k">踩踩次数/天</span><input type="number" id="numVisit" min="0" step="1" value="'+(ed.visit_times??'')+'"></div>',
-    ])+
+    ],'visit')+
     FG('PK',[
     '<div class="frow"><span class="k">PK 次数/天</span><input type="number" id="numPk" min="0" step="1" value="'+(ed.pk_times??'')+'"></div>',
     '<div class="frow"><span class="k">PK 只打</span><input type="text" id="txtPkOnly" placeholder="昵称或宠物名，逗号分隔，空=不限" value="'+esc(ed.pk_only||'')+'"></div>',
@@ -2499,45 +2672,45 @@ function renderSettings(ed){
     '<div class="frow"><span class="k">打手兜底</span><button class="sw'+(ed.pk_helper_fallback?' on':'')+'" id="swPkHf" title="开=名单里的打手都不可雇（被雇佣中/不可雇佣/已达上限）时，自动雇战力最高的可雇宠物"></button></div>',
     '<div class="frow"><span class="k">PK 等级上限</span><input type="number" id="numPkLv" min="-2" step="1" title="-1=只打比我低；-2=只打比打手低" value="'+(ed.pk_max_level??0)+'"></div>',
     '<div class="frow"><span class="k">等级过滤说明</span><span style="color:var(--sub);font-size:12px">0=不限；-1=只打比我低的；-2=只打比打手低的</span></div>',
-    ])+
+    ],'pk')+
     FG('冒险',[
     '<div class="frow"><span class="k">冒险次数/天</span><input type="number" id="numAdv" min="0" step="1" title="0=不冒险；主号策略设 999 ≈ 不限（疲劳后全冒险）" value="'+(ed.adventure_times??'')+'"></div>',
-    ])+
+    ],'adventure')+
     FG('护理',[
     '<div class="frow"><span class="k">护理阈值（体力/清洁）</span><span class="two"><input type="number" id="numEnergy" min="0" max="100" value="'+(ed.care_energy??'')+'"><input type="number" id="numClean" min="0" max="100" value="'+(ed.care_clean??'')+'"></span></div>',
     '<div class="frow"><span class="k">护理方式</span>'+sel('selCare', ['一键护理','ocr检测'], ed.care_method)+'</div>',
     '<div class="frow"><span class="k">补货数量（个）</span><input type="number" id="numExchange" min="1" max="99" step="1" title="饼干/香皂不足时一次金币买多少个" value="'+(ed.care_exchange??'')+'"></div>',
-    ])+
+    ],'care')+
     FG('好友护理',[
     '<div class="frow"><span class="k">好友护理</span><button class="sw'+(ed.friend_care_enabled?' on':'')+'" id="swFC" title="开=按间隔到指定好友家护理（体力/清洁<90自动补）"></button></div>',
     '<div class="frow"><span class="k">好友护理对象</span><input type="text" id="txtFCName" placeholder="宠物名或主人名" value="'+esc(ed.friend_care_name||'')+'"></div>',
     '<div class="frow"><span class="k">好友护理间隔（秒）</span><input type="number" id="numFCInt" min="30" step="30" value="'+(ed.friend_care_interval??'')+'"></div>',
     '<div class="frow"><span class="k">好友护理方式</span>'+sel('selFCMethod', ['ocr检测','一键护理'], ed.friend_care_method)+'</div>',
-    ])+
+    ],'friend_care')+
     FG('被雇佣（帮好友打工）',[
     '<div class="frow"><span class="k">被雇佣托管</span><button class="sw'+(ed.employed_enabled?' on':'')+'" id="swEmp" title="开=定时出门检查是否被好友雇去打工"></button></div>',
     '<div class="frow"><span class="k">被雇佣处理</span>'+sel('selEmpAction', ['等到25/75（小于45min）','等到25/75','立刻召回','让利雇主（不召回）'], ed.employed_action)+'</div>',
     '<div class="frow"><span class="k">检查间隔（秒）</span><input type="number" id="numEmpInt" min="30" step="30" value="'+(ed.employed_interval??'')+'"></div>',
-    ])+
+    ],'employed')+
     FG('福袋',[
     '<div class="frow"><span class="k">福袋领取</span><button class="sw'+(ed.gift_bag_enabled?' on':'')+'" id="swGiftBag" title="开=定时遍历好友领取系绳福袋"></button></div>',
     '<div class="frow"><span class="k">福袋扫描间隔（秒）</span><input type="number" id="numGbInt" min="60" step="60" value="'+(ed.gift_bag_interval??'')+'"></div>',
-    ])+
+    ],'gift_bag')+
     FG('职业',[
     '<div class="frow"><span class="k">隐藏职业解锁监控</span><button class="sw'+(ed.career_watch?' on':'')+'" id="swCareer" title="开=每节课结算后读职业树；武术家/梦境旅人/大明星解锁时记录并推送通知"></button></div>',
     '<div class="frow"><span class="k">解锁后自动停学</span><button class="sw'+(ed.career_stop_study?' on':'')+'" id="swCareerStop" title="开=解锁时自动关闭学习任务（等你安排下一阶段）"></button></div>',
     '<div class="frow"><span class="k">兜底检查间隔（分钟）</span><input type="number" id="numCareerInt" min="0" step="10" title="0 = 只每节课后检查" value="'+(ed.career_interval??60)+'"></div>',
-    ]);
+    ],'career');
   // 通知页单独渲染（不放设置页：渠道配置项多，独立成板更清楚）
   renderNotifyForm(ed);
-  $('#swSchool').onclick=()=>{ $('#swSchool').classList.toggle('on'); setDirty=true; };
-  $('#swFC').onclick=()=>{ $('#swFC').classList.toggle('on'); setDirty=true; };
-  $('#swEmp').onclick=()=>{ $('#swEmp').classList.toggle('on'); setDirty=true; };
-  $('#swGiftBag').onclick=()=>{ $('#swGiftBag').classList.toggle('on'); setDirty=true; };
-  $('#swCareer').onclick=()=>{ $('#swCareer').classList.toggle('on'); setDirty=true; };
-  $('#swCareerStop').onclick=()=>{ $('#swCareerStop').classList.toggle('on'); setDirty=true; };
-  $('#swPkHf').onclick=()=>{ $('#swPkHf').classList.toggle('on'); setDirty=true; };
-  $('#swHireWait').onclick=()=>{ $('#swHireWait').classList.toggle('on'); setDirty=true; };
+  $('#swSchool').onclick=()=>{ $('#swSchool').classList.toggle('on'); markDirtyAndSave(); };
+  $('#swFC').onclick=()=>{ $('#swFC').classList.toggle('on'); markDirtyAndSave(); };
+  $('#swEmp').onclick=()=>{ $('#swEmp').classList.toggle('on'); markDirtyAndSave(); };
+  $('#swGiftBag').onclick=()=>{ $('#swGiftBag').classList.toggle('on'); markDirtyAndSave(); };
+  $('#swCareer').onclick=()=>{ $('#swCareer').classList.toggle('on'); markDirtyAndSave(); };
+  $('#swCareerStop').onclick=()=>{ $('#swCareerStop').classList.toggle('on'); markDirtyAndSave(); };
+  $('#swPkHf').onclick=()=>{ $('#swPkHf').classList.toggle('on'); markDirtyAndSave(); };
+  $('#swHireWait').onclick=()=>{ $('#swHireWait').classList.toggle('on'); markDirtyAndSave(); };
   // 「当前设置」实时提示：把四个数字翻译成一句人话，避免填错组合（如只学习却
   // 忘了把金币阈值调 0 → 金币不足时会先去打工，看着像"没在学习"）
   const qv=id=>{const el=$(id); return el?parseInt(el.value,10):NaN;};
@@ -2593,11 +2766,35 @@ function renderSettings(ed){
       const set=(id,v)=>{const el=$(id); if(el) el.value=v;};
       set('#numStudyQuota',p.study); set('#numWorkQuota',p.work);
       set('#numHour',p.lim); set('#numWorkStop',p.stop); set('#numCoin',p.coin);
-      setDirty=true; updQuotaHint();
+      markDirtyAndSave(); updQuotaHint();
       const msg=$('#saveMsg');
-      if(msg){ msg.className='saveMsg'; msg.textContent='已填入「'+b.textContent+'」，记得点下面的保存设置'; }
+      if(msg){ msg.className='saveMsg'; msg.textContent='已应用「'+b.textContent+'」，自动保存中…'; }
     };
   });
+
+  // ---- 一级：分类列表（按 tasks.order 的常见顺序排列）----
+  // 一级：分组卡片（照 QQ 宠物设置页 —— 小标题在卡外，卡内多行带 › 箭头）
+  const MENU=[
+    ['核心任务',[['school','学习'],['work','打工'],['quota','学习/打工总控'],['fatigue','疲劳与收益档']]],
+    ['日常互动',[['care','护理'],['friend_care','好友护理'],['visit','踩踩'],['pk','PK'],['adventure','冒险']]],
+    ['扩展',[['employed','被雇佣'],['gift_bag','福袋'],['career','职业']]],
+    ['系统',[['schedule','调度']]],
+  ];
+  const menu=$('#setMenu');
+  if(menu){
+    menu.innerHTML=MENU.map(([sec,items])=>{
+      const rows=items.filter(([k])=>document.getElementById('grp_'+k))
+        .map(([k,t])=>'<div class="frow menurow" data-grp="'+k+'">'
+          +'<span class="k">'+t+'</span><span class="chev">›</span></div>').join('');
+      if(!rows) return '';
+      return '<div class="msec"><div class="fsect">'+sec+'</div><div class="fsec">'+rows+'</div></div>';
+    }).join('');
+    menu.querySelectorAll('.menurow').forEach(r=>r.onclick=()=>openSetGroup(r.dataset.grp));
+  }
+  // 重建后恢复原来的层级（定时刷新会重跑本函数，直接 showSetIndex 会把
+  // 正在看二级详情的用户弹回一级 —— 曾实测每 6 秒被弹回一次）
+  // 定时刷新重建：恢复层级但不压历史（否则每 6 秒多一条记录）
+  if(window.__setGrp){ openSetGroup(window.__setGrp, true); } else { showSetIndex(true); }
 }
 
 // ---- 通知页（独立板块）：渠道配置 + 事件开关 + 测试 ----
@@ -2605,7 +2802,8 @@ function renderSettings(ed){
 // 只提交本页字段（差量），互不干扰。
 function renderNotifyForm(ed){
   const form=$('#notifyForm'); if(!form) return;
-  const FGn=(t,rows)=>'<div class="fsec"><div class="fsect">'+t+'</div>'+rows.join('')+'</div>';
+  // 与设置页共用同一个 card() 生成器（原来是自己拼的，容易走样）
+  const FGn=(t,rows)=>card(t,rows);
   form.innerHTML=
     FGn('飞书群机器人',[
     '<div class="frow"><span class="k">启用</span><button class="sw'+(ed.notify_feishu_enabled?' on':'')+'" id="swFeishu" title="开=用飞书自定义机器人推送"></button></div>',
@@ -2662,7 +2860,7 @@ function renderNotifyForm(ed){
 
 async function saveNotifySettings(silent){
   if(!setInit) return;
-  const btn=$('#btnNotifySave'), msg=$('#notifySaveMsg');
+  const msg=$('#notifySaveMsg');   // 保存按钮已移除（改动即自动保存）
   const updates={};
   const sw=(id,key)=>{const el=$(id); if(!el)return; const v=el.classList.contains('on');
                       if(!!v!==!!setInit[key]) updates[key]=v;};
@@ -2678,7 +2876,6 @@ async function saveNotifySettings(silent){
     if(!silent&&msg){ msg.className='saveMsg'; msg.textContent='没有改动'; }
     return {ok:true, changed:0};
   }
-  if(btn) btn.disabled=true;
   try{
     const r=await fetch('/api/settings',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify({updates})});
@@ -2696,16 +2893,74 @@ async function saveNotifySettings(silent){
     if(!silent&&msg){ msg.className='saveMsg err'; msg.textContent='保存失败：'+e.message; }
     return {ok:false, err:String(e.message||e)};
   }finally{
-    if(btn) btn.disabled=false;
-  }
+    }
 }
-const _btnNS=document.getElementById('btnNotifySave');
-if(_btnNS) _btnNS.onclick=()=>saveNotifySettings(false);
-document.addEventListener('input',e=>{ if(e.target&&e.target.closest&&e.target.closest('#notifyForm')) setDirty=true; });
+// ---- 内页自动分节：把散装内容按"小标题 + 白卡"归拢（照设置页排版） ----
+// 各内页结构不一，这里用 DOM 包装统一：
+//   .subh / .advcap 作为小节标题 -> 其后到下一个标题之前的内容包进一张白卡。
+(function(){
+  // 注意：notify/set 自带 .fgrp+.fsec 分节结构，不能再套 .pgsec（会双层白卡）
+  const PAGES=['adv','plan','log'];
+  function wrap(page){
+    const sec=document.querySelector('main > [data-page="'+page+'"]');
+    if(!sec || sec.dataset.wrapped==='1') return;
+    const kids=[...sec.children].filter(el=>!el.classList.contains('navhead'));
+    if(!kids.length) return;
+    const groups=[]; let cur=null;
+    kids.forEach(el=>{
+      const isTitle = el.classList.contains('subh') || el.classList.contains('advcap');
+      if(isTitle){ cur={title:el.textContent.trim(), els:[]}; groups.push(cur); el.remove(); }
+      else if(cur){ cur.els.push(el); }
+      else { cur={title:'', els:[el]}; groups.push(cur); }
+    });
+    // 清掉空组
+    const use=groups.filter(g=>g.els.length);
+    if(!use.length) return;
+    const frag=document.createDocumentFragment();
+    use.forEach(g=>{
+      const secEl=document.createElement('div'); secEl.className='pgsec';
+      if(g.title){ const t=document.createElement('div'); t.className='pgsec-t'; t.textContent=g.title; secEl.appendChild(t); }
+      const c=document.createElement('div'); c.className='pgsec-c';
+      g.els.forEach(e=>c.appendChild(e));
+      secEl.appendChild(c);
+      frag.appendChild(secEl);
+    });
+    // 插到 navhead 之后
+    const nh=sec.querySelector('.navhead');
+    if(nh) nh.after(frag); else sec.insertBefore(frag, sec.firstChild);
+    sec.dataset.wrapped='1';
+  }
+  function run(){ PAGES.forEach(wrap); }
+  run();
+  window.__wrapPages=run;   // 数据刷新后重建元素时再跑
+})();
+
+// ---- 改动即自动保存（已移除所有"保存设置"按钮） ----
+// 标记脏 + 600ms 防抖后自动提交（连续输入不会每次都发请求）；
+// setDirty 同时用于阻止定时刷新重建表单覆盖用户输入。
+let _autoT=null;
+function markDirtyAndSave(){
+  setDirty=true;
+  if(_autoT) clearTimeout(_autoT);
+  _autoT=setTimeout(async()=>{
+    _autoT=null;
+    try{
+      if(document.querySelector('#setForm')  && $('#setForm').offsetParent!==null)  await saveSettings();
+      if(document.querySelector('#notifyForm')&& $('#notifyForm').offsetParent!==null) await saveNotifySettings(true);
+    }catch(e){ /* 保存失败已在各自函数内提示 */ }
+  },600);
+}
+document.addEventListener('input',e=>{
+  if(!e.target||!e.target.closest) return;
+  if(e.target.closest('#notifyForm')||e.target.closest('#setForm')) markDirtyAndSave();
+});
+document.addEventListener('change',e=>{
+  if(!e.target||!e.target.closest) return;
+  if(e.target.closest('#notifyForm')||e.target.closest('#setForm')) markDirtyAndSave();
+});
 
 async function saveSettings(){
   if(!setInit) return;
-  const btn=$('#btnSave'); btn.disabled=true;
   const msg=$('#saveMsg');
   const updates={};
   const schoolEnabledNew = !$('#swSchool').classList.contains('on');
@@ -2745,11 +3000,9 @@ async function saveSettings(){
     if(d.rejected&&d.rejected.length){ msg.className='saveMsg err'; msg.textContent='部分未保存：'+d.rejected.join('；'); }
     else { setDirty=false; msg.className='saveMsg'; msg.textContent='✅ 已保存，下一轮调度生效'; refreshData(); }
   }catch(e){ msg.className='saveMsg err'; msg.textContent='保存失败：'+e.message; }
-  btn.disabled=false;
+  if(btn) btn.disabled=false;
 }
-$('#btnSave').onclick=saveSettings;
-$('#setForm').addEventListener('input',()=>{setDirty=true});
-$('#setForm').addEventListener('click',()=>{setDirty=true});
+// 保存按钮已移除 -> 改为改动即自动保存（见下）
 
 $('#btnAltPreset').onclick=async()=>{
   const name=($('#txtAltMain')?$('#txtAltMain').value:'').trim();
@@ -2810,15 +3063,63 @@ document.getElementById('taskList').addEventListener('click', async ev => {
   } catch(e) { cb.classList.toggle('on'); setTimeout(refreshData, 800); }
 });
 
-function showTab(name){
+// 当前页（供 history 手势判断）
+let curTab = 'main';
+function showTab(name, skipHistory){
+  // 离开设置页时重置层级，下次进入从一级列表开始
+  if(name!=='set' && window.__setGrp) window.__setGrp=null;
   document.querySelectorAll('main > [data-page]').forEach(el=>el.classList.toggle('hide', el.dataset.page!==name));
-  document.querySelectorAll('#tabbar button').forEach(b=>b.classList.toggle('on', b.dataset.tab===name));
+  // 两列导航都要更新选中态（#tabbar2 是右列，早期漏了）
+  document.querySelectorAll('#tabbar button, #tabbar2 button').forEach(b=>b.classList.toggle('on', b.dataset.tab===name));
   try{localStorage.setItem('qpet_tab',name);}catch(e){}
+  if(name===curTab) return;
+  curTab=name;
+  // 压一条历史记录：这样手机侧滑返回（history.back）能回到上一页，
+  // 而不是直接退出页面（曾完全没用 History API，侧滑无反应）
+  if(!skipHistory){
+    try{ history.pushState({tab:name}, '', name==='main' ? location.pathname : ('?tab='+name)); }catch(e){}
+  }
 }
-document.querySelectorAll('#tabbar button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
+// 侧滑/浏览器返回：回到上一页；已在总览则放行（让浏览器正常退栈）
+window.addEventListener('popstate', function(e){
+  const st=e.state||{};
+  const t=st.tab || 'main';
+  // 设置页内：根据 grp 决定停在一级还是二级
+  if(t==='set'){
+    if(curTab!=='set') showTab('set', true);
+    if(st.grp){ openSetGroup(st.grp, true); } else { showSetIndex(true); }
+    return;
+  }
+  // 从设置页二级直接返回到别的 tab 时，清掉分组状态
+  if(curTab==='set' && window.__setGrp) window.__setGrp=null;
+  if(t===curTab){
+    const q=new URLSearchParams(location.search).get('tab') || 'main';
+    if(q!==curTab) showTab(q, true);
+    return;
+  }
+  showTab(t, true);
+});
+// tab 按钮：#tabbar（左列4个）+ #tabbar2（右列3个）都要绑
+document.querySelectorAll('#tabbar button, #tabbar2 button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
+// 内页返回（.home 里的导航会随总览页一起隐藏，故内页需要独立返回入口）
+// 内页顶栏返回按钮（统一 .backbtn[data-back]；二级设置页的 #btnSetBack 有自己的处理）
+document.addEventListener('click',function(e){
+  const b=e.target.closest && e.target.closest('.backbtn[data-back]');
+  if(b){ showTab(b.dataset.back||'main'); }
+},true);
 let initTab='main';
 try{initTab=localStorage.getItem('qpet_tab')||'main';}catch(e){}
-showTab(initTab);
+// 支持 ?tab=set 直开某页（便于分享链接/截图/调试）
+try{
+  const qp=new URLSearchParams(location.search).get('tab');
+  // 注意：#tabbar 只含左列 4 个按钮，set/log/shot 在 #tabbar2 —— 要全局找
+  if(qp && document.querySelector('button[data-tab="'+qp+'"]')) initTab=qp;
+}catch(e){}
+// 初始：把当前 tab 写进历史（replace 不产生新记录），
+// 之后每次切页 pushState -> 侧滑返回可逐级回退
+try{ history.replaceState({tab:initTab}, '', location.pathname + location.search); }catch(e){}
+curTab=initTab;
+showTab(initTab, true);
 
 setInterval(()=>{if(!document.hidden)refreshLogs()},3000);
 setInterval(()=>{if(!document.hidden)refreshData()},6000);
@@ -2836,11 +3137,11 @@ try{
 // 不用 CSS 的 100vw：它含滚动条宽度（实测 clientWidth 489 vs 100vw 500），
 // 会让所有绝对坐标偏大约 2%。这里按真实可用宽度精确计算并写入 --vu。
 (function(){
-  var home=document.querySelector('.home');
-  if(!home) return;
   function setU(){
-    var w=home.clientWidth || document.documentElement.clientWidth;
-    home.style.setProperty('--vu',(w/360)+'px');
+    // 用视口宽度算 1dp（不再依赖 .home 存在 —— 设置页等页面没有 .home，
+    // 早期版本把 --u 定义在 .home 上，导致那些页面所有 calc(var(--u)*N) 失效）
+    var w=document.documentElement.clientWidth || window.innerWidth;
+    document.documentElement.style.setProperty('--vu',(w/360)+'px');
   }
   setU();
   window.addEventListener('resize',setU);
