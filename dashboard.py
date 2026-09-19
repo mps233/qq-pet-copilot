@@ -1108,10 +1108,12 @@ body{
 /* ---------- 3. 骨架：480dp 浮动层舞台 ---------- */
 /* 单位系统：--u = 1dp = 屏宽/480。官方逻辑画布就是 480dp，所有坐标直接用它。 */
 .home{
-  /* 单位基准：1dp。不用 100vw —— 它含滚动条宽度（实测 500 vs clientWidth 489），
-     会让所有坐标偏大约 2%。改为 JS 精确写入 --vu = clientWidth/480（见脚本尾部）。
-     无 JS 时退化为 100vw/480，仍可用。 */
-  --u:var(--vu, calc(100vw / 480));
+  /* 单位基准：1dp = 可用宽度 / 360。
+     **基准是 360 不是 480** —— 官方手机版逻辑画布是 360dp（真机 density480）：
+     按钮 42dp 占屏宽 11.67%。若按 480dp（平板/模拟器版）做，按钮只占 8.75%，
+     会明显偏小（实测小了 25%）。
+     不用 100vw：它含滚动条宽度，会让坐标偏大约 2%。由 JS 写入 --vu。 */
+  --u:var(--vu, calc(100vw / 360));
   position:relative;
   width:100%;max-width:100vw;
   box-sizing:border-box;
@@ -1128,14 +1130,15 @@ body{
 
 /* ---------- 3b. 左右两列圆钮（官方坐标，逐项对齐） ---------- */
 /* 左列：x=20，y=28/86/146/206 */
-.col-l .rbtn:nth-child(1){left:calc(var(--u)*20);top:calc(var(--u)*28)}
-.col-l .rbtn:nth-child(2){left:calc(var(--u)*20);top:calc(var(--u)*86)}
-.col-l .rbtn:nth-child(3){left:calc(var(--u)*20);top:calc(var(--u)*146)}
-.col-l .rbtn:nth-child(4){left:calc(var(--u)*20);top:calc(var(--u)*206)}
-/* 右列：x=418，y=28/86/146 */
-.col-r .rbtn:nth-child(1){left:calc(var(--u)*418);top:calc(var(--u)*28)}
-.col-r .rbtn:nth-child(2){left:calc(var(--u)*418);top:calc(var(--u)*86)}
-.col-r .rbtn:nth-child(3){left:calc(var(--u)*418);top:calc(var(--u)*146)}
+/* 官方手机版（360dp）实测：左列 x=20 y=36.3/94.3/154.3/214.3 */
+.col-l .rbtn:nth-child(1){left:calc(var(--u)*20);top:calc(var(--u)*36.3)}
+.col-l .rbtn:nth-child(2){left:calc(var(--u)*20);top:calc(var(--u)*94.3)}
+.col-l .rbtn:nth-child(3){left:calc(var(--u)*20);top:calc(var(--u)*154.3)}
+.col-l .rbtn:nth-child(4){left:calc(var(--u)*20);top:calc(var(--u)*214.3)}
+/* 右列：x=298 y=36.3/94.3/154.3（官方手机版） */
+.col-r .rbtn:nth-child(1){left:calc(var(--u)*298);top:calc(var(--u)*36.3)}
+.col-r .rbtn:nth-child(2){left:calc(var(--u)*298);top:calc(var(--u)*94.3)}
+.col-r .rbtn:nth-child(3){left:calc(var(--u)*298);top:calc(var(--u)*154.3)}
 .rbtn{
   position:absolute;
   width:calc(var(--u)*42);height:calc(var(--u)*42);
@@ -1160,7 +1163,7 @@ body{
 /* ---------- 4. 资料卡（官方 x=74 y=26 207×46） ---------- */
 .idcard{
   left:calc(var(--u) * 74);
-  top:calc(var(--u) * 26);
+  top:calc(var(--u) * 34.3);
   width:calc(var(--u) * 207);
   height:calc(var(--u) * 46);
   display:flex;align-items:center;gap:calc(var(--u) * 6);
@@ -1203,7 +1206,7 @@ body{
 /* ---------- 5. 胶囊两行（官方 y=86 三颗 + y=126 两颗，每颗 67×28 间距 4） ---------- */
 .caps{
   left:calc(var(--u) * 74);
-  top:calc(var(--u) * 86);
+  top:calc(var(--u) * 94.3);
   display:grid;
   /* 官方每颗 67×28，横向间距 4（74→145→216），行距 12（86→126）。
      内容偏长时允许单颗伸展到 74，避免数值被裁。 */
@@ -1272,8 +1275,8 @@ body{
 /* ---------- 5c. 右功能栏（官方 x=414，y=335/405/495，50×70） ---------- */
 .funcbar{
   position:absolute;
-  left:calc(var(--u) * 414);
-  top:calc(var(--u) * 335);
+  left:calc(var(--u) * 294);
+  top:calc(var(--u) * 319.3);
   width:calc(var(--u) * 50);
   display:flex;flex-direction:column;gap:0;
   /* 官方结构：feed+shower 同一子容器（无缝），friend 单独一组、前隔 20dp */
@@ -1297,8 +1300,8 @@ body{
 
 /* ---------- 5d. 底部入口（官方 y=728 居中，50×54） ---------- */
 .drawer{
-  left:calc(var(--u) * 215);
-  top:calc(var(--u) * 728);
+  left:calc(var(--u) * 155);
+  top:calc(var(--u) * 692);
   width:calc(var(--u) * 50);
   height:calc(var(--u) * 54);
   overflow:hidden;
@@ -2840,7 +2843,7 @@ try{
   if(!home) return;
   function setU(){
     var w=home.clientWidth || document.documentElement.clientWidth;
-    home.style.setProperty('--vu',(w/480)+'px');
+    home.style.setProperty('--vu',(w/360)+'px');
   }
   setU();
   window.addEventListener('resize',setU);
