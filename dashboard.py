@@ -1105,173 +1105,231 @@ body{
 ::-webkit-scrollbar-corner{background:transparent}
 .hide{display:none!important}
 
-/* ---------- 3. 骨架：左内容 + 右功能栏 ---------- */
-.app{
-  display:flex;align-items:flex-start;
-  max-width:1000px;margin:0 auto;padding:0 var(--side);
+/* ---------- 3. 骨架：480dp 浮动层舞台 ---------- */
+/* 单位系统：--u = 1dp = 屏宽/480。官方逻辑画布就是 480dp，所有坐标直接用它。 */
+.home{
+  /* 单位基准：1dp。不用 100vw —— 它含滚动条宽度（实测 500 vs clientWidth 489），
+     会让所有坐标偏大约 2%。改为 JS 精确写入 --vu = clientWidth/480（见脚本尾部）。
+     无 JS 时退化为 100vw/480，仍可用。 */
+  --u:var(--vu, calc(100vw / 480));
+  position:relative;
+  width:100%;max-width:100vw;
+  box-sizing:border-box;
+  overflow-x:hidden;
+  /* 官方画布 853dp；用 --u 乘出来即可。
+     注意不要写 calc(100% * N) —— 百分比在 min-height 里会被当相对高度算。 */
+  min-height:calc(var(--u) * 853);
+  margin:0;padding:0;
 }
-main{
-  flex:1;min-width:0;
-  display:flex;flex-direction:column;gap:var(--gap-card);
-  padding:var(--side) 0 24px;
-  min-height:calc(100vh - 40px);
-}
+/* 浮动元素通用：position:absolute；坐标由各具体类给出（写死 dp 字面量，
+   不用 CSS 变量传坐标 —— 变量在内联 style 里对 calc 的替换曾出现失败） */
+.flt{position:absolute;left:0;top:0}
+.flt-l{display:contents}
 
-/* 右侧功能栏：照 QQ 首页那一体磨砂长胶囊。
-   注意：手机画面里游戏自带的 喂食/洗澡/好友 是操作宠物的，
-   这里是控制调度器的，语义不同故并列保留。 */
-.funcbar{
-  flex:none;display:flex;flex-direction:column;gap:0;
-  padding:6px 5px;margin-top:var(--side);
-  position:sticky;top:var(--side);z-index:15;
-  background:rgba(255,255,255,.42);border-radius:999px;
-  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
-}
-.fab{
-  width:50px;height:64px;border:0;background:transparent;border-radius:999px;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
-  cursor:pointer;color:var(--strong);font-size:10px;padding:0;
+/* ---------- 3b. 左右两列圆钮（官方坐标，逐项对齐） ---------- */
+/* 左列：x=20，y=28/86/146/206 */
+.col-l .rbtn:nth-child(1){left:calc(var(--u)*20);top:calc(var(--u)*28)}
+.col-l .rbtn:nth-child(2){left:calc(var(--u)*20);top:calc(var(--u)*86)}
+.col-l .rbtn:nth-child(3){left:calc(var(--u)*20);top:calc(var(--u)*146)}
+.col-l .rbtn:nth-child(4){left:calc(var(--u)*20);top:calc(var(--u)*206)}
+/* 右列：x=418，y=28/86/146 */
+.col-r .rbtn:nth-child(1){left:calc(var(--u)*418);top:calc(var(--u)*28)}
+.col-r .rbtn:nth-child(2){left:calc(var(--u)*418);top:calc(var(--u)*86)}
+.col-r .rbtn:nth-child(3){left:calc(var(--u)*418);top:calc(var(--u)*146)}
+.rbtn{
+  position:absolute;
+  width:calc(var(--u)*42);height:calc(var(--u)*42);
+  border:0;border-radius:50%;
+  background:var(--btn-l-bg);
+  display:flex;align-items:center;justify-content:center;
+  padding:0;cursor:pointer;
+  box-shadow:var(--sh-1);
   transition:transform .12s;
 }
-.fab .fi{font-size:18px;line-height:1}
-.fab .ft{font-size:10px;line-height:1;color:var(--sub)}
-.fab:active{transform:scale(.94)}
-.fab:disabled{opacity:.45;cursor:default}
-.fab.stop .fi{color:#D93A2B}
-.fab.ghost .fi{color:var(--accent)}
+/* 左侧圆钮：米白底 + 棕色图标（官方 #F9F1E2 / #BE6321） */
+.col-l .rbtn img{width:56%;height:56%;object-fit:contain;
+  filter:brightness(0) saturate(100%) invert(38%) sepia(58%) saturate(1050%) hue-rotate(347deg) brightness(92%) contrast(88%)}
+/* 右侧圆钮：半透明深褐底 + 亮黄图标（官方 #B18E49 / #FFEA70） */
+.col-r .rbtn{background:var(--btn-r-bg)}
+.col-r .rbtn img{width:56%;height:56%;object-fit:contain;
+  filter:brightness(0) saturate(100%) invert(92%) sepia(38%) saturate(900%) hue-rotate(357deg) brightness(103%)}
+.rbtn:active{transform:scale(.94)}
+.rbtn.on{background:var(--accent);box-shadow:0 2px 8px rgba(200,130,20,.4)}
+.rbtn.on img{filter:brightness(0) invert(1)}
 
-/* ---------- 4. 顶部圆形导航（官方：散布的独立圆钮，间距 60dp） ---------- */
-.tabs{
-  display:flex;gap:6px;justify-content:space-between;
-  padding:0;margin:0;
-}
-.tabs button{
-  flex:1;min-width:0;height:52px;border:0;
-  background:rgba(249,241,226,.88);border-radius:var(--r-lg);
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
-  padding:0;cursor:pointer;
-  color:var(--sub);font-size:9.5px;line-height:1;
-  box-shadow:var(--sh-1);
-  transition:transform .12s,background .15s;
-}
-.tabs button img{width:20px;height:20px;display:block}
-.tabs button:active{transform:scale(.95)}
-.tabs button.on{background:var(--accent);color:#fff;font-weight:650}
-.tabs button.on img{filter:none}
-
-/* ---------- 5. 总览页 ---------- */
-.home{display:flex;flex-direction:column;gap:0}
-
-/* 5.1 顶部资料卡（官方 207×46dp，左返回钮 + 卡 + 右装扮钮同行） */
-.homebar{display:flex;align-items:center;gap:10px}
+/* ---------- 4. 资料卡（官方 x=74 y=26 207×46） ---------- */
 .idcard{
-  flex:1;min-width:0;display:flex;align-items:center;gap:9px;
+  left:calc(var(--u) * 74);
+  top:calc(var(--u) * 26);
+  width:calc(var(--u) * 207);
+  height:calc(var(--u) * 46);
+  display:flex;align-items:center;gap:calc(var(--u) * 6);
+  padding:calc(var(--u) * 3) calc(var(--u) * 8) calc(var(--u) * 3) calc(var(--u) * 3);
   background:var(--card);border-radius:999px;
-  padding:4px 12px 4px 4px;
   box-shadow:var(--sh-1);
+  box-sizing:border-box;
 }
 .avatar{
-  width:38px;height:38px;border-radius:50%;flex:none;background:#ffedd5;
+  width:calc(var(--u) * 40);height:calc(var(--u) * 40);
+  border-radius:50%;flex:none;background:#ffedd5;
   overflow:hidden;display:flex;align-items:center;justify-content:center;
 }
 .avatar svg{display:block;width:100%;height:100%}
-.avatar.on{box-shadow:0 0 0 2.5px var(--ok)}
-.avatar.off{box-shadow:0 0 0 2.5px #ef4444}
+.avatar.on{box-shadow:0 0 0 2px var(--ok)}
+.avatar.off{box-shadow:0 0 0 2px #ef4444}
 .idtxt{flex:1;min-width:0}
 .idname{
-  font-weight:680;font-size:14.5px;line-height:1.2;color:var(--strong);
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-weight:680;font-size:calc(var(--u) * 13);line-height:1.15;
+  color:var(--strong);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
 .idsub{
-  font-size:11px;color:var(--sub);line-height:1.25;
+  font-size:calc(var(--u) * 10);color:var(--sub);line-height:1.2;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
-/* 状态环：官方是三层同心环（蓝/橙/绿），中心留白 */
+/* 状态环：官方三层同心环（蓝/橙/绿），中心留白 */
 .idring{
-  width:26px;height:26px;border-radius:50%;flex:none;
+  width:calc(var(--u) * 26);height:calc(var(--u) * 26);
+  border-radius:50%;flex:none;
   background:conic-gradient(var(--ok) 0 70%,var(--accent) 70% 88%,#0EA5E9 88% 100%);
-  -webkit-mask:radial-gradient(circle,transparent 8px,#000 8px);
-  mask:radial-gradient(circle,transparent 8px,#000 8px);
+  -webkit-mask:radial-gradient(circle,transparent 38%,#000 38%);
+  mask:radial-gradient(circle,transparent 38%,#000 38%);
 }
 .idring.off{background:conic-gradient(#EF4444 0 100%)}
-.meta{font-size:12px;color:var(--sub);font-variant-numeric:tabular-nums;flex:none}
+.meta{
+  font-size:calc(var(--u) * 10);color:var(--sub);
+  font-variant-numeric:tabular-nums;flex:none;
+}
 
-/* 5.2 胶囊条（官方：高 28dp，两行 3 列，行距 40dp） */
+/* ---------- 5. 胶囊两行（官方 y=86 三颗 + y=126 两颗，每颗 67×28 间距 4） ---------- */
 .caps{
-  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
-  gap:8px;margin-top:var(--gap-card);
+  left:calc(var(--u) * 74);
+  top:calc(var(--u) * 86);
+  display:grid;
+  /* 官方每颗 67×28，横向间距 4（74→145→216），行距 12（86→126）。
+     内容偏长时允许单颗伸展到 74，避免数值被裁。 */
+  grid-template-columns:repeat(3,calc(var(--u) * 67));
+  grid-auto-rows:calc(var(--u) * 28);
+  gap:calc(var(--u) * 12) calc(var(--u) * 4);
 }
 .cap{
-  display:flex;align-items:center;gap:5px;min-width:0;
-  height:var(--cap-h);padding:0 10px;
-  background:var(--cap-bg);border-radius:var(--cap-r);
-  color:var(--cap-fg);position:relative;
+  display:flex;align-items:center;gap:calc(var(--u) * 3);
+  min-width:0;padding:0 calc(var(--u) * 7);
+  background:var(--cap-bg);border-radius:calc(var(--u) * 14);
+  color:var(--cap-fg);position:relative;box-sizing:border-box;
 }
-.cap .cico{width:18px;height:18px;flex:none;border-radius:50%}
+.cap .cico{width:calc(var(--u) * 15);height:calc(var(--u) * 15);flex:none;border-radius:50%}
 .cap .cval{
-  font-weight:680;font-size:13.5px;color:#fff;
-  font-variant-numeric:tabular-nums;
-  white-space:nowrap;flex:1;min-width:0;
+  font-weight:680;font-size:calc(var(--u) * 11);color:#fff;
+  font-variant-numeric:tabular-nums;white-space:nowrap;
+  flex:1;min-width:0;overflow:hidden;
 }
-.cap .cunit{font-size:10px;color:rgba(255,255,255,.85);white-space:nowrap;flex:none}
-/* 胶囊内细进度条：贴底缘 */
+.cap .cunit{font-size:calc(var(--u) * 9);color:rgba(255,255,255,.85);white-space:nowrap;flex:none}
 .cap .bar{
-  position:absolute;left:10px;right:10px;bottom:3px;height:3px;
+  position:absolute;left:calc(var(--u) * 7);right:calc(var(--u) * 7);
+  bottom:calc(var(--u) * 3);height:calc(var(--u) * 3);
   margin:0;background:rgba(255,255,255,.28);border-radius:2px;
 }
 .cap .bar>i{background:var(--accent)}
 
-/* 5.3 宠物舞台（官方中央宠物位） */
-.stage{
-  flex:1;min-height:min(38vh,320px);
-  display:flex;flex-direction:column;align-items:center;justify-content:flex-end;
-  gap:8px;padding:14px 0 6px;position:relative;
+/* ---------- 5b. 中部场景层（官方是 3D 宠物；这里放任务队列） ---------- */
+.scene{
+  left:calc(var(--u) * 74);
+  top:calc(var(--u) * 162);
+  width:calc(var(--u) * 340);      /* 74 ~ 414（右功能栏左侧），官方中部空区 */
+  bottom:calc(var(--u) * 96);      /* 留出底部入口 */
+  display:flex;flex-direction:column;gap:calc(var(--u) * 6);
+  overflow:hidden;
+}
+/* 宠物（官方中央宠物位）：小尺寸浮在上方 */
+.petwrap{
+  flex:none;display:flex;flex-direction:column;align-items:center;
+  gap:calc(var(--u) * 4);padding-top:calc(var(--u) * 4);
 }
 .stagepet{
-  max-height:100%;max-width:46%;object-fit:contain;display:block;
-  filter:drop-shadow(0 10px 18px rgba(120,85,30,.28));
+  max-height:calc(var(--u) * 168);max-width:62%;
+  object-fit:contain;display:block;
+  filter:drop-shadow(0 calc(var(--u)*6) calc(var(--u)*10) rgba(120,85,30,.28));
   animation:stagebob 3.2s ease-in-out infinite;
 }
-@keyframes stagebob{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+@keyframes stagebob{0%,100%{transform:translateY(0)}50%{transform:translateY(calc(var(--u) * -4))}}
 @media(prefers-reduced-motion:reduce){.stagepet{animation:none}}
 .stagecap{
-  font-size:12px;color:var(--strong);
-  background:rgba(255,255,255,.7);border-radius:999px;
-  padding:3px 12px;backdrop-filter:blur(4px);white-space:nowrap;
+  font-size:calc(var(--u) * 10);color:var(--strong);
+  background:rgba(255,255,255,.72);border-radius:999px;
+  padding:calc(var(--u) * 2) calc(var(--u) * 8);white-space:nowrap;
+}
+/* 任务队列面板：占据场景层剩余空间，可滚动 */
+.qpanel{
+  flex:1;min-height:0;display:flex;flex-direction:column;
+  background:rgba(255,255,255,.62);
+  border-radius:calc(var(--u) * 14);
+  padding:calc(var(--u) * 8) calc(var(--u) * 9);
+  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  box-shadow:var(--sh-1);
+  overflow:hidden;
 }
 
-/* 5.4 底部抽屉（官方：无卡片底，信息直接浮在地板上） */
+/* ---------- 5c. 右功能栏（官方 x=414，y=335/405/495，50×70） ---------- */
+.funcbar{
+  position:absolute;
+  left:calc(var(--u) * 414);
+  top:calc(var(--u) * 335);
+  width:calc(var(--u) * 50);
+  display:flex;flex-direction:column;gap:0;
+  /* 官方结构：feed+shower 同一子容器（无缝），friend 单独一组、前隔 20dp */
+}
+.fab{
+  width:calc(var(--u) * 50);height:calc(var(--u) * 70);
+  border:0;background:transparent;border-radius:calc(var(--u) * 25);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:calc(var(--u) * 2);
+  cursor:pointer;color:var(--button-fg,var(--strong));
+  font-size:calc(var(--u) * 10);padding:0;
+  transition:transform .12s;
+}
+.fab .fi{font-size:calc(var(--u) * 17);line-height:1}
+.fab .ft{font-size:calc(var(--u) * 10);line-height:1;color:var(--sub)}
+.fab:active{transform:scale(.94)}
+.fab:disabled{opacity:.45;cursor:default}
+.funcbar .fab:nth-child(3){margin-top:calc(var(--u) * 20)}
+.fab.stop .fi{color:#D93A2B}
+.fab.ghost .fi{color:var(--accent)}
+
+/* ---------- 5d. 底部入口（官方 y=728 居中，50×54） ---------- */
 .drawer{
-  background:rgba(255,255,255,.72);
-  border-radius:var(--r-xl) var(--r-xl) 0 0;
-  padding:8px 14px 12px;
-  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
-  box-shadow:0 -2px 10px rgba(120,85,30,.10);
+  left:calc(var(--u) * 215);
+  top:calc(var(--u) * 728);
+  width:calc(var(--u) * 50);
+  height:calc(var(--u) * 54);
+  overflow:hidden;
+  display:flex;flex-direction:column;align-items:center;
+  gap:calc(var(--u) * 1);
+  background:transparent;box-shadow:none;
+  text-align:center;
 }
-.dhandle{width:52px;height:5px;border-radius:3px;background:rgba(0,0,0,.14);margin:0 auto 10px}
-.drow{display:flex;align-items:flex-start;gap:10px}
+.drow{display:contents}
 .dico{
-  width:38px;height:38px;flex:none;border-radius:50%;
-  background:rgba(255,255,255,.9);padding:5px;margin-top:1px;
+  width:calc(var(--u) * 44);height:calc(var(--u) * 46);
+  object-fit:contain;flex:none;
 }
-.dcol{flex:1;min-width:0}
+.dcol{display:flex;flex-direction:column;align-items:center;gap:calc(var(--u) * 1)}
 .dtitle{
-  display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;
-  font-weight:680;font-size:15.5px;min-width:0;color:var(--strong);
+  display:flex;align-items:center;justify-content:center;gap:calc(var(--u) * 3);
+  font-weight:680;font-size:calc(var(--u) * 13);color:var(--strong);
+  white-space:nowrap;
 }
-.dhint{font-size:11px;font-weight:400;color:var(--sub);white-space:nowrap}
+.dhint{display:none}
 .dsub{
-  font-size:11px;color:var(--sub);font-variant-numeric:tabular-nums;
-  margin-top:2px;word-break:break-word;
+  font-size:calc(var(--u) * 9);color:var(--sub);
+  font-variant-numeric:tabular-nums;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;max-width:100%;
 }
-.dmeta{
-  font-size:10px;color:var(--sub);flex:none;text-align:right;
-  max-width:32%;word-break:break-word;
-}
-@media(max-width:480px){.dmeta{display:none}}
-.dot{width:8px;height:8px;border-radius:50%;background:#9ca3af;flex:none}
+.dmeta{display:none}
+.dot{width:calc(var(--u) * 7);height:calc(var(--u) * 7);border-radius:50%;background:#9ca3af;flex:none}
 .dot.on{background:var(--ok)}
 .dot.off{background:#ef4444}
+.saveMsg{font-size:calc(var(--u) * 10);text-align:center;margin-top:calc(var(--u) * 2);min-height:0;color:var(--ok)}
+.saveMsg.err{color:#b45309}
 
 /* ---------- 6. 通用卡片与文字 ---------- */
 .card{
@@ -1587,30 +1645,15 @@ footer{
 /* ---------- 14. 响应式 ---------- */
 /* 窄屏（≤639px）：侧栏仍保留，收紧尺寸 */
 @media(max-width:639px){
-  .app{padding:0 8px}
-  main{padding:10px 0 20px}
-  .tabs{gap:5px}
-  .tabs button{height:46px;font-size:9px;border-radius:var(--r-md)}
-  .tabs button img{width:18px;height:18px}
-  .funcbar{padding:5px 4px}
-  .fab{width:44px;height:56px}
-  .fab .fi{font-size:16px}
   .tasklist .mrow{gap:8px;padding:8px 0}
   .mcb{width:18px;height:18px;border-radius:5px}
   .mcb.on::after{font-size:11px}
   .mname{font-size:13px;white-space:nowrap}
   .mdet{font-size:10.5px;white-space:nowrap}
   .ttag{display:none}
-  .stage{min-height:min(30vh,240px)}
-  .stagepet{max-width:54%}
 }
 /* 小屏（≤360px）：进一步收紧 */
 @media(max-width:360px){
-  .tabs{gap:4px}
-  .tabs button{height:42px;font-size:8.5px}
-  .tabs button img{width:16px;height:16px}
-  .fab{width:40px;height:52px}
-  .fab .fi{font-size:15px}
   .card{padding:10px 11px;border-radius:var(--r-lg)}
   .workline .big{font-size:20px}
   .tile .v{font-size:17px}
@@ -1631,13 +1674,6 @@ footer{
 }
 /* 桌面（≥920px）：加宽版心 */
 @media(min-width:920px){
-  .tabs{gap:10px}
-  .tabs button{height:58px;font-size:10.5px}
-  .tabs button img{width:24px;height:24px}
-  .funcbar{padding:10px 8px}
-  .fab{width:58px;height:72px}
-  .fab .fi{font-size:20px}
-  main{padding:20px 0 30px}
   .grid{grid-template-columns:repeat(6,minmax(0,1fr))}
   .thumbs{grid-template-columns:repeat(4,minmax(0,1fr))}
   pre#logbox{height:58vh}
@@ -1751,87 +1787,86 @@ html[data-scene="record"]{--qp-room:var(--qp-room-record)}
        底部抽屉（当前任务 + 倒计时）
        右侧磨砂功能栏见 .funcbar（在 .app 内） -->
   <section class="home" data-page="main">
-    <!-- 顶部资料卡（照 QQ 首页：头像 + 双行文字 + 状态环 + 时钟） -->
-    <div class="homebar">
-      <div class="idcard">
-        <span class="avatar" id="schedDot"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#ffedd5"/><path d="M7.5 12.5 L6 3.5 L14.5 8 Z" fill="#f59e0b"/><path d="M24.5 12.5 L26 3.5 L17.5 8 Z" fill="#f59e0b"/><path d="M8.3 10.6 L7.5 6 L12 8.3 Z" fill="#fbcfe8"/><path d="M23.7 10.6 L24.5 6 L20 8.3 Z" fill="#fbcfe8"/><circle cx="16" cy="18" r="10" fill="#f59e0b"/><ellipse cx="16" cy="21.6" rx="6.6" ry="5" fill="#fff7ed"/><circle cx="11.8" cy="16.4" r="1.7" fill="#1f2937"/><circle cx="20.2" cy="16.4" r="1.7" fill="#1f2937"/><path d="M14.7 19.4 h3.2 l-1.6 2 Z" fill="#f97316"/><path d="M16 21.4 v1.1 M16 22.5 q-1.2 1.3 -2.4 .3 M16 22.5 q1.2 1.3 2.4 .3" stroke="#92400e" stroke-width=".9" fill="none" stroke-linecap="round"/><path d="M6.5 18.5 h3 M6.8 21.5 h2.6 M25.5 18.5 h-3 M25.2 21.5 h-2.6" stroke="#d97706" stroke-width=".9" stroke-linecap="round"/></svg></span>
-        <div class="idtxt">
-          <div class="idname">QQ宠物托管</div>
-          <div class="idsub" id="schedTxt">--</div>
-        </div>
-        <span class="idring" id="idRing"></span>
-        <span class="meta" id="clock">--:--:--</span>
+    <!-- ==================================================================
+         照 QQ 宠物首页 1:1：480dp 画布上的绝对定位浮动层
+         坐标逐项取自官方运行时 dump（web/UI_TREE_OFFICIAL.md）：
+
+         左列圆钮 x=20  y=28/86/146/206       (4 个：返回 设置 消息 日记)
+         右列圆钮 x=418 y=28/86/146           (3 个：装扮 会员 盲盒)
+         资料卡   x=74  y=26  207x46
+         胶囊     y=86 三颗：x=74/145/216 各 67x28
+                  y=126 两颗：x=74/160
+         右功能栏 x=414 y=335/405/495         (feed/shower/friend 各 50x70)
+         底部入口 x=215 y=728  50x54          (打工)
+         ================================================================== -->
+
+    <!-- 左列圆钮（官方 4 个：返回/设置/消息/日记，x=20 y=28/86/146/206） -->
+    <nav class="flt col-l" id="tabbar">
+      <button class="rbtn on" data-tab="main" title="总览"><img src="/qp-icons/coin-24.png" alt=""></button>
+      <button class="rbtn" data-tab="adv" title="冒险"><img src="/qp-icons/logo_adventure-24.png" alt=""></button>
+      <button class="rbtn" data-tab="plan" title="职业"><img src="/qp-icons/logo_work-24.png" alt=""></button>
+      <button class="rbtn" data-tab="notify" title="通知"><img src="/qp-icons/bubble_button-24.png" alt=""></button>
+    </nav>
+
+    <!-- 右列圆钮（官方 3 个：装扮/会员/盲盒，x=418 y=28/86/146） -->
+    <nav class="flt col-r" id="tabbar2">
+      <button class="rbtn r" data-tab="set" title="设置"><img src="/qp-icons/line/skills-24.png" alt=""></button>
+      <button class="rbtn r" data-tab="log" title="日志"><img src="/qp-icons/bubble_text-24.png" alt=""></button>
+      <button class="rbtn r" data-tab="shot" title="实时画面"><img src="/qp-icons/emoji-24.png" alt=""></button>
+    </nav>
+
+    <!-- 资料卡（官方 x=74 y=26 207×46） -->
+    <div class="flt idcard">
+      <span class="avatar" id="schedDot"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#ffedd5"/><path d="M7.5 12.5 L6 3.5 L14.5 8 Z" fill="#f59e0b"/><path d="M24.5 12.5 L26 3.5 L17.5 8 Z" fill="#f59e0b"/><path d="M8.3 10.6 L7.5 6 L12 8.3 Z" fill="#fbcfe8"/><path d="M23.7 10.6 L24.5 6 L20 8.3 Z" fill="#fbcfe8"/><circle cx="16" cy="18" r="10" fill="#f59e0b"/><ellipse cx="16" cy="21.6" rx="6.6" ry="5" fill="#fff7ed"/><circle cx="11.8" cy="16.4" r="1.7" fill="#1f2937"/><circle cx="20.2" cy="16.4" r="1.7" fill="#1f2937"/><path d="M14.7 19.4 h3.2 l-1.6 2 Z" fill="#f97316"/><path d="M16 21.4 v1.1 M16 22.5 q-1.2 1.3 -2.4 .3 M16 22.5 q1.2 1.3 2.4 .3" stroke="#92400e" stroke-width=".9" fill="none" stroke-linecap="round"/><path d="M6.5 18.5 h3 M6.8 21.5 h2.6 M25.5 18.5 h-3 M25.2 21.5 h-2.6" stroke="#d97706" stroke-width=".9" stroke-linecap="round"/></svg></span>
+      <div class="idtxt">
+        <div class="idname">QQ宠物托管</div>
+        <div class="idsub" id="schedTxt">--</div>
+      </div>
+      <span class="idring" id="idRing"></span>
+      <span class="meta" id="clock">--:--</span>
+    </div>
+
+    <!-- 胶囊（官方 y=86 三颗 + y=126 两颗，每颗 67×28 间距 4） -->
+    <div class="flt caps">
+      <div class="cap" title="金币"><img class="cico" src="/qp-icons/coin-24.png" alt=""><span class="cval" id="coins">--</span><span class="cunit" id="coinsAt"></span></div>
+      <div class="cap" title="今日踩踩"><img class="cico" src="/qp-icons/logo_hangout-24.png" alt=""><span class="cval" id="visitTxt">--</span><div class="bar"><i id="visitBar"></i></div></div>
+      <div class="cap" title="今日PK"><img class="cico" src="/qp-icons/logo_pk-24.png" alt=""><span class="cval" id="pkTxt">--</span><div class="bar"><i id="pkBar"></i></div></div>
+      <div class="cap" title="今日冒险"><img class="cico" src="/qp-icons/logo_adventure-24.png" alt=""><span class="cval" id="advTxt">--</span></div>
+      <div class="cap" title="学习/打工" id="capSw"><img class="cico" src="/qp-icons/logo_study-24.png" alt=""><span class="cval" id="swTxt">--</span><span class="cunit" id="swLbl" hidden></span><div class="bar bar-split"><i id="swBarSchool"></i><i id="swBarWork"></i></div></div>
+      <div class="cap" title="经验日常"><img class="cico" src="/qp-icons/emoji-24.png" alt=""><span class="cval" id="expTxt">--</span></div>
+    </div>
+
+    <!-- 中部场景层（官方是 3D 宠物；此处放任务队列） -->
+    <div class="flt scene">
+      <div class="petwrap"><img class="stagepet" id="stagePet" src="/qp-icons/pets/pet00.png" alt=""><span class="stagecap" id="stageCap">待机中</span></div>
+      <div class="qpanel">
+        <div class="qhead"><span id="qTop">--</span><span id="qUpd"></span></div>
+        <div class="tasklist" id="taskList"></div>
+        <div id="qHidden" style="display:none"></div>
       </div>
     </div>
-    <nav class="tabs" id="tabbar">
-  <button data-tab="main" class="on" title="总览"><img src="/qp-icons/coin-24.png" alt=""><span>总览</span></button>
-  <button data-tab="shot" title="实时画面"><img src="/qp-icons/emoji-24.png" alt=""><span>画面</span></button>
-  <button data-tab="adv" title="冒险"><img src="/qp-icons/logo_adventure-24.png" alt=""><span>冒险</span></button>
-  <button data-tab="plan" title="职业"><img src="/qp-icons/logo_work-24.png" alt=""><span>职业</span></button>
-  <button data-tab="notify" title="通知"><img src="/qp-icons/bubble_button-24.png" alt=""><span>通知</span></button>
-  <button data-tab="set" title="设置"><img src="/qp-icons/line/skills-24.png" alt=""><span>设置</span></button>
-  <button data-tab="log" title="日志"><img src="/qp-icons/bubble_text-24.png" alt=""><span>日志</span></button>
-</nav>
-    <div class="caps">
-    <div class="cap" title="金币" id="capCoins">
-      <img class="cico" src="/qp-icons/coin-24.png" alt="">
-      <span class="cval" id="coins">--</span>
-      <span class="cunit" id="coinsAt"></span>
-    </div>
-    <div class="cap" title="今日踩踩" id="capVisit">
-      <img class="cico" src="/qp-icons/logo_hangout-24.png" alt="">
-      <span class="cval" id="visitTxt">--</span>
-      <div class="bar"><i id="visitBar"></i></div>
-    </div>
-    <div class="cap" title="今日PK" id="capPk">
-      <img class="cico" src="/qp-icons/logo_pk-24.png" alt="">
-      <span class="cval" id="pkTxt">--</span>
-      <div class="bar"><i id="pkBar"></i></div>
-    </div>
-    <div class="cap" title="今日冒险" id="capAdv">
-      <img class="cico" src="/qp-icons/logo_adventure-24.png" alt="">
-      <span class="cval" id="advTxt">--</span>
-    </div>
-    <div class="cap" title="今日学习 / 打工" id="capSw">
-      <img class="cico" src="/qp-icons/logo_study-24.png" alt="">
-      <span class="cval" id="swTxt">--</span>
-      <!-- swLbl 原为可见标签；胶囊放不下长文案，改为隐藏元素供 JS 写入，
-           其内容由 JS 同步到 capSw 的 title（悬浮可看） -->
-      <span class="cunit" id="swLbl" hidden></span>
-      <div class="bar bar-split"><i id="swBarSchool"></i><i id="swBarWork"></i></div>
-    </div>
-    <div class="cap" title="经验日常" id="capExp">
-      <img class="cico" src="/qp-icons/emoji-24.png" alt="">
-      <span class="cval" id="expTxt">--</span>
-    </div>
-    </div><!-- /.caps -->
 
-    <!-- 中部舞台：照 QQ 首页中央的宠物位。
-         宠物贴图由宠物视频合成（左半立绘 + 右半 alpha 遮罩），
-         见 tools/make_pet_cutouts.py。 -->
-    <div class="stage">
-      <img class="stagepet" id="stagePet" src="/qp-icons/pets/pet00.png" alt="">
-      <div class="stagecap" id="stageCap">待机中</div>
+    <!-- 右功能栏（官方 x=414 y=335/405/495，各 50×70） -->
+    <div class="flt funcbar" aria-label="调度器控制">
+      <button class="fab" id="btnRunnerStart" title="启动调度器"><span class="fi">&#9654;</span><span class="ft">启动</span></button>
+      <button class="fab stop" id="btnRunnerStop" title="停止调度器"><span class="fi">&#9632;</span><span class="ft">停止</span></button>
+      <button class="fab ghost" id="btnShot" title="刷新画面"><span class="fi">&#8635;</span><span class="ft">画面</span></button>
     </div>
 
-  </section><!-- /.home -->
-
-  <!-- 底部抽屉（照 QQ 宠物首页底部那条）：当前任务 + 倒计时。
-       必须是 <main> 的直接子元素 —— showTab 用 'main > [data-page]' 直系选择器，
-       嵌在 .home 里会匹配不到、页面切不回来。 -->
-  <section class="drawer" id="runnerCard" data-page="main">
-    <div class="dhandle"></div>
-    <div class="drow">
+    <!-- 底部入口（官方 x=215 y=728 50×54） -->
+    <div class="flt drawer" id="runnerCard">
       <img class="dico" id="runnerIcon" src="/qp-icons/logo_work-24.png" alt="">
       <div class="dcol">
         <div class="dtitle"><span class="dot" id="runnerDot"></span><span id="runnerState">--</span><span class="dhint" id="runnerHint"></span></div>
         <div class="dsub" id="workSub"></div>
         <div class="dsub" id="runnerSub"></div>
+        <div class="saveMsg" id="runnerMsg"></div>
       </div>
       <span class="dmeta" id="runnerMeta"></span>
     </div>
-    <div class="saveMsg" id="runnerMsg"></div>
-  </section>
+  </section><!-- /.home -->
+
+
 
   <!-- 实时画面（独立页）：手机画面单独一屏，便于放大看 / 点开原图 -->
   <section class="shotpage" data-page="shot">
@@ -1846,12 +1881,7 @@ html[data-scene="record"]{--qp-room:var(--qp-room-record)}
   </section>
 
 
-  <section class="card qcard" data-page="main">
-    <h2>任务队列</h2>
-    <div class="qhead"><span id="qTop">--</span><span id="qUpd"></span></div>
-    <div class="tasklist" id="taskList"></div>
-    <div id="qHidden" style="display:none;font-size:10.5px;color:var(--sub);margin-top:5px"></div>
-    </section>
+
 
   <section class="card" data-page="notify">
     <h2>通知 <span style="font-weight:400;color:var(--sub)">推送渠道与事件开关</span></h2>
@@ -1893,15 +1923,7 @@ html[data-scene="record"]{--qp-room:var(--qp-room-record)}
   </div>
 
 </main>
-<!-- 右侧功能栏（QQ 宠物右侧 喂食/洗澡/好友 位）：启动/停止/刷新画面 -->
-<!-- 右侧功能栏（照 QQ 首页右侧磨砂长胶囊）。
-     注意：手机画面里游戏自带的 喂食/洗澡/好友 是操作宠物的；
-     这里是控制调度器的，语义不同故并列保留。 -->
-<aside class="funcbar" aria-label="调度器控制">
-  <button class="fab" id="btnRunnerStart" title="启动调度器"><span class="fi">&#9654;</span><span class="ft">启动</span></button>
-  <button class="fab stop" id="btnRunnerStop" title="停止调度器"><span class="fi">&#9632;</span><span class="ft">停止</span></button>
-  <button class="fab ghost" id="btnShot" title="刷新手机画面"><span class="fi">&#8635;</span><span class="ft">画面</span></button>
-</aside>
+
 </div><!-- /.app -->
 <footer>
   <div id="footStrategy"></div>
@@ -2809,6 +2831,21 @@ try{
   const okSW=('serviceWorker' in navigator)&&(location.protocol==='https:'||location.hostname==='localhost'||location.hostname==='127.0.0.1');
   if(okSW) navigator.serviceWorker.register('/sw.js').catch(()=>{});
 }catch(e){}
+
+// ---- 舞台单位基准：1dp = 可用宽度 / 480 ----
+// 不用 CSS 的 100vw：它含滚动条宽度（实测 clientWidth 489 vs 100vw 500），
+// 会让所有绝对坐标偏大约 2%。这里按真实可用宽度精确计算并写入 --vu。
+(function(){
+  var home=document.querySelector('.home');
+  if(!home) return;
+  function setU(){
+    var w=home.clientWidth || document.documentElement.clientWidth;
+    home.style.setProperty('--vu',(w/480)+'px');
+  }
+  setU();
+  window.addEventListener('resize',setU);
+  window.addEventListener('orientationchange',setU);
+})();
 </script>
 </body>
 </html>
