@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <defs>
+    <linearGradient id="rg" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#FFC85C"/>
+      <stop offset="0.45" stop-color="#FF990F"/>
+      <stop offset="1" stop-color="#D97600"/>
+    </linearGradient>
+  </defs>
+  <!-- 缺口圆环：圆头圆尾 -->
+  <path d="M36 24 A12 12 0 1 1 24 12" fill="none"
+        stroke="url(#rg)" stroke-width="7" stroke-linecap="round"/>
+  <!-- 箭头：圆角三角（stroke-linejoin 磨圆），压在环末端 -->
+  <path d="M30.5 6.5 L30.5 17 L20.5 11.75 Z"
+        fill="url(#rg)" stroke="url(#rg)" stroke-width="8"
+        stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

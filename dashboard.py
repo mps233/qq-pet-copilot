@@ -1120,7 +1120,7 @@ body{
   overflow-x:hidden;
   /* 官方画布 853dp；用 --u 乘出来即可。
      注意不要写 calc(100% * N) —— 百分比在 min-height 里会被当相对高度算。 */
-  min-height:calc(var(--u) * 853);
+  min-height:100vh;min-height:100dvh;
   margin:0;padding:0;
 }
 /* 浮动元素通用：position:absolute；坐标由各具体类给出（写死 dp 字面量，
@@ -1198,10 +1198,6 @@ body{
   mask:radial-gradient(circle,transparent 38%,#000 38%);
 }
 .idring.off{background:conic-gradient(#EF4444 0 100%)}
-.meta{
-  font-size:calc(var(--u) * 10);color:var(--sub);
-  font-variant-numeric:tabular-nums;flex:none;
-}
 
 /* ---------- 5. 胶囊两行（官方 y=86 三颗 + y=126 两颗，每颗 67×28 间距 4） ---------- */
 .caps{
@@ -1308,7 +1304,7 @@ body{
 .funcbar{
   position:absolute;
   left:calc(var(--u) * 294);
-  top:calc(var(--u) * 319.3);
+  top:calc(var(--u) * 190);
   width:calc(var(--u) * 50);
   z-index:5;
   display:flex;flex-direction:column;
@@ -1333,27 +1329,44 @@ body{
   font-size:calc(var(--u) * 10);padding:0;
   transition:transform .12s;
 }
-.fab .fi{font-size:calc(var(--u) * 17);line-height:1}
+.fab .fi{
+  /* 图标（SVG）与文字；原来的字符图标是 font-size，改成图片后需要显式尺寸 */
+  width:calc(var(--u) * 22);height:calc(var(--u) * 22);
+  object-fit:contain;display:block;
+}
 .fab .ft{font-size:calc(var(--u) * 10);line-height:1;color:var(--strong);font-weight:600}
 .fab:active{transform:scale(.94)}
 .fab:disabled{opacity:.45;cursor:default}
 .funcbar .fab:nth-child(3){margin-top:calc(var(--u) * 20)}
-.fab.stop .fi{color:#D93A2B}
-.fab.ghost .fi{color:var(--accent)}
+/* 停止/画面图标是 SVG，颜色已内嵌（暖橙系），不再用 color 改色 */
 
 /* ---------- 5d. 底部入口（官方 y=728 居中，50×54） ---------- */
+/* 底部弧形面板（官方底部是一块满宽上凸的浅米色圆台：
+     顶点 y≈669dp 宽 48dp -> y=717dp 撑满全宽 359dp -> 延伸到画布底）。
+     用 border-radius 画上凸弧：顶部两侧大圆角。 */
+.deck{
+  left:0;
+  width:100%;
+  bottom:0;
+  top:auto;
+  height:calc(var(--u) * 135);   /* 669 -> 804dp */
+  background:linear-gradient(180deg,#EFDCC6 0%,#E4CFB9 22%,#E0C9B2 100%);
+  border-radius:50% 50% 0 0 / calc(var(--u) * 52) calc(var(--u) * 52) 0 0;
+  box-shadow:0 calc(var(--u) * -1) calc(var(--u) * 3) rgba(120,85,30,.08);
+  z-index:1;
+}
 .drawer{
-  left:calc(var(--u) * 155);
-  top:calc(var(--u) * 692);
-  width:calc(var(--u) * 50);
-  height:calc(var(--u) * 54);
-  overflow:hidden;
+  /* 底部信息：坐在 .deck 弧形面板上，水平居中、贴近弧顶（官方图标在弧顶下方）。
+     deck 高 135dp（669~804），图标中心约在 700dp -> 距 deck 顶 31dp。 */
+  left:50%;
+  transform:translateX(-50%);
+  top:calc(var(--u) * 22);
+  width:calc(var(--u) * 62);
   display:flex;flex-direction:column;align-items:center;
-  gap:calc(var(--u) * 1);
+  gap:calc(var(--u) * 2);
   background:transparent;box-shadow:none;
   text-align:center;
 }
-.drow{display:contents}
 .dico{
   width:calc(var(--u) * 44);height:calc(var(--u) * 46);
   object-fit:contain;flex:none;
@@ -1361,9 +1374,12 @@ body{
 .dcol{display:flex;flex-direction:column;align-items:center;gap:calc(var(--u) * 1)}
 .dtitle{
   display:flex;align-items:center;justify-content:center;gap:calc(var(--u) * 3);
-  font-weight:680;font-size:calc(var(--u) * 13);color:var(--strong);
-  white-space:nowrap;
+  font-weight:680;font-size:calc(var(--u) * 14);color:var(--strong);white-space:nowrap;
 }
+.drow{display:contents}
+
+
+
 .dhint{display:none}
 .dsub{
   font-size:calc(var(--u) * 9);color:var(--sub);
@@ -1415,8 +1431,13 @@ body{
 /* ---------- 7. 任务队列 ---------- */
 .qcard{border-radius:var(--r-xl)}
 .qhead{
-  display:flex;justify-content:space-between;font-size:12px;color:var(--sub);
-  margin-bottom:6px;font-variant-numeric:tabular-nums;
+  display:flex;align-items:center;
+  margin-bottom:calc(var(--u) * 4);
+}
+/* 面板标题（原状态行已移除，只留固定标题） */
+.qtitle{
+  font-size:calc(var(--u) * 11);font-weight:600;
+  color:var(--sub);letter-spacing:.06em;
 }
 .qgrp{font-size:10.5px;color:var(--sub);letter-spacing:.06em;margin:10px 0 2px}
 .tasklist .mrow{
@@ -1425,8 +1446,10 @@ body{
 }
 .tasklist .mrow:first-child,.mrow:first-child{border-top:0}
 .mcb{
-  width:20px;height:20px;border-radius:var(--r-sm);background:var(--line);
+  width:calc(var(--u) * 20);height:calc(var(--u) * 20);
+  border-radius:calc(var(--u) * 6);background:rgba(0,0,0,.10);
   flex:none;cursor:pointer;position:relative;user-select:none;
+  margin-left:auto;   /* 移到行尾（原"已启用/已禁用"的位置） */
 }
 .mcb.on{background:var(--accent)}
 .mcb.on::after{
@@ -1682,11 +1705,6 @@ pre#logbox{
 }
 
 /* ---------- 13. 页脚 ---------- */
-footer{
-  color:var(--sub);font-size:11px;text-align:center;
-  padding:14px 16px 28px;line-height:1.7;
-}
-#footStrategy{color:var(--sub)}
 
 /* ---------- 14. 响应式 ---------- */
 /* 窄屏（≤639px）：侧栏仍保留，收紧尺寸 */
@@ -1829,7 +1847,6 @@ html[data-scene="record"]{--qp-room:var(--qp-room-record)}
         <div class="idsub" id="schedTxt">--</div>
       </div>
       <span class="idring" id="idRing"></span>
-      <span class="meta" id="clock">--:--</span>
     </div>
 
     <!-- 胶囊（官方结构：图标在胶囊【外面】且比胶囊大 22.3 vs 19.7dp；文字在胶囊内居中）
@@ -1851,25 +1868,25 @@ html[data-scene="record"]{--qp-room:var(--qp-room-record)}
     <!-- 中部场景层（官方是 3D 宠物；此处放任务队列） -->
     <div class="flt scene">
       <div class="qpanel">
-        <div class="qhead"><span id="qTop">--</span><span id="qUpd"></span></div>
+        <div class="qhead"><span class="qtitle">任务列表</span></div>
         <div class="tasklist" id="taskList"></div>
-        <div id="qHidden" style="display:none"></div>
       </div>
     </div>
 
     <!-- 右功能栏（官方 x=414 y=335/405/495，各 50×70） -->
     <div class="flt funcbar" aria-label="调度器控制">
       <div class="fb-group">
-        <button class="fab" id="btnRunnerStart" title="启动调度器"><span class="fi">&#9654;</span><span class="ft">启动</span></button>
-        <button class="fab stop" id="btnRunnerStop" title="停止调度器"><span class="fi">&#9632;</span><span class="ft">停止</span></button>
+        <button class="fab" id="btnRunnerStart" title="启动调度器"><img class="fi" src="/qp-icons/ctrl/play.svg?v=3" alt=""><span class="ft">启动</span></button>
+        <button class="fab stop" id="btnRunnerStop" title="停止调度器"><img class="fi" src="/qp-icons/ctrl/stop.svg?v=3" alt=""><span class="ft">停止</span></button>
       </div>
       <div class="fb-group">
-        <button class="fab ghost" id="btnShot" title="刷新画面"><span class="fi">&#8635;</span><span class="ft">画面</span></button>
+        <button class="fab ghost" id="btnShot" title="刷新画面"><img class="fi" src="/qp-icons/ctrl/refresh.svg?v=3" alt=""><span class="ft">画面</span></button>
       </div>
     </div>
 
     <!-- 底部入口（官方 x=215 y=728 50×54） -->
-    <div class="flt drawer" id="runnerCard">
+    <div class="flt deck">
+      <div class="flt drawer" id="runnerCard">
       <img class="dico" id="runnerIcon" src="/qp-icons/official/cap_coin.png" alt="">
       <div class="dcol">
         <div class="dtitle"><span class="dot" id="runnerDot"></span><span id="runnerState">--</span><span class="dhint" id="runnerHint"></span></div>
@@ -1877,8 +1894,9 @@ html[data-scene="record"]{--qp-room:var(--qp-room-record)}
         <div class="dsub" id="runnerSub"></div>
         <div class="saveMsg" id="runnerMsg"></div>
       </div>
-      <span class="dmeta" id="runnerMeta"></span>
-    </div>
+        <span class="dmeta" id="runnerMeta"></span>
+        </div>
+      </div>
   </section><!-- /.home -->
 
 
@@ -1940,10 +1958,7 @@ html[data-scene="record"]{--qp-room:var(--qp-room-record)}
 </main>
 
 </div><!-- /.app -->
-<footer>
-  <div id="footStrategy"></div>
-  <div>设置保存后下一轮生效 · 日志 3s / 数据 6s / 冒险 10s / 截图 15s</div>
-</footer>
+
 
 <script>
 const $=s=>document.querySelector(s);
@@ -2084,7 +2099,6 @@ function renderData(d){
   const qOrder=(cfg.task_order||[]);
   const qRank=k=>{const i=qOrder.indexOf(k);return i<0?999:i;};
   let rows='';
-  let hiddenQ=[];
   const cur=(q.current||'');
   const curMap={'上课':'school','学习':'school','打工':'work','冒险':'adventure',
                 '护理':'care','踩踩':'visit','PK':'pk','好友护理':'friend_care',
@@ -2108,18 +2122,15 @@ function renderData(d){
     else det='—';
     const done=(st==='done'||st==='dead');
     const tag=TTAG[k]?('<span class="ttag">'+TTAG[k]+'</span>'):'';
+    // 按需求：右侧的"已启用/已禁用"状态文字已移除，
+    // 勾选框从左侧移到原状态文字的位置（最右）。
     return '<div class="mrow'+(done?' done':'')+(isRun?' run':'')+'">'
-      +'<span class="mcb'+(on&&st!=='disabled'?' on':'')+'" data-k="'+k+'"></span>'
       +'<img class="qico" src="/qp-icons/'+(TASKICON[k]||'coin')+'-24.png" alt="">'
       +'<span class="mname'+(on?'':' off')+'">'+(TASKNAME[k]||k)+'</span>'+tag
-      +'<span class="mdet">'+(on?det:'<span class="off-t">已禁用</span>')+'</span></div>';
+      +'<span class="mcb'+(on&&st!=='disabled'?' on':'')+'" data-k="'+k+'"></span></div>';
   };
   if(qLive){
-    $('#qTop').innerHTML=(cur?'<span style="color:var(--accent);font-weight:650">正在执行:'+esc(cur)+'</span> · ':'')
-      +'可执行 '+(q.ready??'--')+' · 等待 '+(q.waiting??'--')
-      +(q.next?(' · 下个定时 '+(TASKNAME[q.next]||q.next)+' '+String(q.next_at||'').slice(0,5)):'');
-    $('#qUpd').textContent=q.updated?('更新 '+q.updated):'';
-    hiddenQ=Object.entries(qt).filter(([k,v])=>(v.state||'')==='disabled').map(([k])=>TASKNAME[k]||k);
+    // 面板标题固定为「任务列表」（原状态行/更新时间已按需求移除）
     if(q.pending) rows+='<div class="mrow"><span class="mname">收尾队列</span>'
       +'<span class="mdet"><span class="run">'+q.pending+' 待结算</span></span></div>';
     const ks=Object.keys(qt).slice().sort((a,b)=>qRank(a)-qRank(b));
@@ -2131,9 +2142,6 @@ function renderData(d){
   }else{
     const te=cfg.tasks_enabled||{};
     const keys=qOrder.length?qOrder:Object.keys(te);
-    $('#qTop').textContent='调度器未运行 · 勾选即启用该任务（保存后下一轮生效）';
-    $('#qUpd').innerHTML='<span style="color:#d97706">启动调度器后开始自动托管</span>';
-    hiddenQ=keys.filter(k=>te[k]===false).map(k=>TASKNAME[k]||k);
     const allKeys=(keys.length?keys:Object.keys(TASKNAME)).slice().sort((a,b)=>qRank(a)-qRank(b));
     for(const k of allKeys){
       const on=te[k]!==false;
@@ -2141,11 +2149,7 @@ function renderData(d){
     }
   }
   $('#taskList').innerHTML=rows||'';
-  const qh=document.getElementById('qHidden');
-  if(qh){
-    if(hiddenQ.length){ qh.style.display=''; qh.textContent='未启用：'+hiddenQ.join('、')+'（不参与调度）'; }
-    else { qh.style.display='none'; qh.textContent=''; }
-  }
+  // 「未启用：xxx（不参与调度）」提示行已按需求移除
   // 截图
   const shots=d.shots||[];
   if(shots.length){
@@ -2154,16 +2158,7 @@ function renderData(d){
   }
   if(d.editable && !setDirty) renderSettings(d.editable);
   renderCfg((d.config||{}).rows);
-  // footer：策略按配额（cfg.strategy 已算好）；打工地点/时长只在打工确实启用时附上，
-  // 否则会出现"策略：只学习 · 打工 45分钟 @ 风铃旅社"这种自相矛盾的文案
-  let foot='策略：'+(cfg.strategy||'未知');
-  if(cfg.work_enabled&&(cfg.work_quota_hours||0)>0&&cfg.work_duration){
-    foot+=' · 打工 '+cfg.work_duration+' @ '+(cfg.work_location||'');
-  }
-  if((cfg.study_quota_hours||0)>0){
-    foot+=' · 学习配额 '+cfg.study_quota_hours+'h';
-  }
-  $('#footStrategy').textContent=foot;
+  // 页面底部的策略行（footer）已按需求移除，这里不再拼文案
 }
 
 async function refreshData(){
@@ -2426,7 +2421,6 @@ async function refreshLogs(){
 // 秒级：时钟 + 倒计时
 setInterval(()=>{
   const n=new Date();
-  $('#clock').textContent=pad(n.getHours())+':'+pad(n.getMinutes())+':'+pad(n.getSeconds());
   if(etaRemain!=null && schedOn){
     etaRemain-=1;
     const sub= etaRemain>0? ('剩余 '+hms(etaRemain)+' · 结束后自动开启下一项') : '收尾中…';
@@ -2852,6 +2846,31 @@ try{
   window.addEventListener('resize',setU);
   window.addEventListener('orientationchange',setU);
 })();
+
+// ---- 功能栏与任务列表底部对齐 ----
+// 列表高度随任务数变化（9 项时约 227dp），固定 top 不是压住 deck 就是留大空。
+// 渲染后按列表实际底部反推功能栏 top（功能栏总高 230dp：20 + 70*2 + 70 + 20 间距）。
+(function(){
+  var home=document.querySelector('.home'),
+      tl=document.getElementById('taskList'),
+      fb=document.querySelector('.funcbar');
+  if(!home||!tl||!fb) return;
+  function place(){
+    var u=parseFloat(getComputedStyle(home).getPropertyValue('--vu'))||(home.clientWidth/360);
+    var hr=home.getBoundingClientRect(), tr=tl.getBoundingClientRect();
+    var want=(tr.bottom-hr.top)/u;                 // 期望：功能栏底端 = 列表底端
+    var h2=fb.getBoundingClientRect().height/u;    // 功能栏实际高
+    var top=want-h2;
+    if(top<100) top=319.3;                         // 列表过短时回官方位置
+    fb.style.top='calc(var(--u) * '+top.toFixed(1)+')';
+  }
+  place();
+  window.addEventListener('resize',place);
+  var tlEl=document.getElementById('taskList');
+  if(tlEl&&window.MutationObserver) new MutationObserver(place).observe(tlEl,{childList:true});
+})();
+
+
 </script>
 </body>
 </html>
@@ -2889,9 +2908,9 @@ class Handler(BaseHTTPRequestHandler):
                 root = (BASE / 'static' / 'qp-icons').resolve()
                 # 白名单扩展名（背景是 .jpg；仍不接受任意后缀，避免误发其它文件）
                 CTYPE = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-                         '.webp': 'image/webp'}
+                         '.webp': 'image/webp', '.svg': 'image/svg+xml'}
                 if fp.exists() and fp.suffix.lower() in CTYPE and fp.is_relative_to(root):
-                    self._send(200, CTYPE[fp.suffix.lower()], fp.read_bytes(), 'max-age=604800')
+                    self._send(200, CTYPE[fp.suffix.lower()], fp.read_bytes(), 'max-age=3600')
                 else:
                     self._send(404, 'text/plain', b'not found')
             elif path in ('/icon-192.png', '/icon-512.png'):
@@ -2900,7 +2919,7 @@ class Handler(BaseHTTPRequestHandler):
                     data = fp.read_bytes()
                     self.send_response(200)
                     self.send_header('Content-Type', 'image/png')
-                    self.send_header('Cache-Control', 'max-age=604800')
+                    self.send_header('Cache-Control', 'max-age=3600')
                     self.send_header('Content-Length', str(len(data)))
                     self.end_headers()
                     self.wfile.write(data)

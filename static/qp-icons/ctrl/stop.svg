@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <defs>
+    <linearGradient id="sg" x1="0.3" y1="0" x2="0.7" y2="1">
+      <stop offset="0" stop-color="#FFC85C"/>
+      <stop offset="0.45" stop-color="#FF990F"/>
+      <stop offset="1" stop-color="#D97600"/>
+    </linearGradient>
+  </defs>
+  <!-- 28x28 圆角方块：与播放(27x31)/刷新(31x31)视觉重量一致 -->
+  <rect x="10" y="10" width="28" height="28" rx="8" fill="url(#sg)"/>
+  <rect x="13.5" y="13" width="21" height="8.5" rx="4.2" fill="#FFFFFF" opacity="0.20"/>
+</svg>
