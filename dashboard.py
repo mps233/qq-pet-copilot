@@ -1086,7 +1086,7 @@ HTML = r"""<!doctype html>
 /* ---------- 2. 基础 ---------- */
 *{box-sizing:border-box}
 html{
-  margin:0;padding:0;min-height:100%;
+  margin:0;padding:0;height:100%;min-height:100%;
   background-color:var(--bg);
   background-image:var(--qp-room);
   background-position:center top;background-size:cover;
@@ -1095,7 +1095,10 @@ html{
   overscroll-behavior-y:contain;
 }
 body{
-  margin:0;padding:0;min-height:100vh;background:transparent;
+  margin:0;padding:0;background:transparent;
+  /* 顶部安全区：避免内容被状态栏/灵动岛遮挡（PWA 全屏时必需）。
+     只加上边距 —— 底部不加，否则会露白条（实测踩坑）。 */
+  padding-top:env(safe-area-inset-top, 0px);
   color:var(--text);
   font:15px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",Roboto,sans-serif;
   -webkit-text-size-adjust:100%;overflow-x:hidden;
@@ -1122,7 +1125,12 @@ body{
   overflow-x:hidden;
   /* 官方画布 853dp；用 --u 乘出来即可。
      注意不要写 calc(100% * N) —— 百分比在 min-height 里会被当相对高度算。 */
-  min-height:100vh;min-height:100dvh;
+  /* 高度 = 一屏 - 顶部安全区。
+     用 100dvh 减 safe-area：dvh 在 iOS Safari 含底部工具栏，
+     但 body 的 padding-top 已扣掉刘海，两者相减正好铺满可视区。
+     （纯 CSS 方案：不依赖 JS 首帧时序） */
+  min-height:calc(100dvh - env(safe-area-inset-top, 0px));
+  min-height:calc(100vh - env(safe-area-inset-top, 0px));
   margin:0;padding:0;
 }
 /* 浮动元素通用：position:absolute；坐标由各具体类给出（写死 dp 字面量，
