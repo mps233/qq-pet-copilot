@@ -15,3 +15,10 @@ config.yaml
 
 # 第三方二进制/离线包（scrcpy、frida-server 等），build 时下载或本地放入，不入库
 resources/
+
+# QQ 宠物素材提取产物（约 2.2G、4.3 万个文件）：含 375M 的 base.apk 超出 GitHub 单文件
+# 100M 上限；且素材版权归腾讯，不宜入库/发布。素材保留在本地磁盘，不入版本控制。
+qqpet_assets/
+
+# macOS 目录元数据
+.DS_Store

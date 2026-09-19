@@ -25,8 +25,9 @@ done
 if command -v lsof >/dev/null 2>&1; then
   existing=$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | head -1)
   if [ -n "$existing" ]; then
-    echo "仪表盘已在运行（PID $existing，端口 $PORT）"
+    echo "仪表盘已在运行（PID $existing，端口 $PORT，已存活 $(ps -o etime= -p "$existing" 2>/dev/null | tr -d ' ')）"
     echo "访问: http://127.0.0.1:$PORT/"
+    [ -f runs/dashboard_watchdog.log ] && echo "近 5 次启停记录：" && tail -5 runs/dashboard_watchdog.log
     exit 0
   fi
 fi
@@ -37,19 +38,28 @@ PY=".venv/bin/python"
 
 # 传参给 dashboard.py（用 python 侧解析，避免 shell 拼字符串注入）
 PORT="$PORT" "$PY" - "$@" <<'PYEOF'
-import os, subprocess, sys
+import os, subprocess, sys, time
 from pathlib import Path
 base = Path.cwd()
 port = os.environ.get('PORT', '8787')
 log = base / 'runs' / 'dashboard_console.log'
+# 追加模式 + 每次启动打分隔符：进程被杀后能一眼看出是"哪一次启动、活到什么时候"
+# （曾因日志被覆盖，UI 断掉时无任何堆栈可查，只能靠猜）
 with open(log, 'ab') as f:
-    subprocess.Popen(
+    f.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} 启动 "
+            f"(port={port}, shell_ppid={os.getppid()}) =====\n".encode())
+    f.flush()
+    p = subprocess.Popen(
         [sys.executable, 'dashboard.py', *sys.argv[1:]],
         cwd=str(base), stdin=subprocess.DEVNULL,
         stdout=f, stderr=subprocess.STDOUT,
         start_new_session=True,   # 脱离终端（macOS 无 setsid 命令，用这个）
     )
-print(f'仪表盘已启动（端口 {port}，日志 runs/dashboard_console.log）')
+# 父进程立即退出后，用 watchdog 在子进程死亡时补记一笔——超出终端生命周期的死因也能留痕
+watch = base / 'runs' / 'dashboard_watchdog.log'
+with open(watch, 'ab') as w:
+    w.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 启动 pid={p.pid} port={port}\n".encode())
+print(f'仪表盘已启动（PID {p.pid}，端口 {port}，日志 runs/dashboard_console.log）')
 print(f'访问: http://127.0.0.1:{port}/')
 PYEOF
 
