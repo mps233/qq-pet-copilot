@@ -1203,61 +1203,56 @@ body{
 
 /* ---------- 5. 胶囊两行（官方 y=86 三颗 + y=126 两颗，每颗 67×28 间距 4） ---------- */
 .caps{
-  left:calc(var(--u) * 74);
+  left:calc(var(--u) * 70);
   top:calc(var(--u) * 94.3);
   display:grid;
-  /* 官方每颗 67×28，横向间距 4（74→145→216），行距 12（86→126）。
-     内容偏长时允许单颗伸展到 74，避免数值被裁。 */
-  grid-template-columns:repeat(3,calc(var(--u) * 67));
+  /* 官方每颗 67×28（x=74 起，间距 4）。但官方胶囊里只放"图标+短数字"，
+     我们的数值更长（如 170/500、学 7·工 3），67dp 会裁字（实测 5 颗里 3 颗溢出）。
+     三颗占满中部可用区 74~294：每颗 (220-2*4)/3 ≈ 70.6dp，仍偏紧，
+     故用 minmax 允许按内容伸展到 74dp，并允许数值横向压缩。 */
+  grid-template-columns:repeat(3,minmax(0,calc(var(--u) * 74)));
   grid-auto-rows:calc(var(--u) * 28);
   gap:calc(var(--u) * 12) calc(var(--u) * 4);
 }
 .cap{
   display:flex;align-items:center;gap:calc(var(--u) * 3);
-  min-width:0;padding:0 calc(var(--u) * 7);
+  min-width:0;padding:0 calc(var(--u) * 5);
   background:var(--cap-bg);border-radius:calc(var(--u) * 14);
   color:var(--cap-fg);position:relative;box-sizing:border-box;
 }
-.cap .cico{width:calc(var(--u) * 19);height:calc(var(--u) * 19);flex:none;border-radius:50%}
+.cap .cico{width:calc(var(--u) * 15);height:calc(var(--u) * 15);flex:none;border-radius:50%}
 .cap .cval{
-  font-weight:680;font-size:calc(var(--u) * 11);color:#fff;
+  font-weight:680;font-size:calc(var(--u) * 10);color:#fff;
   font-variant-numeric:tabular-nums;white-space:nowrap;
-  flex:1;min-width:0;overflow:hidden;
+  flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;letter-spacing:-.03em;
 }
-.cap .cunit{font-size:calc(var(--u) * 9);color:rgba(255,255,255,.85);white-space:nowrap;flex:none}
+.cap .cunit{font-size:calc(var(--u) * 8.5);color:rgba(255,255,255,.85);white-space:nowrap;
+  flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;max-width:42%}
 .cap .bar{
   position:absolute;left:calc(var(--u) * 7);right:calc(var(--u) * 7);
   bottom:calc(var(--u) * 3);height:calc(var(--u) * 3);
   margin:0;background:rgba(255,255,255,.28);border-radius:2px;
 }
 .cap .bar>i{background:var(--accent)}
+/* 长数值（金币 5 位数、冒险 170/500、学工 3 段）单独收小字号，避免裁字 */
+.cap .cval#coins,.cap .cval#advTxt{font-size:calc(var(--u) * 9.5)}
+.cap .cval#swTxt{font-size:calc(var(--u) * 9)}
+/* 金币胶囊里的"· 21:41"（最后更新时刻）在 72dp 胶囊里放不下，会挤掉数值。
+   官方金币胶囊也只放数值（2.2w），时钟已在资料卡上显示 —— 故隐藏。
+   JS 仍在给 #coinsAt 赋值，元素保留避免空引用。 */
+.cap .cunit#coinsAt{display:none}
 
 /* ---------- 5b. 中部场景层（官方是 3D 宠物；这里放任务队列） ---------- */
 .scene{
+  /* 官方中部内容区：x=74 ~ 294（右侧 294~344 留给功能栏）。
+     面板居中于该区间：left=74，width=220 -> 中心 184 ≈ 画布中心 180。
+     之前用 width=340（74~414）会压住右功能栏，已修正。 */
   left:calc(var(--u) * 74);
+  width:calc(var(--u) * 220);
   top:calc(var(--u) * 162);
-  width:calc(var(--u) * 340);      /* 74 ~ 414（右功能栏左侧），官方中部空区 */
-  bottom:calc(var(--u) * 96);      /* 留出底部入口 */
-  display:flex;flex-direction:column;gap:calc(var(--u) * 6);
+  bottom:calc(var(--u) * 96);
+  display:flex;flex-direction:column;
   overflow:hidden;
-}
-/* 宠物（官方中央宠物位）：小尺寸浮在上方 */
-.petwrap{
-  flex:none;display:flex;flex-direction:column;align-items:center;
-  gap:calc(var(--u) * 4);padding-top:calc(var(--u) * 4);
-}
-.stagepet{
-  max-height:calc(var(--u) * 168);max-width:62%;
-  object-fit:contain;display:block;
-  filter:drop-shadow(0 calc(var(--u)*6) calc(var(--u)*10) rgba(120,85,30,.28));
-  animation:stagebob 3.2s ease-in-out infinite;
-}
-@keyframes stagebob{0%,100%{transform:translateY(0)}50%{transform:translateY(calc(var(--u) * -4))}}
-@media(prefers-reduced-motion:reduce){.stagepet{animation:none}}
-.stagecap{
-  font-size:calc(var(--u) * 10);color:var(--strong);
-  background:rgba(255,255,255,.72);border-radius:999px;
-  padding:calc(var(--u) * 2) calc(var(--u) * 8);white-space:nowrap;
 }
 /* 任务队列面板：占据场景层剩余空间，可滚动 */
 .qpanel{
@@ -1268,6 +1263,7 @@ body{
   backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
   box-shadow:var(--sh-1);
   overflow:hidden;
+  z-index:2;                 /* 面板在下 */
 }
 
 /* ---------- 5c. 右功能栏（官方 x=414，y=335/405/495，50×70） ---------- */
@@ -1276,12 +1272,17 @@ body{
   left:calc(var(--u) * 294);
   top:calc(var(--u) * 319.3);
   width:calc(var(--u) * 50);
+  z-index:5;                 /* 功能栏在面板之上，不被半透明遮住 */
   display:flex;flex-direction:column;gap:0;
   /* 官方结构：feed+shower 同一子容器（无缝），friend 单独一组、前隔 20dp */
 }
 .fab{
   width:calc(var(--u) * 50);height:calc(var(--u) * 70);
-  border:0;background:transparent;border-radius:calc(var(--u) * 25);
+  border:0;border-radius:calc(var(--u) * 25);
+  /* 官方右功能栏是半透明白磨砂块（feed/shower 同组无缝、friend 独立） */
+  background:rgba(255,255,255,.55);
+  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  box-shadow:var(--sh-1);
   display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:calc(var(--u) * 2);
   cursor:pointer;color:var(--button-fg,var(--strong));
@@ -1289,7 +1290,7 @@ body{
   transition:transform .12s;
 }
 .fab .fi{font-size:calc(var(--u) * 17);line-height:1}
-.fab .ft{font-size:calc(var(--u) * 10);line-height:1;color:var(--sub)}
+.fab .ft{font-size:calc(var(--u) * 10);line-height:1;color:var(--strong);font-weight:600}
 .fab:active{transform:scale(.94)}
 .fab:disabled{opacity:.45;cursor:default}
 .funcbar .fab:nth-child(3){margin-top:calc(var(--u) * 20)}
@@ -1799,7 +1800,6 @@ html[data-scene="record"]{--qp-room:var(--qp-room-record)}
 
     <!-- 中部场景层（官方是 3D 宠物；此处放任务队列） -->
     <div class="flt scene">
-      <div class="petwrap"><img class="stagepet" id="stagePet" src="/qp-icons/pets/pet00.png" alt=""><span class="stagecap" id="stageCap">待机中</span></div>
       <div class="qpanel">
         <div class="qhead"><span id="qTop">--</span><span id="qUpd"></span></div>
         <div class="tasklist" id="taskList"></div>
@@ -1915,15 +1915,6 @@ function applyScene(curKey, etaKind){
   if(scene!==lastScene){
     lastScene=scene;
     document.documentElement.setAttribute('data-scene',scene);  // 必须写 html（见 CSS 注释）
-    // 按任务换一只宠物（12 张贴图循环取，同一任务固定同一只，避免每轮都跳）
-    const idx=Math.abs([...scene].reduce((a,c)=>a+c.charCodeAt(0),0))%12;
-    const pet=document.getElementById('stagePet');
-    if(pet) pet.src='/qp-icons/pets/pet'+String(idx).padStart(2,'0')+'.png';
-    const cap=document.getElementById('stageCap');
-    if(cap){
-      const NICE={main:'待机中',feed:'吃饭时间',shower:'洗澡时间',record:'学习中'};
-      cap.textContent=NICE[scene]||'待机中';
-    }
   }
 }
 let etaRemain=null, etaClock='', schedOn=false;
