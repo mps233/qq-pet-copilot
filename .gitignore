@@ -26,3 +26,7 @@ qqpet_assets/
 # 配置热加载信号（运行时生成）
 runs/reload.signal
 runs/friends_cache.json
+
+# 调试探针残留（INTEGRATION.md 5.2 的注入式验证副本，临时文件不入库）
+.probe_*.py
+.cmp_head.py

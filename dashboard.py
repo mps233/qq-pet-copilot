@@ -39,7 +39,9 @@ DEFAULT_PORT = 8787
 MANIFEST_JSON = json.dumps({
     'name': 'QQ宠物托管', 'short_name': 'QQ宠物',
     'start_url': '/', 'scope': '/', 'display': 'standalone',
-    'background_color': '#f6f7f9', 'theme_color': '#ea580c',
+    # 暖色房间底（与 CSS --bg / 背景图顶部一致）。历史值是冷灰 #f6f7f9，
+    # 是暖色改版前留下的，会让启动闪屏/状态栏与页面割裂。
+    'background_color': '#FCF7ED', 'theme_color': '#D5A758',
     'icons': [
         {'src': '/icon-192.png', 'sizes': '192x192', 'type': 'image/png'},
         {'src': '/icon-512.png', 'sizes': '512x512', 'type': 'image/png',
@@ -268,25 +270,39 @@ def tail_lines(path, n: int = 250) -> list[str]:
 
 
 def work_eta(lines: list[str]):
-    """从日志里找最后一次“……: 进行中，预计 N 秒后结束（HH:MM:SS 收尾）”——
-    学习（上课）/打工/冒险都走这个模板，换算剩余秒数 + 场景名（kind）。"""
+    """从日志里找最后一次"进行中"登记，算出剩余秒数 + 场景名（kind）。
+
+    **两种日志格式都要认**（都代表"已登记 pending、先调度其他任务"，只是来源不同）：
+      ① `冒险: 进行中，预计 44 秒后结束（…收尾）` —— scenario.defer_busy_end（场景主动延时收尾）
+      ② `检测到正在打工，预计 2681 秒后结束（…收尾）` —— scenario.detect_busy_remaining
+        （出门预检/被雇佣召回等路径）
+    早期只匹配 ①，导致手动切到打工后界面仍停在更早那条"冒险: 进行中"上——
+    而那条的结束时间早过了，于是显示"冒险中 / 收尾中"（用户实报的 bug）。
+    """
     m = None
     for ln in lines[-400:]:
-        mm = re.search(r'([^\[\]:：]{1,8})[:：]\s*进行中，预计 (\d+) 秒后结束'
+        mm = re.search(r'(?:([^\[\]:：]{1,8})[:：]\s*进行中|检测到正在([^，,]{1,10}))'
+                       r'，预计 (\d+) 秒后结束'
                        r'（(\d{2}):(\d{2}):(\d{2}) 收尾）', ln)
         if mm:
             m = mm
     if not m:
         return None
+    kind = (m.group(1) or m.group(2)).strip()
+    hh, mi, ss = m.group(4), m.group(5), m.group(6)
     now = datetime.now()
-    target = now.replace(hour=int(m.group(3)), minute=int(m.group(4)),
-                         second=int(m.group(5)), microsecond=0)
+    target = now.replace(hour=int(hh), minute=int(mi), second=int(ss), microsecond=0)
+    # 跨天兜底：日志里的收尾时间可能是**次日凌晨**（如 23:39 记录、00:24 收尾），
+    # 而 replace 只能拼出"今天 00:24"（已过去近 24 小时），会被下面的 rem<-600 误判成
+    # 过期而返回 None。超过 12 小时就当成明天同一时刻。
+    if target < now - timedelta(hours=12):
+        target += timedelta(days=1)
     rem = int((target - now).total_seconds())
     if rem < -600:
         return None
-    return {'eta_clock': f'{m.group(3)}:{m.group(4)}:{m.group(5)}',
+    return {'eta_clock': f'{hh}:{mi}:{ss}',
             'remaining': max(0, rem),
-            'kind': m.group(1).strip()}
+            'kind': kind}
 
 
 # 游戏机制：学习+打工合计时长的收益效率档（与 scenarios/runner.py 的
@@ -1028,15 +1044,34 @@ HTML = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#111318" media="(prefers-color-scheme: dark)">
+<!-- theme-color：iOS 独立 Web App（添加到主屏）下状态栏那条带的颜色。
+     取房间背景图最顶部实测色（room-main.jpg 顶部 #D5A758 / room-main-dark.jpg
+     顶部 #A9722D），与总览页暖色房间无缝。历史值 #f6f7f9/#111318 是暖色改版
+     **之前**的冷灰，改版时漏改（用户反馈"顶部安全区是白的"）。
+     注意 iOS 26 起 theme-color 支持被移除，状态栏改为采样页面背景色 ——
+     所以 html 的 background-color（见 --bg）必须一起对齐，两条腿都要有。
+     切内页时由 syncThemeColor() 改成顶栏白（见 JS）。 -->
+<meta name="theme-color" content="#D5A758" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#A9722D" media="(prefers-color-scheme: dark)">
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" type="image/png" href="/icon-192.png">
-<link rel="apple-touch-icon" href="/icon-192.png">
+<!-- iOS 主屏图标：**必须换 URL 才会更新** —— iOS 按 URL 缓存 apple-touch-icon，
+     内容换了但 URL 不变时，重新"添加到主屏幕"仍是旧图标（实测踩坑）。
+     故用独立的 apple-touch-icon.png（180×180，iOS 标准尺寸）而不是复用 icon-192.png；
+     以后换图标同样要换文件名（如 -v2）。 -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="QQ宠物">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<!-- **故意不写 apple-mobile-web-app-status-bar-style** ——
+     它的 `default` 值语义是"内容显示在状态栏下方"（Apple 官方文档
+     Safari HTML Reference / Supported Meta Tags），于是状态栏那条带完全由系统绘制
+     （浅色模式 = 白底黑字），网页既画不上去也改不了色，真机就是顶部一条白带。
+     而 `black-translucent` 已被 WebKit 废弃（语义上与深色模式冲突），
+     WebKit 工程师在 bug 317153 里明确答复："Please remove this key,
+     and the status bar should automatically appear in the same color as the webpage."
+     移除后状态栏改为采样网页背景色 —— 这正是我们要的效果，
+     配合下面的 theme-color 与 html 的 background-color（--qp-statusbar）一起生效。 -->
 <title>QQ宠物托管</title>
 <style>
 /* ==========================================================================
@@ -1062,8 +1097,36 @@ HTML = r"""<!doctype html>
   --step-cap:40px;      /* 胶囊两行步进（官方 y 86→126） */
   --gap-card:10px;      /* 卡片间距 */
 
+  /* 顶部三块（资料卡 / 胶囊两行 / 任务面板）的纵坐标与**统一间距**。
+     改 --gap-top 一个值，三处间隙同步变化，不会各改各的又跑偏。
+     历史值：资料卡→胶囊 12.2 / 胶囊两行 17 / 胶囊→面板 6.5（三个不等，
+     视觉上疏密不一：面板被胶囊贴住，两行胶囊又散开）。 */
+  --top-card:34.3;      /* 资料卡顶 y（官方 y=26.2，本机下移让开顶部安全区） */
+  --h-card:46;          /* 资料卡高（官方 46.2） */
+  --h-cap:23;           /* 胶囊行高：图标 23dp 外凸于 20dp 胶囊体（官方图标 22.3） */
+  --gap-top:12;         /* 顶部区块统一间距（TDesign 间距阶梯 12；官方资料卡→胶囊实测 13.8） */
+  /* 由上面几个值推出后续纵坐标（不要再手写数字，否则改了间距就对不上）：
+     胶囊区顶 = 资料卡顶 + 资料卡高 + 间距
+     任务面板顶 = 胶囊区顶 + 胶囊行高 + 间距 + 胶囊行高 + 间距 */
+  --top-caps:calc(var(--top-card) + var(--h-card) + var(--gap-top));
+  --top-scene:calc(var(--top-caps) + var(--h-cap) + var(--gap-top) + var(--h-cap) + var(--gap-top));
+
   /* 暖色拟物底（官方房间背景的同色系） */
   --bg:#FCF7ED;
+  /* 状态栏带采样色：iOS 独立 Web App（添加到主屏）的状态栏那条带由**系统**绘制，
+     DOM 够不到（WebKit bug 301994：内容不能画到状态栏下方）。它的颜色取
+     "页面背景色" —— iOS 18 及更早读 <meta name="theme-color">，iOS 26 起
+     theme-color 支持被移除、改为直接采样 html/body 的 background-color
+     （WebKit bug 309956 / 317153）。两条路都要对齐，否则顶部就是一条
+     与页面割裂的白带。取值 = 各房间背景图最顶部实测色。
+     按场景拆成独立 token（--qp-sb-*）而不是直接写 --qp-statusbar：
+     深色模式的覆盖写在 :root 里，而 html[data-scene] 特异性更高会把它压掉，
+     拆开后深色只需覆盖 --qp-sb-*，由 data-scene 那条统一取值。 */
+  --qp-sb-main:#D5A758;
+  --qp-sb-feed:#CA9F5B;
+  --qp-sb-shower:#E7BC6C;
+  --qp-sb-record:#CAA05C;
+  --qp-statusbar:var(--qp-sb-main);
   --qp-bg2:#EDD18F;
   --card:#F9EFDE;       /* 卡片/资料卡底（官方 #F9EFDE） */
   --line:#EFE3CF;
@@ -1078,7 +1141,7 @@ HTML = r"""<!doctype html>
   /* 圆钮（左=功能入口 / 右=装饰入口，官方是两套） */
   --btn-l-bg:#F9F1E2;   /* 左圆钮底（官方 #F9F1E2） */
   --btn-l-fg:#BE6321;   /* 左圆钮图标棕（官方 #FFBE6321） */
-  --btn-r-bg:rgba(177,142,73,.88);  /* 右圆钮半透明深褐（官方合成 #B18E49） */
+  --btn-r-bg:rgba(0,0,0,.28);       /* 右圆钮底：纯黑蒙版（只压暗、不改色相） */
   --btn-r-fg:#FFEA70;   /* 右圆钮图标亮黄 */
 
   /* 胶囊（官方 #99E1B053 → alpha 0.6，本色 #E1B053） */
@@ -1112,12 +1175,25 @@ HTML = r"""<!doctype html>
 *{box-sizing:border-box}
 html{
   margin:0;padding:0;height:100%;min-height:100%;
-  background-color:var(--bg);
+  /* 用状态栏采样色而不是 --bg（米白）：总览页这张背景图是 cover + center top，
+     必然盖满视口，所以这个底色在页面上**看不见**，只被系统拿去画状态栏那条带；
+     而 iOS 26+ 采样它、iOS 18- 读 theme-color meta，两边取值保持一致。
+     内页另有 html[data-page]:not([data-page="main"]){background-color:#fff} 覆盖。 */
+  background-color:var(--qp-statusbar);
   background-image:var(--qp-room);
   background-position:center top;background-size:cover;
   background-repeat:no-repeat;background-attachment:fixed;
   scrollbar-width:thin;scrollbar-color:#cfd3db transparent;
-  overscroll-behavior-y:contain;
+  /* ---------- 滚动架构：html 只当画布，不滚动；真正滚的是 body ----------
+     （用户要求"把 PWA 上下滑的弹性回弹删了"）
+     为什么必须让**文档层不可滚**：iOS 独立 Web App 里，只要根滚动器还有可滚内容，
+     整页就会橡皮筋回弹，而 `overscroll-behavior` **管不到 iOS 的根滚动器**
+     （WebKit 把该属性映射到 UIScrollView 的 elasticity，根滚动器是特例）。
+     把 html 锁成 overflow:hidden，文档层就没有可滚内容，整页回弹直接失去来源。
+     下面 body 才是滚动容器，并显式 overscroll-behavior:none。
+     另：`contain` 只挡"链式传递"，**回弹照旧**，所以这里必须写 none。 */
+  overflow:hidden;
+  overscroll-behavior:none;
 }
 body{
   margin:0;padding:0;background:transparent;
@@ -1126,7 +1202,17 @@ body{
   padding-top:env(safe-area-inset-top, 0px);
   color:var(--text);
   font:15px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",Roboto,sans-serif;
-  -webkit-text-size-adjust:100%;overflow-x:hidden;
+  -webkit-text-size-adjust:100%;
+  /* 唯一的滚动容器（原因见 html 处注释）：
+     - height:100% = 一屏（`*{box-sizing:border-box}` 已生效，padding-top 吃在里面，
+       所以内容区正好是"可视高 - 安全区"，与 .home 的 100dvh - 安全区 对齐，不会多出一条）
+     - -webkit-overflow-scrolling:touch 保留 iOS 的惯性滚动（只去掉边缘回弹，不去惯性）
+     - overscroll-behavior:none：WebKit 映射到 ScrollElasticityNone → 内层也不回弹
+     别改成 position:fixed 方案：那会让 body 成为固定后代的包含块，影响面更大。 */
+  height:100%;
+  overflow-y:auto;overflow-x:hidden;
+  -webkit-overflow-scrolling:touch;
+  overscroll-behavior:none;
 }
 ::-webkit-scrollbar{width:7px;height:7px}
 ::-webkit-scrollbar-track{background:transparent}
@@ -1151,11 +1237,15 @@ body{
   /* 官方画布 853dp；用 --u 乘出来即可。
      注意不要写 calc(100% * N) —— 百分比在 min-height 里会被当相对高度算。 */
   /* 高度 = 一屏 - 顶部安全区。
-     用 100dvh 减 safe-area：dvh 在 iOS Safari 含底部工具栏，
-     但 body 的 padding-top 已扣掉刘海，两者相减正好铺满可视区。
-     （纯 CSS 方案：不依赖 JS 首帧时序） */
-  min-height:calc(100dvh - env(safe-area-inset-top, 0px));
+     **两条的顺序不能反**：同优先级声明后写的胜出，所以 dvh 必须写在 vh 后面。
+     历史版本写成了「dvh 在前、vh 在后」，等于 dvh 是死代码，所有浏览器
+     实际都走 vh —— iOS 独立 Web App（添加到主屏）里 vh = 物理整屏高
+     （含顶部状态栏那条带），而 dvh = 该带以下的可见高度，于是 .home 比可视区
+     整整高出一条状态栏，底部 .deck（弧形面板/任务抽屉）被顶到折叠线以下，
+     真机表现就是「下面显示不全、要往下滑才看得全」。
+     （WebKit 相关 bug：254868 / 301994） */
   min-height:calc(100vh - env(safe-area-inset-top, 0px));
+  min-height:calc(100dvh - env(safe-area-inset-top, 0px));
   margin:0;padding:0;
 }
 /* 浮动元素通用：position:absolute；坐标由各具体类给出（写死 dp 字面量，
@@ -1186,21 +1276,76 @@ body{
 }
 /* 左侧圆钮：米白底 + 棕色图标（官方 #F9F1E2 / #BE6321） */
 .col-l .rbtn img{width:55%;height:55%;object-fit:contain}
-/* 右侧圆钮：半透明深褐底 + 亮黄图标（官方 #B18E49 / #FFEA70） */
-.col-r .rbtn{background:var(--btn-r-bg)}
-.col-r .rbtn img{width:43%;height:43%;object-fit:contain}
+/* 右侧圆钮：**纯黑半透明蒙版** + 原色图标（用户要求"改成纯黑色，然后变透明"）。
+   为什么用纯黑而不是调一个"深褐色"：
+   - 纯黑蒙版只做一件事 —— 把背景**压暗**，不引入任何自己的色相。
+     于是它永远与暖黄房间背景协调（同色系明度变化），不会"跟背景一点都不搭"。
+   - 历史踩坑：曾按官方合成色 #B18E49 反解出 rgba(154,144,72,.45)（橄榄绿），
+     虽数学上叠回官方值，但那是在"纯色叠加"假设下成立的；实际背景是带渐变+
+     条纹的暖黄，橄榄绿与它并置就发脏发怪（用户反馈"变得更怪了"）。
+     教训：**给半透明元素选底色时，用中性色（黑/白）最稳**，
+     想让底色"带点颜色"就得接受它在复杂背景上不可控。
+   - alpha 取 0.28：实测 0.15 太淡（圆钮轮廓几乎看不出、图标像浮在空中），
+     0.42 太重（职业那个纯黑帽子会糊进底色，只剩火苗和帽檐）。0.28 居中。
+     合成后约 #8D6535（背景 #C48C4A 压暗 45%），层次够、又不抢图标。
+   - 保留 backdrop-filter 与 .qpanel/.fb-group 质感统一。 */
+.col-r .rbtn{
+  background:var(--btn-r-bg);
+  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+}
+/* 右列图标尺寸：**逐个设**，不要统一一个百分比（用户要求"3 个图标都大一点"）。
+   原因：三张图的"可见内容占画布比例"差很多（实测 alpha/几何包围盒）：
+     指南针  88% × 88%     内容基本占满
+     公文包  91% × 79%     横向满、纵向扁
+     手机    66.5% × 93.3% 竖长条（卡通版重绘后的实测值，旧线性版是 64.6% × 89.6%）
+   若统一 43%，可见内容高度分别只有 15.89 / 14.27 / 14.45dp —— 看起来都偏小，
+   且彼此不等大（公文包最扁、最显小）。
+   故按"**可见内容高度统一到 18dp**"反解各自盒子尺寸（= 18 / 内容高占比）：
+     指南针 18/0.88   = 20.45dp = 48.7%
+     公文包 18/0.79   = 22.78dp = 54.2%
+     手机   见下方（**唯一例外**，不按 18dp，用户要求再大一点）
+   这样三者可见高度都是 18dp（比原来 15.9dp 放大 13%），宽度也接近（13~21dp），
+   视觉体量一致；18/42 = 43% 的占空比，圆钮内留白仍然充足。
+   **手机是唯一例外（52.5%）**：按 18dp 反解是 45.9%（= 18/0.9333/42），
+   但手机是**竖长条**，同样"可见高度"下面积只有指南针的一半（12.8×18 vs 18×18），
+   用户实测反馈"有点小，放大一点"→ 提到 52.5%（可见 14.7 × 20.6dp，约 +14%）。
+   教训：**"统一可见高度"对长宽比差很多的图标不够用**，窄图要按面积/宽度补一点。
+   改尺寸时**要重新量包围盒**，别直接改百分比 —— 各图留白不同，同百分比不等大
+   （手机图标换成卡通版时包围盒从 89.6% 变 93.3%，百分比就跟着从 47.8% 降到 45.9%）。 */
+.col-r .rbtn img{object-fit:contain}
+.col-r .rbtn:nth-child(1) img{width:48.7%;height:48.7%}   /* 冒险：指南针 */
+.col-r .rbtn:nth-child(2) img{width:54.2%;height:54.2%}   /* 职业：公文包（最扁，需最大盒子） */
+.col-r .rbtn:nth-child(3) img{width:52.5%;height:52.5%}   /* 画面：手机（唯一例外，见上：竖长条要按面积补） */
 .rbtn:active{transform:scale(.94)}
 /* 官方圆钮没有"选中态"：所有钮同底色 + 原色图标。
    选中仅用轻微白色描边提示，不改底色（改底色与官方观感差很远）。 */
 .rbtn.on{box-shadow:0 0 0 calc(var(--u) * 2) rgba(255,255,255,.85),var(--sh-1)}
 .rbtn.on img{filter:none}
 
+/* 禁用态（总览页左上角那个"返回"）。
+   为什么禁用：它是 data-tab="main"，而 showTab() 在目标页 == 当前页时直接
+   `if(name===curTab) return;` 早退 —— 总览页点它什么都不会发生。
+   而 #tabbar 挂在 .home 里，切到设置/日志页时整个 .home 隐藏
+   （实测 getBoundingClientRect() 全为 0×0），所以它**只在总览页可见**，
+   偏偏在总览页永远无效 —— 两头堵死，是个纯粹的死键。
+   置灰表达"此处没有上一级可返回"（总览页本来就是根页面）。
+
+   **必须在这里压掉 .on 的白环**：JS 会按 data-tab===当前页 给按钮加 .on，
+   总览页时它必然带环；而那个环是 box-shadow 外扩 2dp，把 42dp 撑成 46dp ——
+   这正是"它比其他钮大一圈"的原因（实测 45.4dp vs 其余 41.8dp）。
+   选择器特异性同为 (0,2,0)，靠**书写顺序在后**胜出，故本块必须留在 .rbtn.on 之后。 */
+.rbtn:disabled{
+  opacity:.42;cursor:default;
+  box-shadow:var(--sh-1);          /* 退回普通圆钮的阴影，不要选中环 */
+}
+.rbtn:disabled:active{transform:none}
+
 /* ---------- 4. 资料卡（官方 x=74 y=26 207×46） ---------- */
 .idcard{
   left:calc(var(--u) * 74);
-  top:calc(var(--u) * 34.3);
+  top:calc(var(--u) * var(--top-card));
   width:calc(var(--u) * 207);
-  height:calc(var(--u) * 46);
+  height:calc(var(--u) * var(--h-card));
   display:flex;align-items:center;gap:calc(var(--u) * 6);
   padding:calc(var(--u) * 3) calc(var(--u) * 8) calc(var(--u) * 3) calc(var(--u) * 3);
   background:var(--card);border-radius:999px;
@@ -1213,6 +1358,9 @@ body{
   overflow:hidden;display:flex;align-items:center;justify-content:center;
 }
 .avatar svg{display:block;width:100%;height:100%}
+/* 头像用官方表情图（static/qp-icons/official/mood_smile.png，160×160，四周留白约 5%）：
+   略微放大让表情填满圆形框，同时保留一点呼吸感（留白比 cap_paw 小，故只放大 5%） */
+.avatar img{display:block;width:106%;height:106%;object-fit:contain}
 .avatar.on{box-shadow:0 0 0 2px var(--ok)}
 .avatar.off{box-shadow:0 0 0 2px #ef4444}
 .idtxt{flex:1;min-width:0}
@@ -1237,12 +1385,14 @@ body{
 /* ---------- 5. 胶囊两行（官方 y=86 三颗 + y=126 两颗，每颗 67×28 间距 4） ---------- */
 .caps{
   /* 与资料卡同宽同左右缘（官方：资料卡 74~281，胶囊区 74~283，右缘基本齐平）。
-     行内三颗等分（官方每颗 67.1dp），gap 4dp -> (207-8)/3 = 66.3dp。 */
+     行内三颗等分（官方每颗 67.1dp），gap 4dp -> (207-8)/3 = 66.3dp。
+     纵向位置由 --top-caps 推出，行间距 = --gap-top（与资料卡→胶囊、
+     胶囊→任务面板同一个值，见 token 区）。 */
   left:calc(var(--u) * 74);
   width:calc(var(--u) * 207);
-  top:calc(var(--u) * 92.5);
+  top:calc(var(--u) * var(--top-caps));
   display:flex;flex-direction:column;
-  gap:calc(var(--u) * 17) 0;
+  gap:calc(var(--u) * var(--gap-top)) 0;
 }
 .caps-row{display:flex;gap:calc(var(--u) * 4)}
 /* 两行都等分，保证左右缘与资料卡对齐（不再按内容自适应 -> 右边参差） */
@@ -1257,7 +1407,7 @@ body{
      .cap 高 = 图标高 23dp；::before 画 20dp 胶囊体，垂直居中。 */
   position:relative;
   display:flex;align-items:center;
-  height:calc(var(--u) * 23);
+  height:calc(var(--u) * var(--h-cap));
   padding:0;box-sizing:border-box;
   color:var(--cap-fg);
 }
@@ -1300,13 +1450,56 @@ body{
   white-space:nowrap;flex:0 1 auto;min-width:0;overflow:hidden;
   text-overflow:ellipsis;max-width:46%;line-height:1;
 }
+/* 胶囊内进度条（官方等级胶囊那条"橙色斜纹"）。
+
+   **左右内缩必须与 .capbody 的 padding 一致**（left=padding-left=2dp，
+   right=padding-right=4dp）—— 这样进度条的水平中心**恒等于**文字中心，
+   不需要靠调数值去"凑"居中：
+     文字居中基准 = capbody 内容盒 = 23.5dp ~ 62.3dp（胶囊坐标），中心 42.9dp
+     条 = 同样的 23.5 ~ 62.3dp                      中心 42.9dp  ✅ 恒等
+   历史 bug：写的是 left:17dp / right:4dp，与 padding-left(2dp) 不一致，
+   于是条的范围是 38.5~62.3dp、中心 50.4dp —— **比文字中心偏右 7.5dp**，
+   且条只有 23.85dp 宽（比文字窄一截），看起来就是"贴在字下面的一小截、还歪"。
+   改成 2/4 后条宽 38.8dp（加长 63%），成为官方那种贯穿式轨道。
+
+   **定位用 left+right（相对 .capbody），不要写固定 width** ——
+   .bar 的包含块是 .capbody，其宽度是**被左侧图标（.cico 23dp +
+   margin-left:-1.5dp）挤过之后**的剩余宽度，且各胶囊不等宽（实测
+   金币 66.3 / 踩踩 66.3 / 冒险 41.9 / 学习打工 74.0dp），写死 width 必然对不上：
+   曾改成 width:45.3dp，结果 left(17)+width(45.3)=62.3dp 超出右缘 17.5dp，
+   进度条直接画到胶囊外面。
+
+   **曾经的误判（记下来避免重犯）**：早期看到 track=33.1px、以为"应该是 62.9px"，
+   就断言比例错了（"9/10 只画出 47%"）。其实 62.9px 是**胶囊**宽不是轨道宽，
+   正确算法 fill/track = 29.8/33.1 = 90.0%，**本来就是对的**。
+   > 判断比例时，分母必须取**同一元素**的实测值，别拿父级的宽度去除。
+
+   轨道色是"深色凹槽"：官方实测 #9A8353（亮度 132）**深于**胶囊底（179），
+   是挖进去的槽；改前用 rgba(255,255,255,.30) 反而比胶囊底亮 +32，像贴白胶带。
+
+   填充用官方条纹素材：static/qp-icons/official/cap_bar_fg.png
+   （源：cdn_assets 的 pet_level_progress_fg.png，688×32，官方等级进度条前景图）。
+   素材左右边缘色一致可无缝平铺、上下自带渐变，故不需再叠渐变；
+   background-size:auto 100% 保证条高变化时条纹不被拉伸。 */
 .cap .bar{
   position:absolute;z-index:1;
-  left:calc(var(--u) * 17);right:calc(var(--u) * 4);
-  bottom:calc(var(--u) * 3.5);height:calc(var(--u) * 2);
-  margin:0;background:rgba(255,255,255,.30);border-radius:1px;
+  left:calc(var(--u) * 2);    /* = .capbody padding-left，见上：保证与文字同中心 */
+  right:calc(var(--u) * 4);   /* = .capbody padding-right */
+  bottom:calc(var(--u) * 3.5);
+  height:calc(var(--u) * 2.5);
+  margin:0;
+  background:rgba(90,70,35,.38);
+  border-radius:calc(var(--u) * 1.25);
+  overflow:hidden;
 }
-.cap .bar>i{background:var(--accent)}
+.cap .bar>i{
+  display:block;height:100%;width:0;
+  background-image:url('/qp-icons/official/cap_bar_fg.png');
+  background-repeat:repeat-x;
+  background-size:auto 100%;
+  background-position:left center;
+  border-radius:calc(var(--u) * 1.25);
+}
 /* 长数值单独收小，避免裁字 */
 .cap .cval#coins,.cap .cval#advTxt{font-size:calc(var(--u) * 9)}
 .cap .cval#swTxt,.cap .cval#expTxt,.cap .cval#visitTxt,.cap .cval#pkTxt{font-size:calc(var(--u) * 9)}
@@ -1316,10 +1509,11 @@ body{
 /* ---------- 5b. 中部场景层（官方是 3D 宠物；这里放任务队列） ---------- */
 .scene{
   /* 内容区（74~281，与资料卡同宽）。高度按内容自适应 —— 原来用 bottom 固定
-     撑到页面底部，任务少时下方留大片空白（截图反馈）。 */
+     撑到页面底部，任务少时下方留大片空白（截图反馈）。
+     顶 = --top-scene（= 胶囊区底 + --gap-top），与上面两处间距一致。 */
   left:calc(var(--u) * 74);
   width:calc(var(--u) * 207);
-  top:calc(var(--u) * 162);
+  top:calc(var(--u) * var(--top-scene));
   display:flex;flex-direction:column;
   overflow:hidden;
 }
@@ -1410,6 +1604,14 @@ body{
 .dtitle{
   display:flex;align-items:center;justify-content:center;gap:calc(var(--u) * 3);
   font-weight:680;font-size:calc(var(--u) * 14);color:var(--strong);white-space:nowrap;
+  /* 状态灯不参与排版（绝对定位到文字左侧）。
+     否则 flex 居中会把「绿点+文字」整组居中，文字被灯宽推偏约半个灯宽
+     （实测「打工中」偏右 5px，真机上看就是没对齐图标中心）。 */
+  position:relative;
+}
+.dtitle .dot{
+  position:absolute;left:calc(var(--u) * -12);
+  top:50%;transform:translateY(-50%);
 }
 .drow{display:contents}
 
@@ -1457,11 +1659,23 @@ body{
 .bar{height:4px;background:var(--track);border-radius:2px;overflow:hidden;margin-top:7px}
 .bar>i{display:block;height:100%;background:var(--accent);width:0;border-radius:2px}
 /* 学习/打工合并瓦片：两段叠加（学习橙在左、打工蓝紧随）。
-   类名用 bar-split，不能用 sw（.sw 是设置页开关） */
+   类名用 bar-split，不能用 sw（.sw 是设置页开关）。
+   注意：这里是**双段**条，两段必须能区分（学习=橙 / 打工=蓝），
+   所以不能直接用官方那张橙色条纹图（两段会同色）。
+   **不要用 background-blend-mode:multiply 染色** —— 实测橙色条纹 × 蓝色
+   = (14,93,0) 暗绿（multiply 是逐通道相乘，橙的 R=255 保留、G/B 被压掉）。
+   正解：预先生成一张**蓝色条纹变体**素材（cap_bar_fg_blue.png，
+   由 cap_bar_fg.png 做 HSV 色相旋转 +171° 得到，条纹形状/明暗完全保留），
+   两段各用一张图。 */
 .bar.bar-split{display:flex}
-.bar.bar-split>i{flex:none}
-.bar.bar-split>i#swBarSchool{background:var(--accent)}
-.bar.bar-split>i#swBarWork{background:#0ea5e9}
+.bar.bar-split>i{flex:none;border-radius:0}
+.bar.bar-split>i#swBarSchool{
+  background-image:url('/qp-icons/official/cap_bar_fg.png');
+}
+.bar.bar-split>i#swBarWork{
+  background-image:url('/qp-icons/official/cap_bar_fg_blue.png');
+}
+.bar.bar-split>i:last-child{border-top-right-radius:calc(var(--u) * 1.25);border-bottom-right-radius:calc(var(--u) * 1.25)}
 
 /* ---------- 7. 任务队列 ---------- */
 .qcard{border-radius:var(--r-xl)}
@@ -1611,6 +1825,29 @@ body{
 .form input[type=text]{width:calc(var(--u) * 140)}
 .form .two{display:flex;gap:calc(var(--u) * 6)}
 .form .two input{width:calc(var(--u) * 56)}
+/* 行内右侧控件组：状态文字在左、按钮靠右（与开关行的右对齐一致）。
+   不加 .ctrl 时按钮会被 frow 的 space-between 摊到中间（通知页"测试"行实测） */
+.form .ctrl{display:flex;align-items:center;gap:calc(var(--u) * 8);min-width:0}
+.form .ctrl #notifyTestMsg{
+  color:var(--sub);font-size:calc(var(--u) * 12);
+  text-align:right;overflow-wrap:anywhere;
+}
+/* 说明条目：标签左、正文右，两列对齐（原来是整段灰字墙，三段糊在一起） */
+.form .noterow{
+  display:flex;gap:calc(var(--u) * 12);
+  padding:calc(var(--u) * 10) calc(var(--u) * 16);
+  border-top:1px solid #F0F0F2;
+}
+.form .noterow:first-child{border-top:0}
+.form .noterow .nt{
+  color:#1C1C1E;font-size:calc(var(--u) * 13);font-weight:500;
+  flex:none;width:calc(var(--u) * 62);
+}
+.form .noterow .nb{
+  color:var(--sub);font-size:calc(var(--u) * 12.5);line-height:1.65;
+  flex:1;min-width:0;
+}
+.form .noterow .nb b{color:#1C1C1E;font-weight:600}
 
 /* 开关 */
 .sw{
@@ -1655,22 +1892,53 @@ body{
 .cfg .v{text-align:right;color:#8A8A8E;word-break:break-word}
 
 /* ---------- 10. 日志 ---------- */
-.logctl{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
+.logctl{display:flex;gap:calc(var(--u) * 8);align-items:center;flex-wrap:wrap}
+
+
+/* 工具栏控件：浅灰底、圆角，聚焦描边（与设置页控件观感一致） */
 .logctl input{
-  flex:1;min-width:110px;border:1px solid var(--line);border-radius:var(--r-sm);
-  padding:6px 10px;font-size:13px;background:#FFFDF8;color:var(--text);
+  flex:1;min-width:calc(var(--u) * 110);
+  border:1px solid #E8E8EC;border-radius:calc(var(--u) * 9);
+  padding:calc(var(--u) * 7) calc(var(--u) * 11);
+  font-size:calc(var(--u) * 13);background:#F7F7F9;color:#1C1C1E;
+  -webkit-appearance:none;
 }
+.logctl input:focus{outline:none;border-color:var(--accent);background:#fff}
 .logctl button{
-  border:1px solid var(--line);background:#FFFDF8;border-radius:var(--r-sm);
-  padding:6px 12px;font-size:12px;color:var(--sub);
+  border:1px solid #E8E8EC;background:#fff;border-radius:calc(var(--u) * 9);
+  padding:calc(var(--u) * 7) calc(var(--u) * 13);
+  font-size:calc(var(--u) * 12.5);color:#4A4A4F;cursor:pointer;
 }
+.logctl button:active{background:#F0F0F3}
 .logctl button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+/* 日志元信息（当天日志文件名 + 当前行数）：放在「输出」白卡内、日志框下方。
+   **不要挂回顶栏 .navmeta** —— .navtitle 是 position:absolute;left:50% 绝对居中，
+   .navmeta 是 margin-left:auto 贴右，390px 下两者必然重叠（实测标题压住 meta 开头，
+   糊成「实时日志2026-09-20.log · 250 行」）。日志框自带 --u*14 左右内距，
+   这里用同样的内距让注脚与日志文字左右对齐；字号走 --u 随宽度缩放。
+   注：截图验证须走 iframe 承载（headless Chrome 最小视口 500px，
+   直接 --window-size=390 是按 500px 排版后裁右侧，见
+   qqpet_assets/web/INTEGRATION.md 5.1）。 */
+.logfoot{
+  padding:0 calc(var(--u) * 14);
+  text-align:right;
+  font-size:calc(var(--u) * 11.5);color:#8A8A8E;
+  font-variant-numeric:tabular-nums;
+}
+.logfoot:empty{display:none}
 pre#logbox{
-  height:46vh;min-height:250px;overflow:auto;
-  background:#211D18;color:#E5DCCB;
-  font:11.5px/1.65 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  padding:10px 12px;border-radius:var(--r-md);
-  white-space:pre-wrap;word-break:break-all;margin:0;overscroll-behavior:contain;
+  /* 白底深字（用户要求）—— 对比度约 15:1；等宽字体便于对齐时间戳 */
+  /* 高度按可视区减去页头等固定占用；同样要扣掉顶部安全区（body 的 padding-top
+     已经吃掉一块），否则日志框底部会伸到折叠线以下。顺序 vh 在前、dvh 在后。 */
+  height:calc(100vh - 320px - env(safe-area-inset-top, 0px));
+  height:calc(100dvh - 320px - env(safe-area-inset-top, 0px));
+  min-height:calc(var(--u) * 220);
+  overflow:auto;background:transparent;color:#1C1C1E;
+  font:calc(var(--u) * 12.5)/1.75 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  padding:calc(var(--u) * 12) calc(var(--u) * 14);
+  white-space:pre-wrap;word-break:break-all;margin:0;
+  /* 内层滚动区同样不回弹（原为 contain —— contain 只是不往父级传递，自身照弹） */
+  overscroll-behavior:none;
 }
 /* 异常截图缩略图 */
 .thumbs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
@@ -1698,7 +1966,7 @@ pre#logbox{
 .advlist{
   max-height:44vh;overflow:auto;margin-top:6px;
   border:1px solid var(--line);border-radius:var(--r-sm);
-  background:#FFFDF8;overscroll-behavior:contain;
+  background:#FFFDF8;overscroll-behavior:none;
 }
 .advlist .arow{
   display:flex;justify-content:space-between;align-items:baseline;gap:8px;
@@ -1784,7 +2052,10 @@ pre#logbox{
   .workline .big{font-size:20px}
   .tile .v{font-size:17px}
   .grid{gap:6px}
-  .caps{gap:6px}
+  /* 顶部三块间距一起收紧（仍保持三处等距）。
+     不要再写成 .caps{gap:6px} —— 那只改胶囊两行的间距，
+     资料卡→胶囊、胶囊→面板仍是 12，三处又不相等了。 */
+  :root{--gap-top:10}
   .cap{padding:0 8px}
   .cap .cval{font-size:12.5px}
   .advlist .ai{width:96px}
@@ -1814,20 +2085,36 @@ pre#logbox{
     --qp-room-feed:url('/qp-icons/bg/room-feed-dark.jpg');
     --qp-room-shower:url('/qp-icons/bg/room-shower-dark.jpg');
     --qp-room-record:url('/qp-icons/bg/room-record-dark.jpg');
+    /* 状态栏采样色是唯一例外：它要跟背景图走（深色房间顶部明显更暗），
+       否则深色模式下状态栏还是浅色那条，比背景亮一截。取各 -dark 图顶部实测色。 */
+    --qp-sb-main:#A9722D;
+    --qp-sb-feed:#C39145;
+    --qp-sb-shower:#A3651D;
+    --qp-sb-record:#C18C3A;
   }
 }
 
 /* 房间背景按 `html[data-scene]` 切换。
    注意：必须写在 html 上 —— 背景图作用在 html 元素，而 CSS 变量只向下继承，
    写在 body 上的覆写对父级 html 无效（曾踩坑：data-scene 变了但背景不动）。 */
-html[data-scene="feed"]{--qp-room:var(--qp-room-feed)}
-html[data-scene="shower"]{--qp-room:var(--qp-room-shower)}
-html[data-scene="record"]{--qp-room:var(--qp-room-record)}
+html[data-scene="feed"]{--qp-room:var(--qp-room-feed);--qp-statusbar:var(--qp-sb-feed)}
+html[data-scene="shower"]{--qp-room:var(--qp-room-shower);--qp-statusbar:var(--qp-sb-shower)}
+html[data-scene="record"]{--qp-room:var(--qp-room-record);--qp-statusbar:var(--qp-sb-record)}
+
+/* 内页（非总览）把 html 背景换成白色。
+   原因：body 的 padding-top 给状态栏留了安全区，露出的是 html 的底色 ——
+   总览页露出房间暖色图是对的，但内页顶栏是白的，露出暖色就很突兀
+   （真机 PWA 全屏实测：通知页顶部一条暖黄）。内页统一白底与顶栏衔接。 */
+html[data-page]:not([data-page="main"]){background-image:none;background-color:#fff}
 
 /* ---------- 设置页：照 QQ 宠物设置页（iOS 风格浅灰底 + 白卡分组） ---------- */
 section[data-page="set"]{
   background:#F2F2F7;
-  min-height:100dvh;
+  /* 必须减掉顶部安全区：body 已经为状态栏加了 padding-top，
+     这里若用裸 100dvh，两者相加就比可视区高出一个安全区（要往下滑才见底）。
+     与 .home 同一套写法，顺序同样是 vh 在前、dvh 在后。 */
+  min-height:calc(100vh - env(safe-area-inset-top, 0px));
+  min-height:calc(100dvh - env(safe-area-inset-top, 0px));
   margin:0;padding:0 0 calc(var(--u) * 20);
   border:0;border-radius:0;box-shadow:none;
 }
@@ -1881,7 +2168,9 @@ section[data-page="set"] > h2{
 /* ---------- 内页统一排版（照设置页：浅灰底 + 白卡分节） ---------- */
 main > section[data-page]:not([data-page="main"]){
   background:#F2F2F7;
-  min-height:100dvh;
+  /* 同 section[data-page="set"]：减掉顶部安全区，避免比可视区高出一截 */
+  min-height:calc(100vh - env(safe-area-inset-top, 0px));
+  min-height:calc(100dvh - env(safe-area-inset-top, 0px));
   margin:0;padding:0 0 calc(var(--u) * 24);
   border:0;border-radius:0;box-shadow:none;
 }
@@ -1996,9 +2285,14 @@ main > section[data-page]:not([data-page="main"]) > .plannote{
          底部入口 x=215 y=728  50x54          (打工)
          ================================================================== -->
 
-    <!-- 左列圆钮（官方 4 个：返回/设置/消息/日记，x=20 y=28/86/146/206） -->
+    <!-- 左列圆钮（官方 4 个：返回/设置/消息/日记，x=20 y=28/86/146/206）
+         第 1 个是官方首页的"返回"，但本仪表盘的总览页就是根页面、没有上一级，
+         且 #tabbar 只在总览页可见 —— 即它永远只在"点了也没反应"的页面出现。
+         故置灰禁用（disabled，样式见 .rbtn:disabled）。
+         不加 class="on"：JS 仍会按 data-tab===curTab 给它加 .on，但 :disabled
+         那条把白环压掉了，所以这里写不写都一样（留着反而误导）。 -->
     <nav class="flt col-l" id="tabbar">
-      <button class="rbtn on" data-tab="main" title="总览"><img src="/qp-icons/official/off_l1_back.png" alt=""></button>
+      <button class="rbtn" data-tab="main" title="总览（当前页）" disabled><img src="/qp-icons/official/off_l1_back.png" alt=""></button>
       <button class="rbtn" data-tab="set" title="设置"><img src="/qp-icons/official/off_l2_gear.png" alt=""></button>
       <button class="rbtn" data-tab="log" title="日志"><img src="/qp-icons/official/off_l3_diary.png" alt=""></button>
       <button class="rbtn" data-tab="notify" title="通知"><img src="/qp-icons/official/off_l4_bell.png" alt=""></button>
@@ -2007,13 +2301,17 @@ main > section[data-page]:not([data-page="main"]) > .plannote{
     <!-- 右列圆钮（官方 3 个：装扮/会员/盲盒，x=418 y=28/86/146） -->
     <nav class="flt col-r" id="tabbar2">
       <button class="rbtn r" data-tab="adv" title="冒险"><img src="/qp-icons/official/cap_compass.png" alt=""></button>
-      <button class="rbtn r" data-tab="plan" title="职业"><img src="/qp-icons/official/off_r2_hat.png" alt=""></button>
-      <button class="rbtn r" data-tab="shot" title="实时画面"><img src="/qp-icons/official/off_r3_diamond.png" alt=""></button>
+      <button class="rbtn r" data-tab="plan" title="职业"><img src="/qp-icons/official/off_r2_briefcase.png" alt=""></button>
+      <!-- `?v=2` 是**换图后的缓存击穿**：/qp-icons/* 走 Cache-Control: max-age=3600，
+           不换 URL 的话浏览器会拿旧图渲染整整 1 小时（"改了没变化"就是这么来的）。
+           路由用 urlparse 只取 path，查询串被忽略，加 ?v=N 不影响取文件。
+           以后每次换这张图，把 N 加一即可。 -->
+      <button class="rbtn r" data-tab="shot" title="实时画面"><img src="/qp-icons/ctrl/phone.svg?v=2" alt=""></button>
     </nav>
 
     <!-- 资料卡（官方 x=74 y=26 207×46） -->
     <div class="flt idcard">
-      <span class="avatar" id="schedDot"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#ffedd5"/><path d="M7.5 12.5 L6 3.5 L14.5 8 Z" fill="#f59e0b"/><path d="M24.5 12.5 L26 3.5 L17.5 8 Z" fill="#f59e0b"/><path d="M8.3 10.6 L7.5 6 L12 8.3 Z" fill="#fbcfe8"/><path d="M23.7 10.6 L24.5 6 L20 8.3 Z" fill="#fbcfe8"/><circle cx="16" cy="18" r="10" fill="#f59e0b"/><ellipse cx="16" cy="21.6" rx="6.6" ry="5" fill="#fff7ed"/><circle cx="11.8" cy="16.4" r="1.7" fill="#1f2937"/><circle cx="20.2" cy="16.4" r="1.7" fill="#1f2937"/><path d="M14.7 19.4 h3.2 l-1.6 2 Z" fill="#f97316"/><path d="M16 21.4 v1.1 M16 22.5 q-1.2 1.3 -2.4 .3 M16 22.5 q1.2 1.3 2.4 .3" stroke="#92400e" stroke-width=".9" fill="none" stroke-linecap="round"/><path d="M6.5 18.5 h3 M6.8 21.5 h2.6 M25.5 18.5 h-3 M25.2 21.5 h-2.6" stroke="#d97706" stroke-width=".9" stroke-linecap="round"/></svg></span>
+      <span class="avatar" id="schedDot"><img src="/qp-icons/official/mood_smile.png" alt=""></span>
       <div class="idtxt">
         <div class="idname">QQ宠物托管</div>
         <div class="idsub" id="schedTxt">--</div>
@@ -2023,12 +2321,23 @@ main > section[data-page]:not([data-page="main"]) > .plannote{
 
     <!-- 胶囊（官方结构：图标在胶囊【外面】且比胶囊大 22.3 vs 19.7dp；文字在胶囊内居中）
          第1行 = 金币/踩踩/PK   第2行 = 冒险/学习打工/经验
-         行内 4dp 间距，行间 40dp 步进（官方 y 94.3 -> 134.3） -->
+         行内 4dp 间距，行间 40dp 步进（官方 y 94.3 -> 134.3）
+         图标 = 官方 pet_home 内联图（static/qp-icons/official/cap_*.png，96×96、内容占比 88%）。
+         官方首页胶囊只有「等级/踩踩/金币」三颗，PK 那颗是本仪表盘自加的，图标换过三版：
+         ① cap_coin_hand.png（item_coin_hand，手拿爪印金币）—— 与左侧金币胶囊撞脸；
+         ② cap_pk.png（pk_logo 拳击手套）—— 素材库里唯一的官方 PK 图标，但用户要的是「PK 字样」；
+         ③ **当前 cap_pk_words.png**：游戏内好友宠物页右侧功能栏那颗
+            「粉 P + 蓝 K」的 PK 字样图标（`src/locators.py` 里 content-desc="PK" 的那个按钮）。
+         全库 OCR 扫描确认素材库里**没有**这个字样图标的文件（ResourceCache 的
+         `1009999/9990002/39/9990002/` 里 pk_logo.png 只有拳击手套），它是引擎实时绘制的，
+         故从实机截图（runs 抓取，1080×2412）按色相 210-220°/330-340° 抠图 + 连通域去噪生成，
+         源图与抠图过程见 qqpet_assets/web/INTEGRATION.md。**换图必须换文件名**：
+         /qp-icons/* 带 max-age 缓存，同名覆盖浏览器仍显示旧图。 -->
     <div class="flt caps">
       <div class="caps-row">
         <div class="cap" title="金币"><img class="cico" src="/qp-icons/official/cap_coin.png" alt=""><div class="capbody"><span class="cval" id="coins">--</span><span class="cunit" id="coinsAt"></span></div></div>
         <div class="cap" title="今日踩踩"><img class="cico" src="/qp-icons/official/cap_paw.png" alt=""><div class="capbody"><span class="cval" id="visitTxt">--</span><div class="bar"><i id="visitBar"></i></div></div></div>
-        <div class="cap" title="今日PK"><img class="cico" src="/qp-icons/official/cap_coin_hand.png" alt=""><div class="capbody"><span class="cval" id="pkTxt">--</span><div class="bar"><i id="pkBar"></i></div></div></div>
+        <div class="cap" title="今日PK"><img class="cico" src="/qp-icons/official/cap_pk_words.png" alt=""><div class="capbody"><span class="cval" id="pkTxt">--</span><div class="bar"><i id="pkBar"></i></div></div></div>
       </div>
       <div class="caps-row">
         <div class="cap" title="今日冒险"><img class="cico" src="/qp-icons/official/cap_compass.png" alt=""><div class="capbody"><span class="cval" id="advTxt">--</span></div></div>
@@ -2094,7 +2403,7 @@ main > section[data-page]:not([data-page="main"]) > .plannote{
 
   <section class="card" data-page="notify">
     
-      <div class="navhead"><button class="backbtn" data-back="main" title="返回总览"><img src="/qp-icons/official/off_l1_back.png" alt=""></button><span class="navtitle">通知</span><span class="navmeta"><span style="font-weight:400;color:var(--sub)">推送渠道与事件开关</span></span></div>
+      <div class="navhead"><button class="backbtn" data-back="main" title="返回总览"><img src="/qp-icons/official/off_l1_back.png" alt=""></button><span class="navtitle">通知</span></div>
     <div class="form" id="notifyForm"></div>
     <div class="saveMsg" id="notifySaveMsg"></div>
   </section>
@@ -2137,21 +2446,34 @@ main > section[data-page]:not([data-page="main"]) > .plannote{
 </section>
 
   <section class="card" data-page="log">
-    
-      <div class="navhead"><button class="backbtn" data-back="main" title="返回总览"><img src="/qp-icons/official/off_l1_back.png" alt=""></button><span class="navtitle">实时日志</span><span class="navmeta"><span id="logMeta" style="font-weight:400"></span></span></div>
-    <div class="logctl">
-      <button id="btnAuto" class="on">自动滚动</button>
-      <input id="logFilter" placeholder="过滤关键字…">
+    <div class="navhead">
+      <button class="backbtn" data-back="main" title="返回总览"><img src="/qp-icons/official/off_l1_back.png" alt=""></button>
+      <span class="navtitle">实时日志</span>
     </div>
-    <pre id="logbox">加载中…</pre>
+    <div class="pgsec">
+      <div class="pgsec-t">工具栏</div>
+      <div class="pgsec-c">
+        <div class="logctl">
+          <button id="btnAuto" class="on">自动滚动</button>
+          <input id="logFilter" placeholder="过滤关键字…">
+        </div>
+      </div>
+    </div>
+    <div class="pgsec">
+      <div class="pgsec-t">输出</div>
+      <div class="pgsec-c">
+        <pre id="logbox">加载中…</pre>
+        <div class="logfoot" id="logMeta"></div>
+      </div>
+    </div>
+    <div class="pgsec" id="shotCard">
+      <div class="pgsec-t">异常截图（自动保存）</div>
+      <div class="pgsec-c">
+        <div class="thumbs" id="shots"></div>
+      </div>
+    </div>
   </section>
 
-  <div data-page="log">
-  <section class="card hide" id="shotCard">
-    <h2>异常截图（自动保存）</h2>
-    <div class="thumbs" id="shots"></div>
-  </section>
-  </div>
 
 </main>
 
@@ -2165,6 +2487,50 @@ const TASKNAME={care:'护理',school:'学习',friend_care:'好友护理',gift_ba
 // 任务 -> 图标文件名（static/qp-icons/ 下，必须用 colored/ 里存在的名字）
 const TASKICON={care:'soap',school:'logo_study',friend_care:'emoji',gift_bag:'coin',
   hire_friend:'logo_work',adventure:'logo_adventure',visit:'logo_hangout',pk:'logo_pk',work:'logo_work'};
+
+// 底部状态卡的图标：跟着「当前在干什么」换（冒险/学习/打工各一个图标）。
+// 图标全部取自官方素材库，两种来源别混：
+//   /qp-icons/<name>-48@2x.png     —— colored/ 那套（书本/香皂/金币/爪印）
+//   /qp-icons/official/<name>.png  —— 首页胶囊/右栏那套（爪印金币、PK 字样、指南针）
+// 键 = 状态名，两个来源互补：work_eta.kind（上课/打工/冒险/雇佣打工，主任务延时收尾期间
+// 最准、带倒计时）优先；没有它时用 queue.current（护理/好友护理/踩踩/PK/福袋等场景
+// 执行期间的中文任务名）。
+// 图标选型依据（都拿实机截图/素材库核对过，别再凭文件名猜语义）：
+//   冒险 = cap_compass（右侧竖栏最上那个「冒险页」按钮用的就是它）
+//   学习 = study_book（书本+铅笔）—— 与指南针同批的 inline_icons 里那张
+//          `pet_home_03951_47023.png`；**注意素材库里不少图标是哈希文件名**
+//          （pet_home_01470_64134.png 才是 PK 字样、pet_home_01314_68535.png 才是
+//          橙色 SOAP），按 `*pk*`/`*soap*` 搜文件名是搜不到的，得按图形找
+//          （总览图做法见 qqpet_assets/web/INTEGRATION.md）
+//   打工 = work_coin（爪印金币 **带绿色上升箭头**）—— 素材库 `inline_icons/
+//          pet_home_03481_15399.png`（= 命名表里的 coin_paw_small.png），游戏底部
+//          「打工中」状态条用的就是它；`store_money.png`（= coin-48@2x）是**不带箭头**
+//          的另一版，别拿它顶替。**也不是** work_logo 公文包（那是出门地图页
+//          「职业小镇」入口的图标），这三个曾被我弄混
+//   护理 = soap（橙色 SOAP 香皂，素材库原件 pet_home_01314_68535.png）
+//   等待中/已停止 = globe（地球，item_globe = pet_home_01997_36242.png）
+const RUNICON={
+  '上课':'/qp-icons/official/study_book.png',
+  '学习':'/qp-icons/official/study_book.png',
+  '打工':'/qp-icons/official/work_coin.png',
+  '雇佣打工':'/qp-icons/official/work_coin.png',
+  '雇佣好友':'/qp-icons/official/work_coin.png',
+  '被雇佣检查':'/qp-icons/official/work_coin.png',
+  '冒险':'/qp-icons/official/cap_compass.png',
+  '护理':'/qp-icons/official/soap.png',
+  '好友护理':'/qp-icons/official/soap.png',
+  '踩踩':'/qp-icons/logo_hangout-48@2x.png',
+  'PK':'/qp-icons/official/pk_words.png',
+  '福袋':'/qp-icons/official/cap_coin.png',
+};
+const RUNICON_DEFAULT='/qp-icons/official/globe.png';   // 等待中/已停止：地球（item_globe）
+function setRunIcon(key, stopped){
+  const el=$('#runnerIcon'); if(!el) return;
+  const src=RUNICON[key]||RUNICON_DEFAULT;
+  if(el.getAttribute('src')!==src) el.setAttribute('src', src);
+  // 已停止：灰度压暗，避免"没在跑却亮着"的误读
+  el.style.filter=stopped?'grayscale(1) opacity(.55)':'';
+}
 // 把当前任务映射到房间场景，切 html[data-scene]（CSS 变量作用域要求写在 html 上）。
 // 场景图只有 4 套（main/feed/shower/record）；store 那张是纯天空渐变、不是房间，不用。
 // 映射依据：喂食->feed、洗澡/护理->shower、学习/记录类->record，其余回 main。
@@ -2182,6 +2548,9 @@ function applyScene(curKey, etaKind){
   if(scene!==lastScene){
     lastScene=scene;
     document.documentElement.setAttribute('data-scene',scene);  // 必须写 html（见 CSS 注释）
+    // 状态栏色跟着场景走（色值只定义在 CSS 的 --qp-statusbar，这里读出来即可，
+    // 不在 JS 里重复维护一份色表）
+    if(curTab==='main') syncThemeColor('main');
   }
 }
 let etaRemain=null, etaClock='', schedOn=false;
@@ -2224,23 +2593,43 @@ function renderData(d){
     wdHtml='今日：学习 '+td.learn_min+' 分 · 打工 '+td.work_min+' 分 · 合计 '+(td.total_min??(td.learn_min+td.work_min))+' 分 · '+eff+nxt;
   }
   const rs=$('#runnerState'), rh=$('#runnerHint'), rsub=$('#runnerSub');
+  const curTask=(d.queue&&d.queue.current)?String(d.queue.current):'';
+  const etaKind=(d.work_eta&&d.work_eta.kind)?String(d.work_eta.kind):'';
+  // 状态 key：图标与文案共用同一个，避免出现「冒险中」配着福袋图标这种错位。
+  //   ① remaining>0 的 work_eta = 主任务活动真在进行（带倒计时，最准）
+  //   ② 否则队列 current = 调度器正在跑的场景（护理/PK/踩踩/福袋…）
+  //   ③ 再否则 work_eta 残留 = 已到点、正在收尾
+  // ① 必须判 >0：work_eta 在活动结束后 10 分钟内仍会返回（remaining 被 clamp 成 0），
+  // 只看“非 null”会让图标和文案一直停在上一项活动上（实测：冒险已结束、队列在跑福袋）。
+  const busyEta=(etaRemain>0&&etaKind)?etaKind:'';
+  const finishing=(!busyEta&&!curTask&&etaRemain!=null&&etaKind)?etaKind:'';
+  const stateKey=busyEta||curTask||finishing;
   if(!schedOn){
     // 调度器未运行：不引用日志里的旧“预计结算”行（会残留“进行中 剩余00:00”误导）
     rs.textContent='已停止';
     rh.textContent='';
     rsub.textContent='已停止：手机不会被自动操作；随时可再启动';
     $('#workSub').innerHTML=wdHtml;
-  }else if(etaRemain!=null){
-    const kind=(d.work_eta&&d.work_eta.kind)?d.work_eta.kind:'';
-    rs.textContent=kind?(kind+'中'):'进行中';
+    setRunIcon(null, true);
+  }else if(busyEta){
+    rs.textContent=busyEta+'中';
     rh.textContent='预计 '+etaClock+' 结束';
-    $('#workSub').textContent=(etaRemain>0?('剩余 '+hms(etaRemain)):'收尾中…')+' · 结束后自动开启下一项';
+    $('#workSub').textContent='剩余 '+hms(etaRemain)+' · 结束后自动开启下一项';
     rsub.textContent='';
+    setRunIcon(busyEta);
+  }else if(finishing){
+    rs.textContent=finishing+'中';
+    rh.textContent='预计 '+etaClock+' 结束';
+    $('#workSub').textContent='收尾中… · 结束后自动开启下一项';
+    rsub.textContent='';
+    setRunIcon(finishing);
   }else{
-    rs.textContent='等待中';
+    // current 非空 = 调度器正在跑某个场景（护理/PK/踩踩/福袋…），此时不该说“等待中”
+    rs.textContent=stateKey?(stateKey+'中'):'等待中';
     rh.textContent=d.last_line?d.last_line.replace(/^\[[\d:]+\]\s*/,'').slice(0,60):'';
     $('#workSub').innerHTML=wdHtml;
     rsub.textContent='';
+    setRunIcon(stateKey);
   }
   if(rsub) rsub.style.display=rsub.textContent?'':'none';
   // 统计瓦片
@@ -2259,7 +2648,7 @@ function renderData(d){
   // 主数值 = 学习节数 + 打工次数（当前正在进行的那一项 +1）；进度条分两段叠加显示
   // 学习/打工占比。注意 kind 必须参与判断——work_eta 是"上课/打工/冒险"共用模板，
   // 只判有无会把"正在上课"错算成"正在打工"（曾显示 0+1 实际在上课）。
-  const etaKind=(d.work_eta&&d.work_eta.kind)?String(d.work_eta.kind):'';
+  // etaKind 已在上面状态卡那段声明（图标与文案共用同一个 key）
   const busy=(schedOn&&etaRemain!=null);
   const hrs=s=>((s||0)/3600).toFixed(1).replace(/\.0$/,'');
   const sc=pg.school&&pg.school.learned!=null?pg.school.learned:0;
@@ -2624,7 +3013,8 @@ async function refreshLogs(){
     let lines=d.lines||[];
     if(logFilter) lines=lines.filter(l=>l.indexOf(logFilter)>=0);
     box.textContent=lines.join('\n');
-    $('#logMeta').textContent=d.name?('('+d.name+' · '+lines.length+' 行)'):'';
+    // 元信息放日志框下方注脚（.logfoot），不再挤顶栏标题
+    $('#logMeta').textContent=d.name?(d.name+' · '+lines.length+' 行'):'';
     if(logAuto&&near) box.scrollTop=box.scrollHeight;
   }catch(e){}
 }
@@ -2651,14 +3041,19 @@ function renderCfg(rows){
 }
 
 // ---- 设置页两级切换：一级分类列表 <-> 二级分类详情 ----
+// **二级是独立的一层历史**（导航层级：总览 0 / 内页 1 / 设置二级 2）：
+//   进二级 pushState（navDepth 1 -> 2），"返回设置列表"/侧滑 都是 **history.back()**（退栈）。
+// 改前每进一次二级、每点一次"返回设置列表"都 pushState（按钮也压栈），
+// 于是侧滑会反向往二级里钻（实测：进二级 -> 点"返回设置列表" -> 侧滑 又弹回二级）。
+// skipHistory=true 只用于"定时刷新重建表单后恢复层级"，不碰历史。
 function showSetIndex(skipHistory){
   const a=document.getElementById('setIndex'), b=document.getElementById('setDetail');
   if(a) a.classList.remove('hide');
   if(b) b.classList.add('hide');
   window.__setGrp=null;
-  if(!skipHistory){
-    try{ history.pushState({tab:'set'}, '', '?tab=set'); }catch(e){}
-  }
+  if(skipHistory) return;
+  // 从二级返回一级：**退栈**（不是再压一条一级，否则侧滑会退回二级）
+  if(navDepth>=2){ navDepth=1; try{ history.back(); }catch(e){} }
 }
 function openSetGroup(key, skipHistory){
   const a=document.getElementById('setIndex'), b=document.getElementById('setDetail');
@@ -2667,6 +3062,7 @@ function openSetGroup(key, skipHistory){
   if(!grp) return;
   if(!skipHistory){
     try{ history.pushState({tab:'set',grp:key}, '', '?tab=set&grp='+key); }catch(e){}
+    navDepth=2;
   }
   // 只显示这一组，其余隐藏
   document.querySelectorAll('#setForm .fgrp').forEach(g=>g.classList.toggle('hide', g.id!=='grp_'+key));
@@ -2935,7 +3331,7 @@ function renderSettings(ed){
   }
   // 重建后恢复原来的层级（定时刷新会重跑本函数，直接 showSetIndex 会把
   // 正在看二级详情的用户弹回一级 —— 曾实测每 6 秒被弹回一次）
-  // 定时刷新重建：恢复层级但不压历史（否则每 6 秒多一条记录）
+  // 定时刷新重建：**只恢复视图层级，不碰历史**（skipHistory=true）
   if(window.__setGrp){ openSetGroup(window.__setGrp, true); } else { showSetIndex(true); }
 }
 
@@ -2970,12 +3366,18 @@ function renderNotifyForm(ed){
     +'</span></div>',
     ])+
     FGn('测试与说明',[
-    '<div class="frow"><span class="k">测试</span><button class="minibtn" id="btnTestNotify">发送测试通知</button><span id="notifyTestMsg" style="color:var(--sub);font-size:12px"></span></div>',
-    '<div class="frow" style="display:block"><span style="color:var(--sub);font-size:12px;line-height:1.7">'
-    +'<b>飞书</b>：群 → 右上角设置 → 群机器人 → 添加机器人 → 自定义机器人，复制 webhook 地址；'
-    +'安全设置选「签名校验」就把密钥填到加签密钥（选「自定义关键词」可留空，关键词需含"QQ宠物"）。<br>'
-    +'<b>Telegram</b>：跟 @BotFather 发 /newbot 建机器人拿 Token；<b>先给机器人发一条消息</b>，'
-    +'再用 @userinfobot 查自己的 Chat ID（群/频道是 -100 开头的负数）。<br>'
+    '<div class="frow"><span class="k">测试</span><span class="ctrl">'
+    +'<span id="notifyTestMsg"></span>'
+    +'<button class="minibtn" id="btnTestNotify">发送测试通知</button></span></div>',
+    '<div class="noterow"><span class="nt">飞书</span><span class="nb">'
+    +'群 → 右上角设置 → 群机器人 → 添加机器人 → 自定义机器人，复制 webhook 地址；'
+    +'安全设置选「签名校验」就把密钥填到加签密钥（选「自定义关键词」可留空，关键词需含"QQ宠物"）。'
+    +'</span></div>',
+    '<div class="noterow"><span class="nt">Telegram</span><span class="nb">'
+    +'跟 @BotFather 发 /newbot 建机器人拿 Token；<b>先给机器人发一条消息</b>，'
+    +'再用 @userinfobot 查自己的 Chat ID（群/频道是 -100 开头的负数）。'
+    +'</span></div>',
+    '<div class="noterow"><span class="nt">告警</span><span class="nb">'
     +'任务失败告警始终会发（不受上面开关影响）；职业解锁与配额达成各有一个开关。'
     +'</span></div>',
     ]);
@@ -3042,7 +3444,8 @@ async function saveNotifySettings(silent){
 //   .subh / .advcap 作为小节标题 -> 其后到下一个标题之前的内容包进一张白卡。
 (function(){
   // 注意：notify/set 自带 .fgrp+.fsec 分节结构，不能再套 .pgsec（会双层白卡）
-  const PAGES=['adv','plan','log'];
+  // 注意：log 页已手写 .pgsec 分节（工具栏/输出/异常截图），不能再自动包
+  const PAGES=['adv','plan'];
   function wrap(page){
     const sec=document.querySelector('main > [data-page="'+page+'"]');
     if(!sec || sec.dataset.wrapped==='1') return;
@@ -3206,40 +3609,111 @@ document.getElementById('taskList').addEventListener('click', async ev => {
   } catch(e) { cb.classList.toggle('on'); setTimeout(refreshData, 800); }
 });
 
+// 状态栏配色跟随当前页（iOS 独立 Web App 下状态栏那条带取页面背景色，
+// 见 <meta name="theme-color"> 上方注释）。
+// 色值**只定义在 CSS**（--qp-statusbar，按场景/深浅色自动取值），这里读出来同步给
+// meta —— 不在 JS 里再抄一份色表，否则以后改色必然漏一处。
+// **注意**：必须在 showTab 的 `if(name===curTab) return;` 之前调用 ——
+// 否则"首帧就是内页"（localStorage 记住的 tab / ?tab=set 直开）时不会被同步。
+function syncThemeColor(name){
+  const dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  let want = '#FFFFFF';   // 内页顶栏是白的
+  if(name==='main'){
+    const v = getComputedStyle(document.documentElement)
+                .getPropertyValue('--qp-statusbar').trim();
+    if(v) want = v;
+    else want = dark ? '#A9722D' : '#D5A758';   // CSS 变量读不到时的兜底
+  }
+  document.querySelectorAll('meta[name="theme-color"]').forEach(function(m){
+    // 两组 meta 各带一个 media 查询，只改属于当前主题的那条，
+    // 免得把另一主题的值也覆盖成当前主题的色（切系统主题时就会串色）
+    const isDark = (m.getAttribute('media')||'').indexOf('dark') >= 0;
+    if(isDark === !!dark) m.setAttribute('content', want);
+  });
+}
+if(window.matchMedia){
+  try{ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', ()=>syncThemeColor(curTab)); }catch(e){}
+}
+
 // 当前页（供 history 手势判断）
 let curTab = 'main';
+// 导航层级：**0 = 总览，1 = 内页，2 = 设置二级**。
+//
+// **历史模型（第十二轮修）：栈与"导航层级"严格对应，最多三层**
+//   往下一层        pushState      （总览 -> 内页、设置一级 -> 二级）
+//   同级互切        replaceState   （内页 <-> 内页，栈不增长）
+//   往上一层        history.back() （**退栈**，不是再压一条上层页）
+//   跨层回总览      一次退够（go(-navDepth)）
+//
+// 改前是"访问轨迹"模型：每次切页都 push，连"返回"按钮也 push，于是
+//   ① 侧滑要一路退回**访问过的每一页**（实测 总览→日志→设置→设置二级→冒险→职业
+//      之后要滑 5 次才回总览，用户反馈"右滑了很多很多次才回到总览页"）
+//   ② 点"返回"回总览后再侧滑，**又回到刚才那个内页**（栈里刚压了一条总览）
+// 根因就一句话：**按钮在压栈、手势在退栈，两者方向相反**。
+// 现在层级与栈一一对应：二级侧滑 -> 一级，再侧滑 -> 总览（用户要的两段式钻取）。
+let navDepth = 0;
+let pendingTab = null;   // 跳级退栈（二级 -> 别的内页）时，退到总览后再压目标页
 function showTab(name, skipHistory){
   // 离开设置页时重置层级，下次进入从一级列表开始
   if(name!=='set' && window.__setGrp) window.__setGrp=null;
   document.querySelectorAll('main > [data-page]').forEach(el=>el.classList.toggle('hide', el.dataset.page!==name));
+  // 内页（非总览）把 html 底色切白：body 的 padding-top 露出的就是 html 底色，
+  // 总览露房间暖色图、内页露白色顶栏（见 CSS 里 html[data-page] 那条注释）
+  document.documentElement.setAttribute('data-page', name);
+  syncThemeColor(name);   // 状态栏同步（须在下面的早退之前，见函数注释）
   // 两列导航都要更新选中态（#tabbar2 是右列，早期漏了）
   document.querySelectorAll('#tabbar button, #tabbar2 button').forEach(b=>b.classList.toggle('on', b.dataset.tab===name));
   try{localStorage.setItem('qpet_tab',name);}catch(e){}
+  // **层级同步必须放在早退之前**：侧滑回到"设置一级"时页面名没变（set -> set），
+  // 若放在早退之后，navDepth 会停在 2，接着点"返回总览"就会多退一层（甚至退出应用）。
+  if(skipHistory) navDepth = (name==='main') ? 0 : 1;
   if(name===curTab) return;
   curTab=name;
-  // 压一条历史记录：这样手机侧滑返回（history.back）能回到上一页，
-  // 而不是直接退出页面（曾完全没用 History API，侧滑无反应）
-  if(!skipHistory){
-    try{ history.pushState({tab:name}, '', name==='main' ? location.pathname : ('?tab='+name)); }catch(e){}
-  }
+  // 侧滑/浏览器返回（popstate）驱动的切换：层级已同步，不再动历史
+  if(skipHistory) return;
+  // 跳级退栈（go(-2)）还在路上：本次只渲染页面、不动历史，
+  // 否则连续两次切页会把栈算歪，最坏情况退过头直接退出应用。
+  if(pendingTab){ navDepth = (name==='main') ? 0 : 1; return; }
+  // showTab 只处理页面级（总览 0 / 内页 1）；设置二级由 openSetGroup 负责（层级 2）
+  const target = (name==='main') ? 0 : 1;
+  const url = (name==='main') ? (location.pathname + rootSearch) : ('?tab='+name);
+  try{
+    if(target > navDepth){                       // 往下一层：压栈
+      navDepth = target;
+      history.pushState({tab:name}, '', url);
+    } else if(target === navDepth){              // 同级互切：替换，栈不增长
+      if(target === 1) history.replaceState({tab:name}, '', url);
+    } else if(target === 0){                     // 回总览：一次退到根
+      const steps = navDepth;
+      navDepth = 0;
+      if(steps === 1) history.back(); else history.go(-steps);
+    } else {                                     // 二级 -> 别的内页：先退到总览，落定后再压目标页
+      pendingTab = name;
+      navDepth = 0;
+      history.go(-2);
+    }
+  }catch(e){}
 }
-// 侧滑/浏览器返回：回到上一页；已在总览则放行（让浏览器正常退栈）
+// 侧滑/浏览器返回：退到栈里上一条。已在总览（根条目）则放行，让浏览器正常退栈。
 window.addEventListener('popstate', function(e){
   const st=e.state||{};
+  if(pendingTab){   // 跳级退栈的收尾：落回总览后再压目标页（见 showTab 最后一条分支）
+    const t=pendingTab; pendingTab=null;
+    try{ history.pushState({tab:t}, '', '?tab='+t); }catch(err){}
+    navDepth=1;
+    showTab(t, true);
+    return;
+  }
   const t=st.tab || 'main';
-  // 设置页内：根据 grp 决定停在一级还是二级
+  // 设置页：按这条记录的 grp 决定停在一级还是二级（层级也要跟着落定：
+  // showTab 只认页面级 0/1，二级的 2 必须在这里补上，否则"返回设置列表"会判不出该退栈）
   if(t==='set'){
-    if(curTab!=='set') showTab('set', true);
-    if(st.grp){ openSetGroup(st.grp, true); } else { showSetIndex(true); }
+    showTab('set', true);
+    if(st.grp){ openSetGroup(st.grp, true); navDepth=2; }
+    else { showSetIndex(true); navDepth=1; }
     return;
   }
-  // 从设置页二级直接返回到别的 tab 时，清掉分组状态
-  if(curTab==='set' && window.__setGrp) window.__setGrp=null;
-  if(t===curTab){
-    const q=new URLSearchParams(location.search).get('tab') || 'main';
-    if(q!==curTab) showTab(q, true);
-    return;
-  }
+  if(t===curTab) return;   // 栈里这条就是当前页（"回总览"的 back() 落到总览就是这种）
   showTab(t, true);
 });
 // tab 按钮：#tabbar（左列4个）+ #tabbar2（右列3个）都要绑
@@ -3270,11 +3744,21 @@ try{
     }
   }catch(e){}
 })();
-// 初始：把当前 tab 写进历史（replace 不产生新记录），
-// 之后每次切页 pushState -> 侧滑返回可逐级回退
-try{ history.replaceState({tab:initTab}, '', location.pathname + location.search); }catch(e){}
-curTab=initTab;
-showTab(initTab, true);
+// 初始历史：**根条目永远是总览** —— 这样"内页 -> 总览"用 history.back() 一定落回
+// 总览，而不会退到浏览器的上一页/直接退出应用（曾把 initTab 直接 replace 成根条目，
+// 那样根条目可能是内页，退栈就退到应用外了）。
+// 直开内页（?tab=set / localStorage 记住的页）时再压一层，栈 = [总览, 内页]。
+// 查询串只清 `?tab=`（当前页由 history.state 决定），**其它参数要保留**
+// ——曾整串丢掉，连 ?case= 这种无关参数一起没了。
+let rootSearch='';
+try{
+  const sp=new URLSearchParams(location.search); sp.delete('tab');
+  const qs=sp.toString(); rootSearch = qs ? ('?'+qs) : '';
+}catch(e){}
+try{ history.replaceState({tab:'main'}, '', location.pathname + rootSearch); }catch(e){}
+curTab='main';
+showTab('main', true);
+if(initTab!=='main') showTab(initTab);
 
 setInterval(()=>{if(!document.hidden)refreshLogs()},3000);
 setInterval(()=>{if(!document.hidden)refreshData()},6000);
@@ -3369,7 +3853,10 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, CTYPE[fp.suffix.lower()], fp.read_bytes(), 'max-age=3600')
                 else:
                     self._send(404, 'text/plain', b'not found')
-            elif path in ('/icon-192.png', '/icon-512.png'):
+            elif path in ('/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'):
+                # apple-touch-icon.png：iOS 主屏图标（HTML 里 <link rel="apple-touch-icon"> 指向它）。
+                # 单独一个文件名是为了「换图标时能换 URL」—— iOS 按 URL 缓存该图标，
+                # 复用 icon-192.png 的话内容更新了主屏也不会变（见 HTML 里的注释）。
                 fp = BASE / 'static' / path.lstrip('/')
                 if fp.exists():
                     data = fp.read_bytes()

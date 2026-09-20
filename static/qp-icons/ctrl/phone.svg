@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <!-- 右列"实时画面"圆钮图标（用户反馈"太丑了，换成卡通类型的手机图标"）。
+       旧版是"描边轮廓 + 内容条"的线性图标，与同排两个官方图标
+       （指南针 = 扁平插画、公文包 = 柔光拟物）**画风完全不同**：
+       官方是实心卡通插画，它是细线框，一眼就看出是外人，所以显丑。
+       故重画为**扁平卡通手机**：实心机身 + 深橙描边 + 米白屏幕 + 宠物爪印
+       + 右上小天线。配色沿用 ctrl/play.svg 的暖橙系，与同排官方图标一致。
+       尺寸注意：可见内容包围盒实测 66.5% × 93.3%（旧线性图 64.6% × 89.6%），
+       CSS 里的盒子百分比随之由 47.8% 改为 45.9%（可见高度仍是 18dp）——
+       换图必须重新量包围盒，见 dashboard.py 注释与 INTEGRATION.md 第九轮。
+       天线坑：初版天线球画到 cy=1.9（r=2.6 + 描边 0.9），顶端 y=-1.6 超出
+       viewBox 被裁成平顶；现整体下移到 cy=4.4，顶端留 2.9% 余量。
+       SVG 不会像位图那样"看起来没事"——**超出 viewBox 的部分是静默裁掉的**。 -->
+  <defs>
+    <linearGradient id="phg" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#FFDE9B"/>
+      <stop offset="0.5" stop-color="#FFA726"/>
+      <stop offset="1" stop-color="#D97600"/>
+    </linearGradient>
+  </defs>
+  <!-- 天线：短线 + 圆球（卡通感的来源之一） -->
+  <path d="M30.6 8.2 L35.0 5.2" stroke="#C9660A" stroke-width="2.4" stroke-linecap="round"/>
+  <circle cx="36.3" cy="4.4" r="2.2" fill="#FFC85C" stroke="#C9660A" stroke-width="1.5"/>
+  <!-- 机身：粗圆角 + 深橙描边（卡通描边是"实心插画"的关键，缺了就只是色块） -->
+  <rect x="8.6" y="4.4" width="29.4" height="40.6" rx="9"
+        fill="url(#phg)" stroke="#C9660A" stroke-width="2.4"/>
+  <!-- 屏幕：米白底（比纯白柔和，与官方图标的米白一致） -->
+  <rect x="13.6" y="10.8" width="19.4" height="24.8" rx="3.6" fill="#FFF8EA"/>
+  <!-- 屏幕内容：宠物爪印（点题"宠物 + 画面"，小尺寸下比笑脸更不容易糊） -->
+  <g fill="#FF9F1C">
+    <ellipse cx="23.3" cy="25.6" rx="4.4" ry="3.6"/>
+    <circle cx="18.4" cy="20.8" r="1.9"/>
+    <circle cx="22" cy="18.9" r="1.9"/>
+    <circle cx="25.6" cy="19.7" r="1.9"/>
+    <circle cx="28.2" cy="22.6" r="1.7"/>
+  </g>
+  <!-- Home 指示条 -->
+  <circle cx="23.3" cy="40.4" r="2.3" fill="#FFF1D8" opacity=".92"/>
+  <!-- 左侧高光：一点玻璃质感，避免整块死平 -->
+  <path d="M12.6 10 Q11.2 21.2 12.6 32.4" fill="none" stroke="#FFFFFF"
+        stroke-width="2.4" stroke-linecap="round" opacity=".2"/>
+</svg>

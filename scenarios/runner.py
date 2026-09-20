@@ -2039,6 +2039,21 @@ class TaskQueueRunner(Runner):
                     task_states[key] = {'state': 'disabled', 'next': ''}
                     continue
             if self._eligible(task, now):
+                # 场景级节流再挡一层：护理/好友护理/福袋的真实节奏在场景级
+                # （care_due / friend_care_due / gift_bag_due = 各自 last + interval），
+                # 只看 _eligible 会把"被自己间隔挡着"的任务误标成"现在就能跑"
+                # （实测：好友护理 600s、福袋 1800s 被标成"可执行"，而调度器其实在睡）。
+                try:
+                    throttled_until = self._scen_throttle_next(key)
+                except Exception:
+                    throttled_until = None
+                if throttled_until is not None and throttled_until > now:
+                    ready += 1
+                    task_states[key] = {'state': 'waiting',
+                                        'next': throttled_until.strftime('%Y-%m-%d %H:%M:%S')}
+                    if next_at is None or throttled_until < next_at:
+                        next_at, next_name = throttled_until, task.name
+                    continue
                 # 现在就能跑、在等调度器轮到 -> 等待中
                 waiting += 1
                 task_states[key] = {'state': 'ready', 'next': ''}
@@ -2114,6 +2129,36 @@ class TaskQueueRunner(Runner):
                      or self._work_over(study_s, work_s))
         return (school_done and work_done
                 and self._adventure_done(tasks) and self._hire_friend_done(tasks))
+
+    def _scen_throttle_next(self, key: str):
+        """护理/好友护理/福袋的"下次可执行时间"（各自 last + interval）；其它任务返回 None。
+
+        **纯查询、无副作用**（只读场景上的 last_* 时间戳与配置间隔）。
+        存在的意义：这三个任务的真实节流在**场景级**（`care_due` / `friend_care_due` /
+        `gift_bag_due`），而队列级 `_eligible` 只看退避/时间窗/开关 ——
+        两处间隔不一致时（如 friend_care 队列 success_interval 已过、场景间隔 600s 未到），
+        队列状态会把它们误标成"现在就能跑"，GUI 显示"可执行"却一直不动。
+        """
+        if key == 'care':
+            last = getattr(self.care, 'last_care_at', None)
+            iv = max(1, int(getattr(self.care.cfg.care, 'interval_seconds', 60) or 60))
+        elif key == 'friend_care':
+            fc = self.friend_care.cfg.friend_care
+            if not fc.enabled or not fc.friend_name.strip():
+                return None
+            last = getattr(self.friend_care, 'last_care_at', None)
+            iv = max(0, int(getattr(fc, 'interval_seconds', 1800) or 0))
+        elif key == 'gift_bag':
+            gb = self.gift_bag.cfg.gift_bag
+            if not gb.enabled:
+                return None
+            last = getattr(self.gift_bag, 'last_sweep_at', None)
+            iv = max(0, int(getattr(gb, 'interval_seconds', 1800) or 0))
+        else:
+            return None
+        if last is None:
+            return None
+        return last + timedelta(seconds=iv)
 
     def _sleep_until_next(self, tasks: dict, order: list) -> bool:
         """没有任务可执行时的等待：睡到最近的等待点（退避/每日窗口/pending 收尾时间），
