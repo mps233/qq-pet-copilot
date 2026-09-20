@@ -2351,7 +2351,7 @@ main > section[data-page]:not([data-page="main"]) > .plannote{
       <div class="caps-row">
         <div class="cap" title="金币"><img class="cico" src="/qp-icons/official/cap_coin.png" alt=""><div class="capbody"><span class="cval" id="coins">--</span><span class="cunit" id="coinsAt"></span></div></div>
         <div class="cap" title="今日踩踩"><img class="cico" src="/qp-icons/official/cap_paw.png" alt=""><div class="capbody"><span class="cval" id="visitTxt">--</span><div class="bar"><i id="visitBar"></i></div></div></div>
-        <div class="cap" title="今日PK"><img class="cico" src="/qp-icons/official/cap_pk_words.png" alt=""><div class="capbody"><span class="cval" id="pkTxt">--</span><div class="bar"><i id="pkBar"></i></div></div></div>
+        <div class="cap" title="今日PK"><img class="cico" src="/qp-icons/official/pk_words.png" alt=""><div class="capbody"><span class="cval" id="pkTxt">--</span><div class="bar"><i id="pkBar"></i></div></div></div>
       </div>
       <div class="caps-row">
         <div class="cap" title="今日冒险"><img class="cico" src="/qp-icons/official/cap_compass.png" alt=""><div class="capbody"><span class="cval" id="advTxt">--</span></div></div>
