@@ -141,6 +141,34 @@ agent 注册握手（`agent_register` / `agent_register_ok`，超时退出）；
    许可限制；其架构假设「设备端有 agent」，与本项目「Mac 调度 + adb」的形态叠加成本高，
    且 agent 的输入注入会与调度器争抢设备、打乱状态机（需配合 `/api/runner/stop` 接管模式）。
 
-## 6. 验证记录
+## 6. 验证记录（2026-09-21 实测：一加 LE2120 / Android 14 / 无线 adb）
 
-（本节由后续实测补充：scrcpy-server 启动 / 视频流消费 / 触摸注入 / 与调度器并发影响）
+用官方 `scrcpy-server` 4.1 以 shell(2000) 身份实测，脚本见 `tools/scrcpy_agent_probe.py`。
+
+| 项目 | 结果 |
+| --- | --- |
+| 启动方式 | `CLASSPATH=… app_process / com.genymobile.scrcpy.Server 4.1 scid=… tunnel_forward=true video=true control=true` —— **免 root**；必须 `setsid nohup` 才能脱离 adb 会话存活 |
+| 握手 | dummy byte(1) + 设备名(64) + codec(4) + session packet(12)，实测 `h264 322x720`（`max_size=720` 缩放），握手 0.38–0.43 s |
+| 视频流消费（运动画面） | **29.0 fps / 0.38 Mbps / 平均 1.6 KB/帧**（连续滑动，`max_fps=30` 打满） |
+| 视频流消费（静止画面） | 2 fps —— scrcpy「画面无变化不发帧」的按需推帧特性，非缺陷 |
+| 按键注入 | 注入 `KEYCODE_BACK` 后窗口从设置切回 QQ 宠物页（`AdelieFragmentActivity`）✓ |
+| 触摸注入 | 注入点击后窗口从设置首页跳转 WLAN 页（`com.oplus.wirelesssettings/SettingsActivity`）✓ |
+
+### 关键约束（实测踩坑）
+
+1. **触摸事件的坐标系必须等于视频尺寸**：scrcpy-server 的 `PositionMapper` 会校验事件的
+   `screen_size` 与当前视频尺寸，不匹配则**静默丢弃**（无任何报错）。传设备分辨率会被忽略，
+   必须按视频尺寸换算坐标（工具脚本已自动处理）。
+2. server 必须 `setsid nohup` 启动，否则 `adb shell` 会话结束即被杀。
+3. `scid` 是 31 位十六进制整数，超范围 server 直接抛 `NumberFormatException`。
+4. 采集（MediaCodec）与注入都会影响设备与挂机状态机，验证期间需先停调度器
+   （`POST /api/runner/stop`），完事再 `start`。
+
+### 结论
+
+- **视频源这一关已过**：无线 adb 下即可稳定拿到 ~30 fps 的 H.264（对比现状 screencap 单帧 1.8 s），
+  直接打通了「路线 B：H.264 over WebSocket + MSE/WebCodecs」的前置条件。
+- **注入后端已验证可用**：scrcpy-server 走反射 `InputManager.injectInputEvent`，shell 身份即可，
+  不需要 root、也不碰 `/dev/input` —— 可作为 minitouch 之外的第二注入路径。
+- 尚未做的：浏览器侧（fMP4 转封装走 MSE，或上 HTTPS 用 WebCodecs）、注入与调度器的互斥（接管模式）、
+  USB vs 无线的帧率上限对比。
