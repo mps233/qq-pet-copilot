@@ -256,6 +256,20 @@ def today_log_path():
     return files[-1] if files else None
 
 
+def cross_day_log_lines(lines: list[str], path) -> list[str]:
+    """跨天活动的日志兜底：今天的日志里没有"进行中"登记时，接上前一天的尾部。
+
+    日志按天分文件（`runs/logs/YYYY-MM-DD.log`），而打工/上课常跨零点
+    （如 23:39 登记"检测到正在打工，预计…（00:24:37 收尾）"）——跨天后那条记录
+    就不在今天文件里了，`work_eta()` 找不到 → 界面误显示"等待中"
+    （用户实报"明明还在打工呢"）。只给 work_eta 用，不影响 last_line / 今日时长。
+    """
+    if path is None or any(re.search(r'进行中，预计|检测到正在', ln) for ln in lines):
+        return lines
+    prev = path.parent / (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d.log')
+    return (tail_lines(prev, 400) + lines) if prev.is_file() else lines
+
+
 def tail_lines(path, n: int = 250) -> list[str]:
     """高效读取文件尾部（最多回读 400KB）。"""
     size = path.stat().st_size
@@ -1028,7 +1042,7 @@ def build_data() -> dict:
         'progress': load_progress(),
         'config': config_summary(),
         'shots': list_shots(),
-        'work_eta': work_eta(log_lines),
+        'work_eta': work_eta(cross_day_log_lines(log_lines, p)),
         'today_duration': today_duration(log_lines, efficiency_tiers_of(sched_cfg)),
         'last_line': log_lines[-1] if log_lines else '',
         'editable': editable_snapshot(),
@@ -2519,7 +2533,7 @@ const RUNICON={
   '冒险':'/qp-icons/official/cap_compass.png',
   '护理':'/qp-icons/official/soap.png',
   '好友护理':'/qp-icons/official/soap.png',
-  '踩踩':'/qp-icons/logo_hangout-48@2x.png',
+  '踩踩':'/qp-icons/official/cap_paw.png',   // 同胶囊行「今日踩踩」那颗
   'PK':'/qp-icons/official/pk_words.png',
   '福袋':'/qp-icons/official/cap_coin.png',
 };

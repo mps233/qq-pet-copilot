@@ -53,6 +53,6 @@
   （`git push origin mac-port`）
 - `upstream` = 上游：<https://github.com/490720818/qq-pet-copilot>
 
-`mac-port` 分支带上述本地适配改动。
+本地适配改动已并进 `main`（fork 默认分支即为带改动的版本）。
 同步上游：`git fetch upstream && git merge upstream/main`，
 冲突预计只落在改动过的源文件。
