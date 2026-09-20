@@ -864,6 +864,9 @@ def editable_snapshot() -> dict:
     career = cfg.get('career') or {}
     notify = cfg.get('notify') or {}
     return {
+        # 连接层：ADB 路径与设备序列号（设置页「连接手机」卡片；改完需重启调度器）
+        'adb_path': str((cfg.get('adb') or {}).get('path') or ''),
+        'adb_serial': str((cfg.get('adb') or {}).get('device_serial') or ''),
         'school_enabled': bool((tasks.get('school') or {}).get('enabled', True)),
         'school_attribute': str(school.get('attribute') or '力量'),
         'school_duration': str(school.get('duration') or '10分钟'),
@@ -935,6 +938,9 @@ def apply_settings(updates: dict) -> dict:
         'hire_friend_enabled': ('tasks.hire_friend.enabled', 'hire_friend.enabled'),
     }
     mapping = {
+        # 连接层（改完需重启调度器才生效，设置页卡片里有提示）
+        'adb_path': ('adb.path', 'str'),
+        'adb_serial': ('adb.device_serial', 'str'),
         'school_enabled': ('tasks.school.enabled', 'bool'),
         'care_enabled': ('tasks.care.enabled', 'bool'),
         'adventure_enabled': ('tasks.adventure.enabled', 'bool'),
@@ -1021,6 +1027,95 @@ def apply_settings(updates: dict) -> dict:
     if applied:
         S.save_raw(data)
     return {'ok': not rejected, 'applied': applied, 'rejected': rejected}
+
+
+def _adb_settings() -> tuple[str, str]:
+    """读 config.yaml 的 adb 段 → (配置的 adb 路径, 配置的设备序列号)。"""
+    try:
+        import yaml
+        cfg = yaml.safe_load((BASE / 'config.yaml').read_text('utf-8')) or {}
+    except Exception:
+        return '', ''
+    adb_cfg = cfg.get('adb') or {}
+    return str(adb_cfg.get('path') or ''), str(adb_cfg.get('device_serial') or '')
+
+
+def _resolve_adb(configured: str) -> tuple[str, str]:
+    """解析出实际可用的 adb 可执行文件路径 → (路径, 错误说明)。"""
+    try:
+        import sys as _sys
+        if str(BASE) not in _sys.path:
+            _sys.path.insert(0, str(BASE))
+        from src.config import find_adb
+        return find_adb(configured), ''
+    except Exception as e:  # noqa: BLE001
+        return '', str(e)
+
+
+def adb_info() -> dict:
+    """ADB 配置 + 在线设备列表（设置页「连接手机」卡片用）。
+
+    `adb devices -l` 解析出 serial / state / model。adb 不可用、超时、命令失败都
+    只记进 error 字段，不抛异常——界面显示空列表即可，不影响仪表盘其他功能。
+    """
+    import subprocess
+    configured, serial = _adb_settings()
+    resolved, err = _resolve_adb(configured)
+    devices: list[dict] = []
+    if resolved:
+        try:
+            out = subprocess.run([resolved, 'devices', '-l'], capture_output=True,
+                                 text=True, timeout=10)
+            for ln in (out.stdout or '').splitlines()[1:]:
+                ln = ln.strip()
+                if not ln or ln.startswith('*'):
+                    continue
+                # 用正则而不是 split()：`(no serial number)   device usb:…` 这类行
+                # 的"序列号"自带空格，split 会把它拆成 serial="(no" / state="serial"
+                # （实测踩过）。\S+ 匹配不到带空格的伪序列号，正好跳过。
+                mo = re.match(r'^(\S+)\s+(device|offline|unauthorized|no permissions'
+                              r'|bootloader|recovery|sideload)\b(.*)$', ln)
+                if not mo:
+                    continue
+                d = {'serial': mo.group(1), 'state': mo.group(2)}
+                for p in mo.group(3).split():
+                    if p.startswith('model:'):
+                        d['model'] = p[6:].replace('_', ' ')
+                    elif p.startswith('product:'):
+                        d['product'] = p[8:]
+                devices.append(d)
+            if out.returncode != 0 and not devices:
+                err = (out.stderr or '').strip() or f'adb 返回码 {out.returncode}'
+        except subprocess.TimeoutExpired:
+            err = 'adb devices 超时（10s）——adb server 可能卡住，可试 adb kill-server'
+        except Exception as e:  # noqa: BLE001
+            err = f'执行 adb 失败：{e}'
+    return {'path': configured, 'resolved': resolved, 'serial': serial,
+            'devices': devices, 'error': err}
+
+
+def adb_connect(addr: str) -> dict:
+    """`adb connect <addr>`（无线调试 / 模拟器）。返回 {ok, msg}。"""
+    import subprocess
+    addr = (addr or '').strip()
+    if not addr:
+        return {'ok': False, 'msg': '请填写地址，如 192.168.1.5:5555 或 127.0.0.1:7555'}
+    configured, _ = _adb_settings()
+    resolved, err = _resolve_adb(configured)
+    if not resolved:
+        return {'ok': False, 'msg': f'找不到 adb：{err}'}
+    if ':' not in addr:
+        addr = f'{addr}:5555'          # 省略端口时按 adb 默认无线调试端口补全
+    try:
+        r = subprocess.run([resolved, 'connect', addr], capture_output=True,
+                           text=True, timeout=20)
+        out = ((r.stdout or '') + (r.stderr or '')).strip()
+        ok = 'connected' in out and 'cannot' not in out.lower() and 'failed' not in out.lower()
+        return {'ok': ok, 'msg': out or f'返回码 {r.returncode}', 'addr': addr}
+    except subprocess.TimeoutExpired:
+        return {'ok': False, 'msg': 'adb connect 超时（20s）'}
+    except Exception as e:  # noqa: BLE001
+        return {'ok': False, 'msg': f'执行失败：{e}'}
 
 
 def build_data() -> dict:
@@ -3252,9 +3347,27 @@ function renderSettings(ed){
     '<div class="frow"><span class="k">隐藏职业解锁监控</span><button class="sw'+(ed.career_watch?' on':'')+'" id="swCareer" title="开=每节课结算后读职业树；武术家/梦境旅人/大明星解锁时记录并推送通知"></button></div>',
     '<div class="frow"><span class="k">解锁后自动停学</span><button class="sw'+(ed.career_stop_study?' on':'')+'" id="swCareerStop" title="开=解锁时自动关闭学习任务（等你安排下一阶段）"></button></div>',
     '<div class="frow"><span class="k">兜底检查间隔（分钟）</span><input type="number" id="numCareerInt" min="0" step="10" title="0 = 只每节课后检查" value="'+(ed.career_interval??60)+'"></div>',
-    ],'career');
+    ],'career')+
+    FG('连接手机（ADB）',[
+    '<div class="frow"><span class="k">adb 路径</span><input type="text" id="txtAdbPath" style="width:100%" placeholder="留空自动探测（PATH / Homebrew / Android SDK）" value="'+esc(ed.adb_path||'')+'"></div>',
+    '<div class="frow"><span class="k">设备序列号</span><input type="text" id="txtAdbSerial" style="width:100%" placeholder="留空 = 用第一台在线设备" value="'+esc(ed.adb_serial||'')+'"></div>',
+    '<div class="frow" style="display:block"><span style="color:var(--sub);font-size:12px;line-height:1.6">'
+      +'这两项属于<b>连接层</b>，改完要<b>重启调度器</b>才生效（连接在调度器启动时建立）。'
+      +'设备序列号也可以从下面列表里直接选。</span></div>',
+    '<div class="frow"><span class="k">在线设备</span><button class="minibtn" id="btnAdbRefresh">刷新</button></div>',
+    '<div class="frow" style="display:block"><div id="adbDevices" style="font-size:12px;color:var(--sub);line-height:1.8">点「刷新」查看当前设备</div></div>',
+    '<div class="frow"><span class="k">连接地址</span><input type="text" id="txtAdbAddr" style="width:100%" placeholder="192.168.1.5:5555 / 127.0.0.1:7555（省略端口按 :5555）"></div>',
+    '<div class="frow"><span class="k">无线 / 模拟器</span><button class="minibtn" id="btnAdbConnect">连接</button></div>',
+    '<div class="frow" style="display:block"><div id="adbMsg" style="font-size:12px;line-height:1.8"></div></div>',
+    ],'adb');
   // 通知页单独渲染（不放设置页：渠道配置项多，独立成板更清楚）
   renderNotifyForm(ed);
+  // ---- ADB 卡片：两个文本框跟着自动保存走，两个按钮各调一次接口 ----
+  ['#txtAdbPath','#txtAdbSerial'].forEach(id=>{
+    const el=$(id); if(el) el.addEventListener('change',()=>markDirtyAndSave());
+  });
+  { const b=$('#btnAdbRefresh'); if(b) b.onclick=refreshAdb; }
+  { const b=$('#btnAdbConnect'); if(b) b.onclick=adbConnectNow; }
   $('#swSchool').onclick=()=>{ $('#swSchool').classList.toggle('on'); markDirtyAndSave(); };
   $('#swFC').onclick=()=>{ $('#swFC').classList.toggle('on'); markDirtyAndSave(); };
   $('#swEmp').onclick=()=>{ $('#swEmp').classList.toggle('on'); markDirtyAndSave(); };
@@ -3330,7 +3443,7 @@ function renderSettings(ed){
     ['核心任务',[['school','学习'],['work','打工'],['quota','学习/打工总控'],['fatigue','疲劳与收益档']]],
     ['日常互动',[['care','护理'],['friend_care','好友护理'],['visit','踩踩'],['pk','PK'],['adventure','冒险']]],
     ['扩展',[['employed','被雇佣'],['gift_bag','福袋'],['career','职业']]],
-    ['系统',[['schedule','调度']]],
+    ['系统',[['schedule','调度'],['adb','连接手机（ADB）']]],
   ];
   const menu=$('#setMenu');
   if(menu){
@@ -3346,7 +3459,13 @@ function renderSettings(ed){
   // 重建后恢复原来的层级（定时刷新会重跑本函数，直接 showSetIndex 会把
   // 正在看二级详情的用户弹回一级 —— 曾实测每 6 秒被弹回一次）
   // 定时刷新重建：**只恢复视图层级，不碰历史**（skipHistory=true）
-  if(window.__setGrp){ openSetGroup(window.__setGrp, true); } else { showSetIndex(true); }
+  // ?grp=<key> 直开某个二级分组（与 ?tab= 同理，便于分享链接/截图/调试）：
+  // 每次渲染都读一次 URL，不能只看 window.__setGrp —— 首次渲染的时序不确定
+  // （数据到达才渲染，实测依赖 __setGrp 会不生效）。点"返回一级"会清掉该参数。
+  let want=window.__setGrp || _grpFromUrl;
+  _grpFromUrl='';                        // 直开参数只用一次
+  if(want && document.getElementById('grp_'+want)) openSetGroup(want, true);
+  else showSetIndex(true);
 }
 
 // ---- 通知页（独立板块）：渠道配置 + 事件开关 + 测试 ----
@@ -3510,6 +3629,57 @@ function markDirtyAndSave(){
     }catch(e){ /* 保存失败已在各自函数内提示 */ }
   },600);
 }
+// ---- ADB 卡片：列设备 / 连接无线设备 ----
+async function refreshAdb(){
+  const box=$('#adbDevices'); if(!box) return;
+  box.textContent='查询中…';
+  try{
+    const d=await j('/api/adb');
+    const devs=d.devices||[];
+    const head='当前 adb：'+esc(d.resolved||'（未找到）')
+      +'<br>配置的序列号：'+(d.serial?esc(d.serial):'（空 = 用第一台在线设备）');
+    if(!devs.length){
+      box.innerHTML=head
+        +(d.error?'<br><span style="color:var(--warn)">'+esc(d.error)+'</span>':'')
+        +'<br>没有在线设备。真机请插 USB 并在手机上允许调试；模拟器 / 无线调试在下面填地址点「连接」。';
+      return;
+    }
+    box.innerHTML=head+devs.map(x=>{
+      const on=x.state==='device', cur=(d.serial===x.serial);
+      return '<br><span style="color:'+(on?'var(--ok)':'var(--warn)')+'">●</span> '
+        +'<b>'+esc(x.serial)+'</b>'+(x.model?'（'+esc(x.model)+'）':'')
+        +' <span style="color:var(--sub)">'+esc(x.state)+'</span>'
+        +(cur?' <span style="color:var(--accent)">← 当前配置</span>':'')
+        +' <button class="minibtn" data-adbserial="'+esc(x.serial)+'">用这台</button>';
+    }).join('');
+    box.querySelectorAll('[data-adbserial]').forEach(b=>{
+      b.onclick=()=>{
+        const el=$('#txtAdbSerial'); if(!el) return;
+        el.value=b.dataset.adbserial; markDirtyAndSave();
+        const m=$('#adbMsg');
+        if(m){ m.style.color='var(--ok)'; m.textContent='已填入序列号 —— 重启调度器后生效'; }
+      };
+    });
+  }catch(e){
+    box.innerHTML='<span style="color:var(--warn)">查询失败：'+esc(e.message)+'</span>';
+  }
+}
+async function adbConnectNow(){
+  const msg=$('#adbMsg'), el=$('#txtAdbAddr');
+  const addr=el?el.value.trim():'';
+  if(!addr){ if(msg){ msg.style.color='var(--warn)'; msg.textContent='请先填连接地址'; } return; }
+  if(msg){ msg.style.color='var(--sub)'; msg.textContent='连接中…'; }
+  try{
+    const r=await fetch('/api/adb/connect',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({addr})});
+    const d=await r.json();
+    if(msg){ msg.style.color=d.ok?'var(--ok)':'var(--warn)';
+             msg.textContent=(d.ok?'✅ ':'⚠ ')+(d.msg||''); }
+    refreshAdb();
+  }catch(e){
+    if(msg){ msg.style.color='var(--warn)'; msg.textContent='连接失败：'+e.message; }
+  }
+}
 document.addEventListener('input',e=>{
   if(!e.target||!e.target.closest) return;
   if(e.target.closest('#notifyForm')||e.target.closest('#setForm')) markDirtyAndSave();
@@ -3551,6 +3721,8 @@ async function saveSettings(){
   txtc('#txtPkOnly','pk_only'); txtc('#txtPkSkip','pk_skip'); num('#numPkLv','pk_max_level'); txtc('#txtPkHelper','pk_helper');
   num('#numEnergy','care_energy'); num('#numClean','care_clean'); num('#numExchange','care_exchange'); num('#numGbInt','gift_bag_interval'); num('#numCareerInt','career_interval');
   txtc('#txtFCName','friend_care_name'); num('#numFCInt','friend_care_interval'); num('#numEmpInt','employed_interval');
+  // 连接层（ADB）：改完要重启调度器才生效，卡片里已提示
+  txtc('#txtAdbPath','adb_path'); txtc('#txtAdbSerial','adb_serial');
   // 注意：通知渠道字段在**通知页**（#notifyForm），由 saveNotifySettings 单独提交，
   // 这里不要再取（那些 id 已不在本表单里，取了会是 null 而报错）。
   if(!Object.keys(updates).length){ msg.className='saveMsg'; msg.textContent='没有改动'; btn.disabled=false; return; }
@@ -3746,6 +3918,12 @@ try{
   // 注意：#tabbar 只含左列 4 个按钮，set/log/shot 在 #tabbar2 —— 要全局找
   if(qp && document.querySelector('button[data-tab="'+qp+'"]')) initTab=qp;
 }catch(e){}
+// ?tab=set&grp=<key> 直开设置页的某个二级分组（同理，便于分享链接/截图/调试）。
+// **必须在这里读、并且存进独立变量**，两个坑：
+//   ① showTab('main') 会清 window.__setGrp（"离开设置页重置层级"），存那里会被抹掉；
+//   ② showTab('set') 会把 URL 重写成 '?tab=set'，之后再读 location.search 就没有 grp 了。
+let _grpFromUrl='';
+try{ _grpFromUrl=new URLSearchParams(location.search).get('grp')||''; }catch(e){}
 // 初始：先取好友名单（下拉选择用），再渲染 tab —— 否则首次渲染
 // 的 datalist 是空的，用户以为"没有好友可选"
 (async function initFriends(){
@@ -3885,6 +4063,11 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/data':
                 body = json.dumps(build_data(), ensure_ascii=False).encode('utf-8')
                 self._send(200, 'application/json; charset=utf-8', body)
+            elif path == '/api/adb':
+                # 单独一个接口（而不是并进 /api/data）：它要真跑一次 adb devices，
+                # 几百毫秒起步，放 /api/data 会拖慢每 6 秒一次的整体刷新。
+                body = json.dumps(adb_info(), ensure_ascii=False).encode('utf-8')
+                self._send(200, 'application/json; charset=utf-8', body)
             elif path == '/api/adventure':
                 q = parse_qs(u.query)
                 body = json.dumps(adventure_data((q.get('date') or [''])[0]),
@@ -3967,6 +4150,14 @@ class Handler(BaseHTTPRequestHandler):
                         pass
                 body = json.dumps(result, ensure_ascii=False).encode('utf-8')
                 self._send(200 if result['ok'] else 400,
+                           'application/json; charset=utf-8', body)
+            elif u.path == '/api/adb/connect':
+                length = int(self.headers.get('Content-Length') or 0)
+                payload = json.loads(self.rfile.read(length).decode('utf-8') or '{}')
+                result = adb_connect(str(payload.get('addr') or ''))
+                audit(f'ADB 连接(来自 {self.client_address[0]}): {payload.get("addr")} → {result.get("msg")}')
+                body = json.dumps(result, ensure_ascii=False).encode('utf-8')
+                self._send(200 if result.get('ok') else 400,
                            'application/json; charset=utf-8', body)
             elif u.path == '/api/plan':
                 length = int(self.headers.get('Content-Length') or 0)

@@ -164,6 +164,11 @@ def validate_field(key: str, value):
         return (True, value) if value in ('auto', *EMULATOR_TYPES) else (False, default)
     if key in ('emulator.name', 'emulator.path'):
         return True, str(value).strip()
+    if key in ('adb.path', 'adb.device_serial'):
+        # adb.path 留空 = 自动探测（find_adb 依次试 PATH / Homebrew / Android SDK /
+        # 随包 scrcpy 自带）；device_serial 留空 = 用第一台在线设备。两者都只是字符串，
+        # 不做存在性校验——用户可能先填路径、设备后插上（改完需重启调度器才生效）。
+        return True, str(value).strip()
     if key == 'tasks.order':
         keys = [k.strip() for k in str(value).split('>') if k.strip()]
         if keys and all(k in TASK_KEYS for k in keys):
