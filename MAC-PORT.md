@@ -47,7 +47,12 @@
 - 告警链路：macOS 通知 + 截图存档实测生效（`runs/alert_*.png`）
 - 待观察：学习（school）流程、打工结算收取、被雇佣、长时间连续运行的稳定性
 
-## 与上游同步
+## 远端与上游同步
 
-`origin` 即上游仓库；`mac-port` 分支只有上述小改动。
-`git fetch origin && git merge origin/main`，冲突预计只落在改动过的源文件。
+- `origin` = 自己的 fork：<https://github.com/mps233/qq-pet-copilot>
+  （`git push origin mac-port`）
+- `upstream` = 上游：<https://github.com/490720818/qq-pet-copilot>
+
+`mac-port` 分支带上述本地适配改动。
+同步上游：`git fetch upstream && git merge upstream/main`，
+冲突预计只落在改动过的源文件。
