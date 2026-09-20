@@ -1869,8 +1869,11 @@ body{
 /* ---------- 8. 实时画面页 ---------- */
 .shotpage{display:flex;flex-direction:column;gap:10px}
 /* 实时直播卡（scrcpy-server + ffmpeg HLS）：iOS 原生 HLS / 桌面 MSE */
-.shotpage .livecard{position:relative;display:flex;align-items:center;justify-content:center;background:#000;flex:1 1 auto;min-height:220px;overflow:hidden}
-.shotpage #liveVideo{width:100%;height:100%;object-fit:contain;background:#000;display:block;touch-action:manipulation}
+/* 直播卡按手机竖屏比例占位：未开播的占位框 = 开播后的画面区尺寸，避免"先横条后撑满"的跳变。
+   宽度取「占满可用宽」与「按可视高度换算」的较小值（同一加设备 GUI 的 _fit_screen_card 思路），
+   所以矮屏/横屏也不会顶出视口。设备比例与 9:20 略有差异时由 JS 用 status 的尺寸校正（见 liveStart）。 */
+.shotpage .livecard{--live-ar-w:9;--live-ar-h:20;position:relative;display:flex;align-items:center;justify-content:center;background:#000;overflow:hidden;align-self:center;aspect-ratio:var(--live-ar-w)/var(--live-ar-h);width:min(100%,calc((100vh - 210px) * var(--live-ar-w) / var(--live-ar-h)));width:min(100%,calc((100dvh - 210px) * var(--live-ar-w) / var(--live-ar-h)))}
+.shotpage #liveVideo{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;display:block;touch-action:manipulation}
 .shotpage .livehint{position:absolute;left:12px;right:12px;bottom:10px;color:#cbd5e1;font-size:12px;line-height:1.5;text-align:center;pointer-events:none}
 .shotpage #btnTakeover.on{background:#16a34a;color:#fff;border-color:#16a34a}
 .shotpage #liveMeta{font-size:12px;color:#64748b;align-self:center}
@@ -3759,6 +3762,15 @@ $('#btnShot').onclick=()=>{ showTab('shot'); if(!liveOn) liveStart(); };
 // iOS Safari 支持原生 HLS，直接喂 m3u8；桌面 Chrome 不支持原生 HLS，改走 MSE 拉同一份 fMP4 分片。
 let liveOn=false, liveMs=null, liveSeen=new Set(), liveInfo={}, liveTimer=null, takeover=false;
 function liveHint(t){const el=$('#liveHint'); if(el){el.textContent=t||''; el.style.display=t?'block':'none';}}
+// 用实际设备/视频尺寸校正占位比例（默认 9:20；一加 1080x2412 这类只差千分之几，校正后与画面完全对齐）
+function applyLiveAspect(st){
+  const dim=((st&&(st.video||st.device))||'').split('x').map(Number);
+  const card=document.querySelector('.shotpage .livecard');
+  if(card&&dim.length===2&&dim[0]>0&&dim[1]>0){
+    card.style.setProperty('--live-ar-w',dim[0]);
+    card.style.setProperty('--live-ar-h',dim[1]);
+  }
+}
 async function liveStatus(){try{return await (await fetch('/api/stream/status',{cache:'no-store'})).json();}catch(e){return {running:false,error:String(e)};}}
 function liveStop(){
   liveOn=false;
@@ -3801,6 +3813,7 @@ async function liveStart(){
   $('#btnLive').textContent='连接中…';
   const st=await liveStatus();
   liveInfo=st||{};
+  applyLiveAspect(liveInfo);
   const v=$('#liveVideo');
   if(!st.running && st.error){liveHint('启动失败：'+st.error); $('#btnLive').textContent='重试'; return;}
   liveHint('缓冲中…（设备端采集启动约 3~7 秒）');
@@ -4026,6 +4039,8 @@ setInterval(()=>{if(!document.hidden)refreshData()},6000);
 setInterval(()=>{if(!document.hidden)refreshAdventure()},10000);
 setInterval(()=>{if(!document.hidden)refreshPlan()},15000);
 refreshData();refreshLogs();refreshAdventure();refreshPlan();
+// 占位框一开始就用设备真实比例（只读 status，不会启动流）
+liveStatus().then(applyLiveAspect).catch(()=>{});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden){refreshData();refreshLogs();refreshAdventure();refreshPlan()}});
 try{
   const okSW=('serviceWorker' in navigator)&&(location.protocol==='https:'||location.hostname==='localhost'||location.hostname==='127.0.0.1');
