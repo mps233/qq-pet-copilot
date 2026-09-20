@@ -1,8 +1,24 @@
-# QQ 宠物自动化助手（qq-pet-copilot）
+# QQ 宠物自动化助手 · macOS 适配版
+
+> 本仓库是 [490720818/qq-pet-copilot](https://github.com/490720818/qq-pet-copilot)（GPL-3.0）
+> 的 **macOS 本地适配版**。上游面向 Windows（PyQt6 GUI + scrcpy 嵌入 + 模拟器注入链路），
+> 本适配版的目标运行方式是 **macOS + Android 真机**：**控制台调度器 + 手机浏览器仪表盘**，
+> 不使用 Windows GUI 与模拟器注入链路。差异清单与上游同步方式见 [MAC-PORT.md](MAC-PORT.md)。
 
 基于 uiautomator2 控件定位 + RapidOCR 文字识别的 QQ 宠物自动托管工具（分辨率无关）。
-PyQt6（Fluent Widgets）图形界面内嵌 scrcpy 实时画面，任务队列自动调度，按金币和**学习/工作时长**规则推进，
-并自动处理**被雇佣召回**、**体力/清洁照顾**、**好友护理/雇佣**等日常。
+任务队列自动调度，按金币和**学习/工作时长**规则推进，并自动处理**被雇佣召回**、
+**体力/清洁照顾**、**好友护理/雇佣**等日常。
+
+**本适配版相对上游的主要改动**：
+
+- **手机仪表盘**（`dashboard.py`，纯标准库零依赖）：手机浏览器打开即用的移动端界面，
+  画面/日志/统计/任务开关/设置编辑一屏搞定；官方首页图标 1:1 复刻（胶囊行、圆钮、
+  PWA 主屏图标），底部状态卡按当前状态换图标。
+- **回主页兼容修复**（新版 QQ 9.3.6x）：打工/学习面板返回主页时 3D 主页需 1~2 秒重渲染，
+  原逻辑会连环按 back 把宠物模块整个退回系统桌面；现改为每次 back 后先等渲染再检查，
+  连续失败改用官方 scheme 重开宠物页兜底。
+- macOS 环境适配：adb 路径探测（Homebrew / Android SDK）、`winreg` 导入降级、
+  失败告警改用 osascript 桌面通知。
 
 > **游戏机制注意：护理相关勋章如果要拿的话不能一键！！！**
 > 一键护理不计入勋章进度，要拿勋章必须把护理方式配成"ocr检测"手动喂食/洗澡
@@ -52,12 +68,17 @@ PyQt6（Fluent Widgets）图形界面内嵌 scrcpy 实时画面，任务队列�
   内置 opener **零注入**打开宠物主页（MuMu 机型伪装 / 门禁 MMKV 补丁 + 官方 scheme 直开，
   frida 仅作一次性兜底、不常驻注入，旧版常驻注入会被 QQ 风控"使用外挂插件"）；
   模拟器重启后 adb 抖动会先等回线，不再误判整机重启；多开实例互不干扰。
-- **失败告警通知**：主任务多次重试仍失败时发 Windows Toast + OnePush 多渠道推送
-  （Bark / PushPlus / Server酱 / SMTP / 自定义 webhook），并附当前手机截图。
+- **失败告警通知**：主任务多次重试仍失败时发 macOS 桌面通知（osascript）+ OnePush
+  多渠道推送（Bark / PushPlus / Server酱 / SMTP / 自定义 webhook），并附当前手机截图。
 - **每日计数与时长持久化**：各场景次数与累计时长按天记录在 `runs/*.json`（含历史），
   中途停止重跑接着计数，跨天自动归档清零（单账号，不按账号拆分）。
-- **GUI（PyQt6-Fluent-Widgets）**：左侧 Fluent 导航（主页/调度/统计/任务/设置），顶部全局
-  工具栏常驻（开始/停止/画面镜像/连接测试/手动重启 + 运行时间，画面镜像开关状态持久化
+- **手机仪表盘（本适配版新增，`dashboard.py`）**：纯标准库零依赖的移动端界面，
+  手机浏览器打开即用——实时画面/日志/统计/任务开关/设置编辑，官方首页视觉 1:1 复刻
+  （胶囊行、右栏圆钮、PWA 主屏图标）；**底部状态卡按当前状态换图标**
+  （学习=书本+铅笔、打工=爪印金币+绿箭头、冒险=指南针、护理=橙色 SOAP、踩踩=爪印、
+  PK=PK 字样、等待中=地球，全部取自官方素材）。状态由调度器日志 + 队列文件推断。
+- **GUI（PyQt6-Fluent-Widgets，上游 Windows 版功能）**：左侧 Fluent 导航（主页/调度/统计/任务/设置），
+  顶部全局工具栏常驻（开始/停止/画面镜像/连接测试/手动重启 + 运行时间，画面镜像开关状态持久化
   `gui.mirror`）；主页 = scrcpy 实时画面（9:16 竖屏等比自适应嵌入）+ 宠物状态/任务队列/
   今日统计/日志卡片——任务队列卡调度器未运行时也按配置推算下一任务，今日统计以
   学习(h)/工作(h) 时长 + 各任务当日次数的两行网格展示；统计页为各任务近 N 天次数的
@@ -65,85 +86,49 @@ PyQt6（Fluent Widgets）图形界面内嵌 scrcpy 实时画面，任务队列�
   调度/任务/设置页可视化修改 config.yaml，保存后**热加载即时生效**（无需重启）；
   "手动重启"按配置执行一次异常恢复，恢复后自动重启调度器；
   设置页"检查更新"：启动后自动检查一次、之后每 6 小时一次，发现新版本显示 Release 下载链接。
+  （本适配版不维护 `main.py`：它依赖 win32 + scrcpy 窗口嵌入，macOS 下不适用。）
 - **分辨率无关定位**：优先 u2 控件选择器，游戏内自绘按钮用 RapidOCR（PP-OCRv6 tiny）
   整屏文字识别，换分辨率/机型无需改代码。
 
-## 快速开始
+## 快速开始（macOS）
 
-两种方式二选一：**直接下载 Releases 打包好的 exe 使用**（推荐，无需 Python），或 **源码运行**（开发者 / 需要改代码）。
-
-### 方式一：直接下载 Releases 打包好的 exe（无需 Python）
-
-1. 打开 [Releases 发布页](https://github.com/490720818/qq-pet-copilot/releases)，下载对应版本并解压：
-   - `QQPetCopilot-<版本>-windows-x64.zip` —— **普通版**：真机（物理手机）使用，无需 Root；
-   - `QQPetCopilotEmulator-<版本>-windows-x64.zip` —— **模拟器版**：模拟器（MuMu/雷电 等）使用，
-     内置零注入 opener（MuMu 机型伪装 / 门禁补丁 + 官方 scheme 直开，frida 仅一次性兜底），
-     解决模拟器 QQ 搜索卡片没有宠物入口的问题。
-   - **模拟器版使用前提**：推荐使用最新版本 MuMu 模拟器（下载地址 [https://mumu.163.com/](https://mumu.163.com/)），
-     模拟器内安装 **QQ 9.3.25 及以上版本**并登录账号后，再开启脚本。
-     **Root 按需**：日常运行不需要 Root（机型伪装/门禁补丁持久化后零权限可用）；
-     仅首次打门禁补丁或兜底注入时需要临时开一次 Root，之后可永久关闭。
-2. 双击解压出的 `QQPetCopilot.exe` / `QQPetCopilotEmulator.exe` 启动：
-   - 首次运行会自动在 exe 旁生成 `config.yaml` 和 `runs/` 目录；scrcpy、OCR 模型、
-     minitouch 等资源都已打进包内，无需联网下载（frida-server xz 不随包，兜底注入
-     触发时按日志提示放置或自动下载）。
-   - Windows 若提示"已保护你的电脑"，点"更多信息 → 仍要运行"（exe 未签名属正常现象）。
-3. 手机开 USB 调试并连接电脑（或启动模拟器），在 GUI 设置页（或直接编辑 exe 旁的 `config.yaml`）填好 `adb.device_serial`。
-4. 点**开始**运行。模拟器版 exe 启动即默认模拟器模式，无需带参数。
-   - **多开**（多台设备 / 多个账号）：把整个解压目录复制成多份，每份配置各自的设备序列号，
-     各实例的 `config.yaml` / `runs/` 互相独立，互不影响。
-
-### 方式二：源码运行（开发者 / 需要改代码）
-
-需要 **Python 3.12**：
+需要 **Python 3.13** 与 **Android 真机**（USB 调试打开、QQ 已登录且 ≥ 9.3.25、
+充电时不熄屏：`adb shell settings put global stay_on_while_plugged_in 7`）。
 
 ```bash
-python -m venv .venv
-.venv/Scripts/pip install -r requirements.txt   # 含 frida（模拟器模式注入用）
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+
+# 1) 配置：复制模板后编辑（config.yaml 不入库）
+cp config.example.yaml config.yaml
+#   adb.path          = /opt/homebrew/bin/adb   （留空自动探测）
+#   adb.device_serial = 你的设备序列号            （adb devices 查看）
+#   recover.method    = 重启游戏                  （真机若设了锁屏密码，别用"重启设备"）
+
+# 2) 确认设备在线
+adb devices
+
+# 3) 启动
+./run.sh          # = .venv/bin/python scenarios/runner.py，控制台调度器（Ctrl+C 停止）
+./dashboard.sh    # 手机仪表盘，默认端口 8787，内网 http://<Mac 的局域网 IP>:8787
 ```
 
-1. 手机开 USB 调试并连接电脑（可用 `resources/scrcpy-win64/adb.exe devices` 确认）。
-2. 编辑 `config.yaml`（或在运行后在 GUI 设置页里改）。
-3. 启动：
+### 手机仪表盘（`./dashboard.sh`）
 
-```bash
-.venv/Scripts/python main.py            # GUI：画面 + 日志 + 控制按钮
-.venv/Scripts/python scenarios/runner.py  # 控制台模式（无 GUI）
-```
+纯标准库、零依赖，手机浏览器打开即用：
 
-GUI 打开后自动嵌入手机画面，点**开始**启动调度器（子进程），点**停止**立即结束。
-（scrcpy、minitouch 首次运行缺失时会自动下载到 `resources/`，无需手动拉取；frida-server
-仅模拟器兜底注入需要，缺失时同样自动下载。如需手动拉取可运行 `tools/fetch_scrcpy.py` /
-`tools/fetch_frida_server.py` / `tools/fetch_minitouch.py`。）
+- 默认端口 8787、绑定 `0.0.0.0`，内网 `http://<Mac 局域网 IP>:8787`；
+- 日志 3s、数据 6s 自动刷新；可实时改配置、开关任务、看画面/统计/日志；
+- **后台常驻**：脚本用 `start_new_session` 脱离终端启动（关终端不影响），
+  已在运行时提示 PID、不重复启动；换端口 `./dashboard.sh --port 8888`；
+  停止 `kill $(lsof -nP -iTCP:8787 -sTCP:LISTEN -t)`；日志 `runs/dashboard_console.log`。
+- **改 UI 前先读 `qqpet_assets/web/INTEGRATION.md`**（结构/ID 契约、图标路由与来源、
+  验证方式、踩坑记录）。页面元素位置可自由重排，但 `main > [data-page]` 直系与
+  `#tabbar button[data-tab]` 这两个 JS 契约不能动；**改完 `dashboard.py` 必须重启 8787**
+  （`HTML` 是模块级常量，只起副本验证 ≠ 线上已更新）。
 
-**模拟器模式**（如 MuMu / 雷电）：推荐使用最新版本 MuMu 模拟器（下载地址
-[https://mumu.163.com/](https://mumu.163.com/)），模拟器内安装 **QQ 9.3.25 及以上版本**并登录账号后再启动；
-QQ 搜索卡片打不开宠物主页时，带参数启动：
-
-```bash
-.venv/Scripts/python main.py --emulator --emulator-device 127.0.0.1:7555
-.venv/Scripts/python scenarios/runner.py --emulator --emulator-device 127.0.0.1:7555
-```
-
-`--emulator-device` 可省略（默认用 `config.yaml` 的 `adb.device_serial`，模拟器填 127.0.0.1:7555 这类地址）。
-模拟器模式由内置 opener 打开宠物主页，**零注入、Root 按需**，三级方案依次尝试：
-
-1. **官方 scheme 直开**（`mqqapi://qpet/open`，普通 shell 权限）——MuMu 上先做机型伪装
-   （有 Root 时改写 app 级机型映射，QQ 以真机身份运行，门禁原生通过）；
-2. scheme 失败且有 Root → 改 QQ 本地 MMKV 缓存翻转平板设备门禁（`enable_tablet=1`）后再 scheme；
-3. 仍失败 → frida 一次性 SDK 初始化兜底（伪装名 frida-server、随机端口、几秒注入窗口，
-   用完即杀，**不常驻注入**——旧版常驻 hook 会被 QQ 风控提示"使用外挂插件"）。
-
-伪装与门禁补丁都持久化在设备上，打过一次后**日常运行可关闭 Root**；scheme 直开不需要任何权限。
-frida-server xz 不随 exe 打包（减小体积）：兜底触发且本地没有时，源码运行自动用
-`tools/fetch_frida_server.py` 下载（GitHub 失败自动试镜像），打包版按日志提示把 xz 放到
-exe 旁 `runs/resources/frida-server/` 即可。注入前会等 QQ 启动稳定（避免被启动流程顶回主界面）。
-（Frida 17 起 Java 桥不再内置，注入前会自动用 `frida-tools` 自带的 `frida-java-bridge` 补桥。）
-
-> 规划：scheme 直开 + MMKV 补丁已覆盖绝大多数场景，frida 兜底极少触发。后续会评估
-> **完全去除 frida 客户端及相关代码**，去除后门禁补丁失效时将只保留 scheme + MMKV 两级方案。
-
-> 提示：两种方式首次连接手机时，uiautomator2 都会自动往手机安装 atx-agent，需在手机弹窗上允许安装。
+> 上游 Windows 的用法（PyQt6 GUI 内嵌 scrcpy、打包 exe、模拟器零注入 opener）在本适配版
+> 未做验证与维护，需要的话看[上游 README](https://github.com/490720818/qq-pet-copilot)。
 
 ## 配置（config.yaml，主要项）
 
@@ -187,50 +172,37 @@ exe 旁 `runs/resources/frida-server/` 即可。注入前会等 QQ 启动稳定�
 ## 单模块测试
 
 ```bash
-.venv/Scripts/python scenarios/runner.py --test coins              # 只测主页金币 OCR
-.venv/Scripts/python scenarios/runner.py --test recover           # 只测异常恢复链路
-.venv/Scripts/python scenarios/runner.py --test opener            # 模拟器：直接用 opener 打开宠物主页
-.venv/Scripts/python scenarios/runner.py --test work.select_place # 只跑某个阶段方法
-.venv/Scripts/python scenarios/runner.py --test care.read_status  # 只测体力/清洁识别
+./run.sh --test coins               # 只测主页金币 OCR
+./run.sh --test recover             # 只测异常恢复链路
+./run.sh --test care.read_status    # 只测体力/清洁识别
+./run.sh --test work.select_place   # 只跑某个阶段方法
 ```
 
-场景脚本也可单独跑：`python scenarios/school.py --times 1`（work / adventure / care 同理）。
+场景脚本也可单独跑：`.venv/bin/python scenarios/school.py --times 1`（work / adventure / care 同理）。
 
-模拟器诊断（QQ 更新后排查"访问好友"跳转）：用 [capture_visit_jump.py](tools/capture_visit_jump.py)
-在真机/模拟器上抓 `mqqapi://qpet/open` 跳转的完整 URL 与 attrs，对比差异定位问题：
+排查"访问好友"跳转（QQ 更新后）：用 [capture_visit_jump.py](tools/capture_visit_jump.py)
+在真机上抓 `mqqapi://qpet/open` 跳转的完整 URL 与 attrs，对比差异定位问题：
 
 ```bash
-.venv/Scripts/python tools/capture_visit_jump.py -s 127.0.0.1:7555 -c   # 模拟器自动点
-.venv/Scripts/python tools/capture_visit_jump.py -s ba286ada            # 真机手动点
+.venv/bin/python tools/capture_visit_jump.py -s <设备序列号>      # 真机手动点
 ```
 
-## 打包 exe
+## 打包 exe（上游 Windows 功能，本适配版不维护）
 
-```bash
-.venv/Scripts/python build.py              # 单文件：dist/QQPetCopilot.exe（普通版）
-.venv/Scripts/python build.py --onedir     # 目录模式
-.venv/Scripts/python build.py --emulator   # 模拟器版：dist/QQPetCopilotEmulator.exe（内置 opener + frida）
-.venv/Scripts/python build.py --all        # 普通版 + 模拟器版一起打包
-```
-
-`build.py` 打包前会自动下载 scrcpy（`tools/fetch_scrcpy.py`）、OCR 模型
-（`tools/fetch_ocr_models.py`）、minitouch（`tools/fetch_minitouch.py`）；模拟器版内置
-frida 客户端（opener 兜底注入用），注入脚本内置在 `src/opener.py`；**frida-server xz
-不随 exe 打包**（省 ~32MB）——兜底注入触发且本地没有时，源码运行自动下载，打包版按日志
-提示把 xz 放到 exe 旁 `runs/resources/frida-server/`（用 `tools/fetch_frida_server.py`
-下载，默认 x86_64）。
-frida-server 换版本只需改 `requirements.txt` 的 frida 锁定版本（客户端与 server 必须一致）。
-打包后 `config.yaml` 首次运行自动复制到 exe 旁，`runs/` 也生成在 exe 旁；exe 旁 `runs/` 目录放同名资源
-可覆盖包内资源（如 `runs/resources/scrcpy-win64/`、`runs/resources/frida-server/`），无需重新打包。冷启动需解压资源，会慢几秒。
-模拟器版 exe 启动即默认开启模拟器模式，无需带参数。
-注意：打包前请先关闭正在运行的 `QQPetCopilot.exe`（Windows 不允许覆盖被占用的 exe）。
+打包依赖 PyInstaller + win32，产物是 Windows exe；macOS 适配版走源码运行（`./run.sh`）。
+需要打包请看[上游 README](https://github.com/490720818/qq-pet-copilot) 的"打包 exe"一节。
 
 ## 目录结构
 
 ```
-main.py               # PyQt6 GUI 入口（Fluent 导航 + 全局工具栏 + scrcpy 9:16 嵌入 + 调度控制）
-build.py              # PyInstaller 打包脚本（--emulator / --all 打模拟器版）
-config.yaml           # 全部可调配置
+run.sh                # 启动控制台调度器（= .venv/bin/python scenarios/runner.py）
+dashboard.sh          # 启动手机仪表盘（默认 8787，后台常驻）
+dashboard.py          # 手机仪表盘本体（纯标准库 HTTP 服务 + 单页前端）
+MAC-PORT.md           # macOS 适配说明：与上游的差异清单、环境与运行、实测记录
+main.py               # PyQt6 GUI 入口（上游 Windows 版，本适配版不维护）
+build.py              # PyInstaller 打包脚本（上游 Windows 版，本适配版不维护）
+config.yaml           # 全部可调配置（不入库，模板为 config.example.yaml）
+static/               # 仪表盘静态资源（qp-icons 官方图标、PWA 图标）
 scenarios/
   runner.py           # 统一调度器（task_queue 任务队列 / legacy 两种引擎）
   school.py           # 学习场景（学园识别、选课、毕业处理）
@@ -254,20 +226,18 @@ src/
   coins.py            # 主页金币 OCR
   progress.py         # 日志 + 每日次数/时长持久化对外入口（兼容层）
   progress_store.py   # 进度文件统一管理（跨天归档/原子写入/损坏兜底）
-  stats_chart.py      # 统计页平滑折线图（QPainter 自绘）
+  stats_chart.py      # 统计页平滑折线图（QPainter 自绘，上游 GUI 用）
   status_cache.py     # 宠物状态缓存
   queue_status.py     # 任务队列状态缓存
   version.py / update_checker.py  # 版本常量 / GitHub Release 更新检查
-  notify.py           # 失败告警通知（Windows Toast + OnePush）
+  notify.py           # 失败告警通知（macOS osascript / 上游 Windows Toast + OnePush）
   settings.py         # config.yaml 读写（保留注释）
-  config.py           # 配置加载与路径规划（兼容 PyInstaller）
-resources/                   # 第三方二进制/离线包（不入库，build 时下载或本地放入）
-  scrcpy-win64/              # scrcpy 二进制
-  frida-server/              # frida-server 离线包（不随 exe 打包，兜底注入触发时自动下载/手动放置）
+  config.py           # 配置加载与路径规划
+resources/                   # 第三方二进制/离线包（不入库，按需下载）
   minitouch/                 # minitouch 控制方案二进制（x86_64 / arm64-v8a）
 tools/
-  fetch_scrcpy.py / fetch_frida_server.py / fetch_minitouch.py / fetch_ocr_models.py
-  dump_hierarchy.py / test_locator.py / capture_visit_jump.py
+  fetch_minitouch.py / fetch_ocr_models.py / dump_hierarchy.py / test_locator.py
+qqpet_assets/         # 官方素材逆向库与仪表盘文档（不入库，见 qqpet_assets/web/INTEGRATION.md）
 ```
 
 ## 定位方式
@@ -278,6 +248,10 @@ tools/
 
 ## 致谢
 
+- [490720818/qq-pet-copilot](https://github.com/490720818/qq-pet-copilot)
+  **上游项目**：本仓库是它的 macOS 本地适配版——调度器、场景实现、UI 定位注册表、
+  OCR 封装等核心能力都来自上游，本适配版只做了 macOS 运行链路与手机仪表盘相关改动
+  （见 [MAC-PORT.md](MAC-PORT.md)）。
 - [scrcpy](https://github.com/Genymobile/scrcpy)
   Android 画面镜像与控制工具，本项目的实时画面嵌入和 adb 能力实现。
 - [PyQt-Fluent-Widgets](https://github.com/zhiyiYo/PyQt-Fluent-Widgets/tree/PyQt6)（PyPI 包名 `PyQt6-Fluent-Widgets`，代码在主仓库的 PyQt6 分支）
