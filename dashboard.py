@@ -1869,44 +1869,17 @@ body{
 /* ---------- 8. 实时画面页 ---------- */
 .shotpage{display:flex;flex-direction:column;gap:10px}
 /* 实时直播卡（scrcpy-server + ffmpeg HLS）：iOS 原生 HLS / 桌面 MSE */
-.shotpage .livecard{position:relative;display:flex;align-items:center;justify-content:center;background:#000;min-height:200px;overflow:hidden}
-.shotpage #liveVideo{width:100%;max-height:58vh;object-fit:contain;background:#000;display:block;touch-action:manipulation}
+.shotpage .livecard{position:relative;display:flex;align-items:center;justify-content:center;background:#000;flex:1 1 auto;min-height:220px;overflow:hidden}
+.shotpage #liveVideo{width:100%;height:100%;object-fit:contain;background:#000;display:block;touch-action:manipulation}
 .shotpage .livehint{position:absolute;left:12px;right:12px;bottom:10px;color:#cbd5e1;font-size:12px;line-height:1.5;text-align:center;pointer-events:none}
 .shotpage #btnTakeover.on{background:#16a34a;color:#fff;border-color:#16a34a}
 .shotpage #liveMeta{font-size:12px;color:#64748b;align-self:center}
 .scenecard{position:relative;display:block;border-radius:var(--r-xl);overflow:hidden}
 .shotpage .scenecard{background:#0e0f12;box-shadow:var(--sh-2)}
-.shotpage #shotLink{display:block;width:100%;overflow:hidden;background:transparent}
-.shotpage #phoneShot{
-  display:block;width:100%;height:auto;object-fit:contain;
-  background:transparent;min-height:120px;
-}
 .shotpage-ctl{display:flex;gap:8px;flex:none;justify-content:center}
 .shotpage-ctl .savebtn{text-decoration:none;display:inline-block;text-align:center}
-.shotmeta{
-  position:absolute;top:8px;right:10px;z-index:2;
-  font-size:10.5px;color:#fff;background:rgba(0,0,0,.34);
-  border-radius:999px;padding:2px 9px;backdrop-filter:blur(4px);
-}
-.scenecard.duoshot{flex:1;min-height:0;padding:0;background:transparent;border:0;box-shadow:none}
-.scenecard #shotLink{flex:1;min-height:0;width:100%;display:block;line-height:0;overflow:hidden}
-.scenecard #phoneShot{
-  display:block;width:100%;height:100%;
-  object-fit:cover;object-position:center center;background:transparent;
-}
-.scenecard .shoterr{padding:0 12px;font-size:11px;flex:none}
-.shoterr{font-size:11px}
-.shoterr:empty{display:none}
-
-/* 画面加载/失败提示：浮层小胶囊，不铺底色（否则盖住房间背景） */
-#shotLink.loading::before{
-  content:"画面加载中…";position:absolute;left:50%;top:50%;
-  transform:translate(-50%,-50%);font-size:11.5px;color:var(--sub);
-  background:rgba(255,255,255,.8);border-radius:999px;
-  padding:4px 12px;white-space:nowrap;
-}
-#shotLink.loading.failed::before{content:"获取失败，稍后自动重试…";color:#b45309}
-#shotLink.loading #phoneShot{visibility:hidden}
+/* 静态截图卡相关样式（#shotLink / #phoneShot / .shotmeta / .duoshot / .shoterr / 加载提示）
+   已随该区域一并移除 —— 本页只剩实时直播 */
 
 /* ---------- 9. 表单与控件（照 QQ 宠物设置页：浅灰底 + 白卡分组） ---------- */
 /* 分组容器 = 一张白色圆角卡片；组标题（.fsect）在卡片【外】上方 */
@@ -2484,7 +2457,7 @@ main > section[data-page]:not([data-page="main"]) > .plannote{
         <button class="fab stop" id="btnRunnerStop" title="停止调度器"><img class="fi" src="/qp-icons/ctrl/stop.svg?v=3" alt=""><span class="ft">停止</span></button>
       </div>
       <div class="fb-group">
-        <button class="fab ghost" id="btnShot" title="刷新画面"><img class="fi" src="/qp-icons/ctrl/refresh.svg?v=3" alt=""><span class="ft">画面</span></button>
+        <button class="fab ghost" id="btnShot" title="实时画面"><img class="fi" src="/qp-icons/ctrl/refresh.svg?v=3" alt=""><span class="ft">画面</span></button>
       </div>
     </div>
 
@@ -2523,14 +2496,9 @@ main > section[data-page]:not([data-page="main"]) > .plannote{
       <button class="savebtn" id="btnTakeover">接管操作</button>
       <span id="liveMeta"></span>
     </div>
-    <div class="scenecard duoshot" id="shotCardWrap">
-      <span class="shotmeta" id="shotMeta"></span>
-      <a id="shotLink" class="loading" href="/api/screenshot" target="_blank" rel="noopener"><img id="phoneShot" alt="加载中…"></a>
-      <div id="shotErr" class="err shoterr"></div>
-    </div>
-    <div class="shotpage-ctl">
-      <a class="savebtn" id="shotOpen" href="/api/screenshot" target="_blank" rel="noopener">在新标签打开原图</a>
-    </div>
+    <!-- 静态截图卡已移除：本页只保留实时直播。
+         /api/screenshot 端点仍在（服务端兜底/调试用），页面不再轮询它 —— 顺带省掉每 15 秒
+         一次、每次约 1.8 秒的 adb screencap，不再跟调度器的 OCR 截图抢 adb 通道。 -->
   </section>
 
 
@@ -3784,26 +3752,8 @@ $('#btnAltPreset').onclick=async()=>{
   btn.disabled=false;
 };
 
-let shotUrl=null,shotBusy=false;
-async function refreshShot(force){
-  if(shotBusy)return; shotBusy=true;
-  try{
-    const r=await fetch('/api/screenshot'+(force?('?t='+Date.now()):''),{cache:'no-store'});
-    if(!r.ok) throw new Error((await r.text()).slice(0,80));
-    const b=await r.blob(); const u=URL.createObjectURL(b);
-    const img=$('#phoneShot'); if(shotUrl) URL.revokeObjectURL(shotUrl);
-    shotUrl=u;
-    img.onload=()=>$('#shotLink').classList.remove('loading','failed');
-    img.src=u;
-    $('#shotMeta').textContent='拍摄 '+((r.headers.get('X-Shot-At')||'').slice(0,5));
-    $('#shotErr').textContent='';
-  }catch(e){
-    $('#shotLink').classList.add('failed');
-    $('#shotErr').textContent='获取失败，点“刷新”重试';
-  }
-  shotBusy=false;
-}
-$('#btnShot').onclick=()=>refreshShot(true);
+// 「画面」按钮：进实时画面页并直接开播（静态截图区已移除，不再轮询 /api/screenshot）
+$('#btnShot').onclick=()=>{ showTab('shot'); if(!liveOn) liveStart(); };
 
 // ---- 实时直播（设备端 scrcpy-server + 本机 ffmpeg 转 HLS；按需启停，服务端 30s 空闲自动回收）----
 // iOS Safari 支持原生 HLS，直接喂 m3u8；桌面 Chrome 不支持原生 HLS，改走 MSE 拉同一份 fMP4 分片。
@@ -4075,9 +4025,8 @@ setInterval(()=>{if(!document.hidden)refreshLogs()},3000);
 setInterval(()=>{if(!document.hidden)refreshData()},6000);
 setInterval(()=>{if(!document.hidden)refreshAdventure()},10000);
 setInterval(()=>{if(!document.hidden)refreshPlan()},15000);
-setInterval(()=>{if(!document.hidden)refreshShot(false)},15000);
-refreshData();refreshLogs();refreshAdventure();refreshPlan();refreshShot(false);
-document.addEventListener('visibilitychange',()=>{if(!document.hidden){refreshData();refreshLogs();refreshAdventure();refreshPlan();refreshShot(false)}});
+refreshData();refreshLogs();refreshAdventure();refreshPlan();
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){refreshData();refreshLogs();refreshAdventure();refreshPlan()}});
 try{
   const okSW=('serviceWorker' in navigator)&&(location.protocol==='https:'||location.hostname==='localhost'||location.hostname==='127.0.0.1');
   if(okSW) navigator.serviceWorker.register('/sw.js').catch(()=>{});
