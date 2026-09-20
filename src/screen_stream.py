@@ -45,7 +45,7 @@ SERVER_CANDIDATES = [
 STREAM_DIR = APP_ROOT / 'runs' / 'stream'
 IDLE_STOP_SECONDS = 60                  # 无访问多久后自动停止（前端还有 3 秒一次的 ping 保活）
 START_TIMEOUT = 20.0
-HLS_SEGMENT_SECONDS = 0.5               # 分片时长 = 固有延迟下限（0.5s 比 1s 少一半）
+HLS_SEGMENT_SECONDS = 0.3               # 分片时长 = 固有延迟下限（0.3s ≈ 10 帧 @30fps）
 
 # ---- scrcpy 控制消息（control_msg.c）----
 T_KEYCODE, T_TOUCH = 0, 2
@@ -214,8 +214,8 @@ class ScreenStream:
             '-c', 'copy', '-an',
             '-f', 'hls',
             '-hls_time', str(HLS_SEGMENT_SECONDS),
-            '-hls_list_size', '6',           # 窗口 6 片 × 0.5s = 3 秒：再小会让播放器
-                                             # 拉不到已被删的分片（404 → 断流，踩过）
+            '-hls_list_size', '10',          # 窗口 0.3s × 10 = 3 秒：再小播放器会拉不到
+                                             # 已被删的分片（404 → 断流，踩过）
             '-hls_flags', 'delete_segments+omit_endlist+split_by_time',
             '-hls_segment_type', 'fmp4',
             '-hls_fmp4_init_filename', 'init.mp4',

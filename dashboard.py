@@ -3768,7 +3768,7 @@ $('#btnShot').onclick=()=>{ showTab('shot'); if(!liveOn) liveStart(); };
 
 // ---- 实时直播（设备端 scrcpy-server + 本机 ffmpeg 转 HLS；按需启停，服务端 30s 空闲自动回收）----
 // iOS Safari 支持原生 HLS，直接喂 m3u8；桌面 Chrome 不支持原生 HLS，改走 MSE 拉同一份 fMP4 分片。
-let liveOn=false, liveMs=null, liveSeen=new Set(), liveInfo={}, liveTimer=null, takeover=false, liveRestarting=false;
+let liveOn=false, liveMs=null, liveSeen=new Set(), liveInfo={}, liveTimer=null, takeover=false, liveRestarting=false, liveLastSeek=0;
 function liveHint(t){const el=$('#liveHint'); if(el){el.textContent=t||''; el.style.display=t?'block':'none';}}
 // 用实际设备/视频尺寸校正占位比例（默认 9:20；一加 1080x2412 这类只差千分之几，校正后与画面完全对齐）
 function applyLiveAspect(st){
@@ -3818,7 +3818,7 @@ async function liveMse(v){
         if(en-st>4){ try{ sb.remove(st,en-3); }catch(e){} }
       }
     }catch(e){}
-    setTimeout(pump,500);
+    setTimeout(pump,300);
   };
   pump();
 }
@@ -3853,9 +3853,12 @@ async function liveStart(){
     $('#liveMeta').textContent=(lag!==null?('延迟 '+lag.toFixed(1)+'s · '):'')
       +(s.running?('流运行中 '+(s.uptime||0)+'s'):'流已停止');
     if(!s.running && s.error)liveHint('流异常：'+s.error);
-    if(lag!==null && lag>2){
+    // 追帧：阈值 1.2s（原来 2s —— 那等于把稳态延迟锁在 2 秒以上）；3 秒内最多追一次，
+    // 避免频繁 seek 让 iOS 原生播放器反复重新缓冲。
+    if(lag!==null && lag>1.2 && Date.now()-liveLastSeek>3000){
+      liveLastSeek=Date.now();
       const v=$('#liveVideo');
-      try{ v.currentTime=Math.max(0,v.seekable.end(v.seekable.length-1)-0.3); }catch(e){}
+      try{ v.currentTime=Math.max(0,v.seekable.end(v.seekable.length-1)-0.2); }catch(e){}
       liveToast('已追到直播边缘（原落后 '+lag.toFixed(1)+'s）',1600);
     }
     // 接管状态跟随调度器：别处（仪表盘/GUI）又把调度器拉起来时，注入会被服务端拒绝，这里同步失效
