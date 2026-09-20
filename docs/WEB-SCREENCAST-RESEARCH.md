@@ -170,5 +170,45 @@ agent 注册握手（`agent_register` / `agent_register_ok`，超时退出）；
   直接打通了「路线 B：H.264 over WebSocket + MSE/WebCodecs」的前置条件。
 - **注入后端已验证可用**：scrcpy-server 走反射 `InputManager.injectInputEvent`，shell 身份即可，
   不需要 root、也不碰 `/dev/input` —— 可作为 minitouch 之外的第二注入路径。
-- 尚未做的：浏览器侧（fMP4 转封装走 MSE，或上 HTTPS 用 WebCodecs）、注入与调度器的互斥（接管模式）、
-  USB vs 无线的帧率上限对比。
+- 尚未做的：USB vs 无线的帧率上限对比、多观众并发压测。
+
+## 7. 实现落地（已完成）
+
+按第 5 节的「长期」路线落地为 dashboard 的实时画面页，链路：
+
+```
+设备端 scrcpy-server（app_process + shell 2000，免 root）
+   → video socket（12B 帧头 + 裸 H.264）
+   → 本机 ffmpeg -c copy（不重编码）→ fMP4 型 HLS（1 秒分片）
+   → dashboard /stream/* → iOS 原生 <video> / 桌面 MSE
+   → 网页点击 → /api/stream/tap → control socket → InputManager 注入
+```
+
+| 文件 | 职责 |
+| --- | --- |
+| `src/screen_stream.py` | scrcpy-server 生命周期、读流剥头、ffmpeg HLS 管道、注入、空闲看门狗 |
+| `dashboard.py` | `/stream/*` 与 `/api/stream/*` 路由、shot 页直播卡与播放/接管逻辑 |
+| `tools/scrcpy_agent_probe.py` | 命令行探测工具（probe/tap/key/swipe），排查用 |
+
+关键实现约束（都踩过）：
+
+1. **时间戳必须显式生成**：裸 H.264 没有 PTS，`ffmpeg` 的 hls muxer 会一直不切分片，
+   表现是「只出 `init.mp4`，直到进程结束才 flush 出一个 `#EXTINF:0.0006` 的空分片」。
+   解法是输入侧 `-use_wallclock_as_timestamps 1`（`-framerate` 在本机 ffmpeg 9.0 的 pipe 输入上无效）。
+2. **触摸事件的坐标系 = 视频尺寸**：scrcpy-server 的 `PositionMapper` 校验 `screen_size`，
+   不匹配静默丢弃事件（对外统一用设备坐标，模块内部换算）。
+3. **按需启停**：首个 `index.m3u8` 请求触发启动，`IDLE_STOP_SECONDS`=30s 无访问自动回收
+   （含 pkill server / 删 jar / 清 forward），挂机期间零编码开销。
+4. **注入必须接管**：服务端校验调度器已停，否则 409 —— 手动点击会打乱挂机状态机。
+
+验证结果（一加 LE2120 / Android 14 / 无线 adb）：
+
+| 项目 | 结果 |
+| --- | --- |
+| 首帧（冷启动，含 push server） | ~6.4 s（`/stream/index.m3u8` 首次请求返回 200） |
+| 分片 | `init.mp4` 803 B、`seg0000.m4s` 81 KB，`#EXTINF:1.008` |
+| 浏览器 MSE 解码播放 | ✅ headless Chrome 截图确认画面真实渲染（非黑屏） |
+| 网页注入 tap | ✅ 设置首页 → 点击后跳转 WLAN 页 |
+| 接管保护 | ✅ 调度器运行时 tap 返回 409 |
+| 空闲回收 | ✅ 无观众 30 s 后自动停（`status.running=false`） |
+| 静态截图兜底 | ✅ `/api/screenshot` 未改动，仍在页面上 |

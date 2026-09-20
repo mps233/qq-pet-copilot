@@ -30,6 +30,14 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 BASE = Path(__file__).resolve().parent
+
+# 实时流模块（设备端 scrcpy-server + 本机 ffmpeg 转 HLS）：不可用时 dashboard 仍要能跑
+try:
+    from src.screen_stream import STREAM_DIR, get_stream
+except Exception as _stream_err:                            # noqa: BLE001
+    STREAM_DIR, get_stream = None, None
+    print(f'[dashboard] 实时流模块不可用（/stream 与 /api/stream 将 503）：{_stream_err}',
+          flush=True)
 RUNS = BASE / 'runs'
 LOGS = RUNS / 'logs'
 ADV_LIVE_FILE = RUNS / 'adventure_live.jsonl'   # 冒险统一记录（实验 300 把 + 日常实时）
@@ -1860,6 +1868,12 @@ body{
 
 /* ---------- 8. 实时画面页 ---------- */
 .shotpage{display:flex;flex-direction:column;gap:10px}
+/* 实时直播卡（scrcpy-server + ffmpeg HLS）：iOS 原生 HLS / 桌面 MSE */
+.shotpage .livecard{position:relative;display:flex;align-items:center;justify-content:center;background:#000;min-height:200px;overflow:hidden}
+.shotpage #liveVideo{width:100%;max-height:58vh;object-fit:contain;background:#000;display:block;touch-action:manipulation}
+.shotpage .livehint{position:absolute;left:12px;right:12px;bottom:10px;color:#cbd5e1;font-size:12px;line-height:1.5;text-align:center;pointer-events:none}
+.shotpage #btnTakeover.on{background:#16a34a;color:#fff;border-color:#16a34a}
+.shotpage #liveMeta{font-size:12px;color:#64748b;align-self:center}
 .scenecard{position:relative;display:block;border-radius:var(--r-xl);overflow:hidden}
 .shotpage .scenecard{background:#0e0f12;box-shadow:var(--sh-2)}
 .shotpage #shotLink{display:block;width:100%;overflow:hidden;background:transparent}
@@ -2496,6 +2510,18 @@ main > section[data-page]:not([data-page="main"]) > .plannote{
     <div class="navhead">
       <button class="backbtn" data-back="main" title="返回总览"><img src="/qp-icons/official/off_l1_back.png" alt=""></button>
       <span class="navtitle">实时画面</span>
+    </div>
+    <!-- 实时直播：数据源是设备端 scrcpy-server（免 root）+ 本机 ffmpeg 转 HLS，
+         按需启停（无人观看 30 秒后服务端自动回收，挂机期间零编码开销）。
+         iOS Safari 走原生 HLS；桌面 Chrome 无原生 HLS，走 MSE 拉同一份 fMP4 分片。 -->
+    <div class="scenecard livecard">
+      <video id="liveVideo" playsinline webkit-playsinline muted></video>
+      <div id="liveHint" class="livehint">点「开始直播」看手机实时画面（首次启动约 3~7 秒；不看了点停止，服务端 30 秒无观众会自动回收）</div>
+    </div>
+    <div class="shotpage-ctl">
+      <button class="savebtn" id="btnLive">开始直播</button>
+      <button class="savebtn" id="btnTakeover">接管操作</button>
+      <span id="liveMeta"></span>
     </div>
     <div class="scenecard duoshot" id="shotCardWrap">
       <span class="shotmeta" id="shotMeta"></span>
@@ -3779,6 +3805,99 @@ async function refreshShot(force){
 }
 $('#btnShot').onclick=()=>refreshShot(true);
 
+// ---- 实时直播（设备端 scrcpy-server + 本机 ffmpeg 转 HLS；按需启停，服务端 30s 空闲自动回收）----
+// iOS Safari 支持原生 HLS，直接喂 m3u8；桌面 Chrome 不支持原生 HLS，改走 MSE 拉同一份 fMP4 分片。
+let liveOn=false, liveMs=null, liveSeen=new Set(), liveInfo={}, liveTimer=null, takeover=false;
+function liveHint(t){const el=$('#liveHint'); if(el){el.textContent=t||''; el.style.display=t?'block':'none';}}
+async function liveStatus(){try{return await (await fetch('/api/stream/status',{cache:'no-store'})).json();}catch(e){return {running:false,error:String(e)};}}
+function liveStop(){
+  liveOn=false;
+  if(liveTimer){clearInterval(liveTimer);liveTimer=null;}
+  const v=$('#liveVideo');
+  try{v.pause();v.removeAttribute('src');v.load();}catch(e){}
+  liveMs=null; liveSeen=new Set();
+  $('#btnLive').textContent='开始直播'; $('#btnLive').classList.remove('on');
+  $('#liveMeta').textContent='';
+  liveHint('已停止。服务端无人观看 30 秒后自动回收设备端编码。');
+}
+async function liveMse(v){
+  liveMs=new MediaSource(); liveSeen=new Set();
+  v.src=URL.createObjectURL(liveMs);
+  await new Promise(r=>liveMs.addEventListener('sourceopen',r,{once:true}));
+  const sb=liveMs.addSourceBuffer('video/mp4; codecs="avc1.42c01f"');
+  const initBuf=await (await fetch('/stream/init.mp4?t='+Date.now(),{cache:'no-store'})).arrayBuffer();
+  await new Promise(r=>{sb.addEventListener('updateend',r,{once:true}); sb.appendBuffer(initBuf);});
+  try{await v.play();}catch(e){}
+  const pump=async()=>{
+    if(!liveOn)return;
+    try{
+      const txt=await (await fetch('/stream/index.m3u8?t='+Date.now(),{cache:'no-store'})).text();
+      const segs=txt.split('\n').map(s=>s.trim()).filter(s=>s&&s.charAt(0)!=='#');
+      for(const s of segs){
+        if(!liveOn)return;
+        if(liveSeen.has(s))continue;
+        liveSeen.add(s);
+        const buf=await (await fetch('/stream/'+s,{cache:'no-store'})).arrayBuffer();
+        await new Promise(r=>{sb.addEventListener('updateend',r,{once:true}); sb.appendBuffer(buf);});
+        if(sb.buffered.length) v.currentTime=Math.max(0,sb.buffered.end(sb.buffered.length-1)-0.4);
+        if(sb.buffered.length>1) sb.remove(0,sb.buffered.start(sb.buffered.length-1));
+      }
+    }catch(e){}
+    setTimeout(pump,700);
+  };
+  pump();
+}
+async function liveStart(){
+  $('#btnLive').textContent='连接中…';
+  const st=await liveStatus();
+  liveInfo=st||{};
+  const v=$('#liveVideo');
+  if(!st.running && st.error){liveHint('启动失败：'+st.error); $('#btnLive').textContent='重试'; return;}
+  liveHint('缓冲中…（设备端采集启动约 3~7 秒）');
+  liveOn=true;
+  if(v.canPlayType('application/vnd.apple.mpegurl')){
+    v.src='/stream/index.m3u8?t='+Date.now();     // iOS Safari 原生 HLS
+    try{await v.play();}catch(e){}
+  }else if(window.MediaSource){
+    await liveMse(v);                             // 桌面 Chrome：MSE + fMP4 分片
+  }else{
+    liveOn=false; liveHint('当前浏览器既不支持原生 HLS 也不支持 MSE，请用 Safari 或 Chrome 桌面版'); return;
+  }
+  $('#btnLive').textContent='停止直播'; $('#btnLive').classList.add('on');
+  liveHint('');
+  liveTimer=setInterval(async()=>{
+    if(!liveOn)return;
+    const s=await liveStatus();
+    $('#liveMeta').textContent=s.running?('流运行中 '+(s.uptime||0)+'s · '+(s.video||'')):'流已停止';
+    if(!s.running && s.error)liveHint('流异常：'+s.error);
+  },3000);
+}
+$('#btnLive').onclick=()=>{ liveOn?liveStop():liveStart(); };
+$('#btnTakeover').onclick=async()=>{
+  const btn=$('#btnTakeover');
+  if(takeover){takeover=false; btn.classList.remove('on'); btn.textContent='接管操作'; liveHint('已交还控制权（调度器需手动启动）'); return;}
+  const r=await (await fetch('/api/runner/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
+  if(r&&r.ok){takeover=true; btn.classList.add('on'); btn.textContent='已接管·点击生效'; liveHint('已接管：点击画面即可操作手机（再点一次交还）');}
+  else{btn.textContent='接管失败';}
+};
+$('#liveVideo').addEventListener('click',async ev=>{
+  if(!liveOn||!takeover)return;
+  const v=$('#liveVideo'), rect=v.getBoundingClientRect();
+  const vw=v.videoWidth||1, vh=v.videoHeight||1;
+  const sc=Math.min(rect.width/vw, rect.height/vh);
+  const vidX=(ev.clientX-rect.left-(rect.width-vw*sc)/2)/sc;
+  const vidY=(ev.clientY-rect.top-(rect.height-vh*sc)/2)/sc;
+  const dv=(liveInfo.device||'').split('x').map(Number), vv=(liveInfo.video||'').split('x').map(Number);
+  if(dv.length!==2||vv.length!==2||!dv[0]||!vv[0])return;
+  const x=Math.round(vidX*dv[0]/vv[0]), y=Math.round(vidY*dv[1]/vv[1]);
+  try{await fetch('/api/stream/tap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({x:x,y:y})});}catch(e){}
+});
+// 切走该页 / 页面隐藏即停止拉流，让服务端尽快回收（挂机期间不占设备编码器）
+document.querySelectorAll('#tabbar button, #tabbar2 button, [data-back]').forEach(b=>{
+  b.addEventListener('click',()=>{ if(liveOn && b.dataset.tab!=='shot') liveStop(); });
+});
+document.addEventListener('visibilitychange',()=>{ if(document.hidden&&liveOn) liveStop(); });
+
 
 // 任务开关：点击勾选 → 写入 config（ruamel 保注释），调度器下一轮热加载生效
 document.getElementById('taskList').addEventListener('click', async ev => {
@@ -4009,6 +4128,36 @@ try{
 """
 
 
+def stream_status() -> dict:
+    """实时流状态 + 调度器状态（前端据此提示"先接管再操作"）。"""
+    if not get_stream:
+        return {'running': False, 'error': '流模块不可用'}
+    st = get_stream().status()
+    st['scheduler_alive'] = bool(scheduler_info().get('alive'))
+    return st
+
+
+def stream_inject(kind: str, payload: dict) -> dict:
+    """网页端注入：接管模式要求调度器已停 —— 否则手动点击会打乱挂机状态机。
+
+    坐标一律用**设备坐标**，换算到视频坐标系由 src/screen_stream.py 负责
+    （scrcpy-server 的 PositionMapper 校验 screen_size，不匹配会静默丢弃事件）。
+    """
+    if not get_stream:
+        return {'ok': False, 'msg': '流模块不可用'}
+    if scheduler_info().get('alive'):
+        return {'ok': False, 'msg': '调度器正在运行，请先点「接管操作」'}
+    try:
+        if kind == 'tap':
+            get_stream().inject_tap(int(payload.get('x', 0)), int(payload.get('y', 0)))
+        else:
+            get_stream().inject_swipe(int(payload.get('x1', 0)), int(payload.get('y1', 0)),
+                                      int(payload.get('x2', 0)), int(payload.get('y2', 0)))
+        return {'ok': True}
+    except Exception as e:                                 # noqa: BLE001
+        return {'ok': False, 'msg': f'{type(e).__name__}: {e}'}
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code: int, ctype: str, body: bytes, cache: str = 'no-store'):
         self.send_response(code)
@@ -4020,6 +4169,40 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         except BrokenPipeError:
             pass
+
+    def _send_stream(self, name: str) -> None:
+        """实时流分片：首次请求触发设备端采集启动；无人观看由后台看门狗回收。"""
+        if not get_stream:
+            self._send(503, 'text/plain; charset=utf-8', b'stream module unavailable')
+            return
+        if not re.fullmatch(r'(index\.m3u8|init\.mp4|seg\d{4}\.m4s)', name):
+            self._send(404, 'text/plain', b'not found')      # 白名单，防目录穿越
+            return
+        if name == 'index.m3u8':
+            get_stream().ensure_running()
+            deadline = time.time() + 15                      # 等 ffmpeg 产出首个 m3u8
+            while time.time() < deadline:
+                if (STREAM_DIR / 'index.m3u8').is_file():
+                    break
+                st = get_stream().status()
+                if not st.get('running') and st.get('error'):
+                    self._send(503, 'text/plain; charset=utf-8',
+                               f"启动失败: {st['error']}".encode('utf-8'))
+                    return
+                time.sleep(0.3)
+        get_stream().touch_access()
+        fp = STREAM_DIR / name
+        if not fp.is_file():
+            self._send(404, 'text/plain', b'not ready')
+            return
+        data = fp.read_bytes()
+        ctype = 'application/vnd.apple.mpegurl' if name.endswith('.m3u8') else 'video/mp4'
+        self.send_response(200)
+        self.send_header('Content-Type', ctype)
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def do_GET(self):
         u = urlparse(self.path)
@@ -4092,6 +4275,11 @@ class Handler(BaseHTTPRequestHandler):
                                    'total': len(lines), 'lines': lines},
                                   ensure_ascii=False).encode('utf-8')
                 self._send(200, 'application/json; charset=utf-8', body)
+            elif path == '/api/stream/status':
+                body = json.dumps(stream_status(), ensure_ascii=False).encode('utf-8')
+                self._send(200, 'application/json; charset=utf-8', body)
+            elif path.startswith('/stream/'):
+                self._send_stream(path[len('/stream/'):])
             elif path == '/api/screenshot':
                 try:
                     data, at, cached = capture_phone()
@@ -4212,6 +4400,17 @@ class Handler(BaseHTTPRequestHandler):
                 result = scheduler_stop()
                 body = json.dumps(result, ensure_ascii=False).encode('utf-8')
                 self._send(200 if result.get('ok') else 400,
+                           'application/json; charset=utf-8', body)
+            elif u.path == '/api/stream/stop':
+                if get_stream:
+                    get_stream().stop()
+                self._send(200, 'application/json; charset=utf-8', b'{"ok": true}')
+            elif u.path in ('/api/stream/tap', '/api/stream/swipe'):
+                length = int(self.headers.get('Content-Length') or 0)
+                payload = json.loads(self.rfile.read(length).decode('utf-8') or '{}')
+                result = stream_inject(u.path.rsplit('/', 1)[-1], payload)
+                body = json.dumps(result, ensure_ascii=False).encode('utf-8')
+                self._send(200 if result.get('ok') else 409,
                            'application/json; charset=utf-8', body)
             else:
                 self._send(404, 'text/plain', b'not found')
