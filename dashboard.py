@@ -3768,7 +3768,7 @@ $('#btnShot').onclick=()=>{ showTab('shot'); if(!liveOn) liveStart(); };
 
 // ---- 实时直播（设备端 scrcpy-server + 本机 ffmpeg 转 HLS；按需启停，服务端 30s 空闲自动回收）----
 // iOS Safari 支持原生 HLS，直接喂 m3u8；桌面 Chrome 不支持原生 HLS，改走 MSE 拉同一份 fMP4 分片。
-let liveOn=false, liveMs=null, liveSeen=new Set(), liveInfo={}, liveTimer=null, takeover=false;
+let liveOn=false, liveMs=null, liveSeen=new Set(), liveInfo={}, liveTimer=null, takeover=false, liveRestarting=false;
 function liveHint(t){const el=$('#liveHint'); if(el){el.textContent=t||''; el.style.display=t?'block':'none';}}
 // 用实际设备/视频尺寸校正占位比例（默认 9:20；一加 1080x2412 这类只差千分之几，校正后与画面完全对齐）
 function applyLiveAspect(st){
@@ -3809,7 +3809,8 @@ async function liveMse(v){
         if(liveSeen.has(s))continue;
         liveSeen.add(s);
         const buf=await (await fetch('/stream/'+s,{cache:'no-store'})).arrayBuffer();
-        try{ await new Promise(r=>{sb.addEventListener('updateend',r,{once:true}); sb.appendBuffer(buf);}); }catch(e){}
+        try{ await new Promise(r=>{sb.addEventListener('updateend',r,{once:true}); sb.appendBuffer(buf);}); }
+        catch(e){ liveSeen.delete(s); }   // 追加失败（分片已被删/QuotaExceeded）允许下轮重试
       }
       // 缓冲只留最近约 3 秒：MSE 缓冲无上限增长会撞 QuotaExceeded，之后新分片全都追加不进
       if(sb.buffered.length){
@@ -3823,6 +3824,7 @@ async function liveMse(v){
 }
 async function liveStart(){
   $('#btnLive').textContent='连接中…';
+  if(liveTimer){clearInterval(liveTimer);liveTimer=null;}   // 重连时别叠加定时器
   const st=await liveStatus();
   liveInfo=st||{};
   applyLiveAspect(liveInfo);
@@ -3842,6 +3844,7 @@ async function liveStart(){
   liveHint('');
   liveTimer=setInterval(async()=>{
     if(!liveOn)return;
+    try{ await fetch('/api/stream/ping',{method:'POST'}); }catch(e){}   // 心跳保活，别让看门狗误判无人观看
     const s=await liveStatus();
     liveInfo=s;                       // 保持尺寸最新（点击换算用）
     // 延迟看门狗：HLS（尤其 iOS 原生播放器）会自行缓冲、延迟越滚越大，
@@ -3919,8 +3922,15 @@ $('#liveTap').addEventListener('pointerdown',async ev=>{
   const x=Math.round(vidX*dw/vw), y=Math.round(vidY*dh/vh);
   try{
     const r=await (await fetch('/api/stream/tap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({x:x,y:y})})).json();
-    if(r&&r.ok){ liveToast('已点击 ('+x+', '+y+')'); }
-    else{ liveToast('注入被拒：'+((r&&r.msg)||'未知原因')); }
+    if(r&&r.ok){ liveToast('已点击 ('+x+', '+y+')'); return; }
+    const msg=(r&&r.msg)||'未知原因';
+    liveToast('注入被拒：'+msg,2600);
+    // 流被空闲回收/断开时自动重连，避免"操作一会儿突然就不能动"
+    if(msg.indexOf('流未运行')>=0 && !liveRestarting){
+      liveRestarting=true; liveHint('流已断开，正在自动重连…');
+      try{ await liveStart(); }catch(e){}
+      liveRestarting=false;
+    }
   }catch(e){ liveToast('请求失败：'+e.message); }
 });
 // 切走该页 / 页面隐藏即停止拉流，让服务端尽快回收（挂机期间不占设备编码器）
@@ -4437,6 +4447,12 @@ class Handler(BaseHTTPRequestHandler):
                 body = json.dumps(result, ensure_ascii=False).encode('utf-8')
                 self._send(200 if result.get('ok') else 400,
                            'application/json; charset=utf-8', body)
+            elif u.path == '/api/stream/ping':
+                # 前端心跳：原生 HLS 播放器缓冲够了会暂停拉分片，只靠 /stream/* 请求判断
+                # "有没有人在看"会把正在操作的会话误回收（踩过：操作 1 分钟后流被回收）
+                if get_stream:
+                    get_stream().touch_access()
+                self._send(200, 'application/json; charset=utf-8', b'{"ok": true}')
             elif u.path == '/api/stream/stop':
                 if get_stream:
                     get_stream().stop()
