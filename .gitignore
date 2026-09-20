@@ -22,3 +22,7 @@ qqpet_assets/
 
 # macOS 目录元数据
 .DS_Store
+
+# 配置热加载信号（运行时生成）
+runs/reload.signal
+runs/friends_cache.json

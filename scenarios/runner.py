@@ -1206,6 +1206,59 @@ SIDE_TASK_KEYS = ('adventure', 'visit', 'pk', 'hire_friend', 'friend_care', 'gif
 # 主任务组键定义在 src/config.py 的 MAIN_TASK_KEYS（GUI 设置校验也用）
 # 没有任务可执行且没有明确等待点时的短轮询间隔（秒），顺带热加载配置
 QUEUE_POLL_INTERVAL = 30
+
+# 配置热加载信号文件：设置页保存后写入（内容为时间戳），调度器睡眠期间每秒轮询，
+# 检测到更新就立即醒来重读配置 —— 把"最迟下一轮（最多 30s）生效"变成"秒级生效"。
+RELOAD_SIGNAL = PROJECT_ROOT / 'runs' / 'reload.signal'
+_RELOAD_SEEN = None   # 上次已处理到的信号 mtime
+
+
+def sleep_interruptible(seconds: float, chunk: float = 1.0) -> None:
+    """可被配置热加载信号打断的睡眠。
+
+    把长睡眠切成 chunk 秒的小段，每段结束检查信号文件；
+    信号文件的 mtime 比进入睡眠时新 -> 立即返回（调用方随后 reload_config）。
+
+    为什么不用信号/线程：调度器是独立进程，跨平台（Windows/模拟器场景）用文件最稳。
+    """
+    seconds = max(0.0, float(seconds))
+    if seconds <= 0:
+        return
+    global _RELOAD_SEEN
+    try:
+        cur = RELOAD_SIGNAL.stat().st_mtime if RELOAD_SIGNAL.exists() else 0.0
+    except OSError:
+        cur = 0.0
+    if _RELOAD_SEEN is None:
+        # 首次调用：以当前 mtime 为基准（清掉进程启动前遗留的陈旧信号），
+        # 否则上一轮运行留下的信号会让本次一进入睡眠就立刻醒来。
+        _RELOAD_SEEN = cur
+    seen = _RELOAD_SEEN
+    end = time.monotonic() + seconds
+    while True:
+        remain = end - time.monotonic()
+        if remain <= 0:
+            return
+        time.sleep(min(chunk, remain))
+        try:
+            if RELOAD_SIGNAL.exists():
+                cur = RELOAD_SIGNAL.stat().st_mtime
+                if cur > seen:
+                    _RELOAD_SEEN = cur
+                    log('检测到配置更新，立即重载')
+                    return
+        except OSError:
+            pass
+
+
+def touch_reload_signal() -> None:
+    """写热加载信号（设置保存后调用）。"""
+    try:
+        RELOAD_SIGNAL.parent.mkdir(parents=True, exist_ok=True)
+        RELOAD_SIGNAL.write_text(str(time.time()), encoding='utf-8')
+    except OSError as e:
+        log(f'写热加载信号失败: {e}')
+
 # 主任务 pending 收尾前 PENDING_FINISH_HORIZON 秒内不执行支线任务：
 # 护理/好友护理等一轮可跑 30~40s，若在收尾点前开跑会把 finish_pending 挤后几十秒
 # （冒险短任务实测收尾偏晚 ~30s 就是这个原因），到点前先让出、睡到收尾点先收尾
@@ -2082,7 +2135,7 @@ class TaskQueueRunner(Runner):
                     or (now - self._idle_logged_at).total_seconds() > 600):
                 self._idle_logged_at = now
                 log('主任务组当天已结束，调度器留守轮询（护理/支线/次日任务接续中）')
-            time.sleep(QUEUE_POLL_INTERVAL)
+            sleep_interruptible(QUEUE_POLL_INTERVAL)
             return True
         future = []
         for key in order:
@@ -2103,9 +2156,9 @@ class TaskQueueRunner(Runner):
                 future.append(scen.pending['until'])
         if future:
             delta = (min(future) - now).total_seconds()
-            time.sleep(min(max(1.0, delta), QUEUE_POLL_INTERVAL))
+            sleep_interruptible(min(max(1.0, delta), QUEUE_POLL_INTERVAL))
         else:
-            time.sleep(QUEUE_POLL_INTERVAL)
+            sleep_interruptible(QUEUE_POLL_INTERVAL)
         return True
 
 

@@ -56,6 +56,65 @@ FRIEND_MARK_REGION = (700, 160, 980, 280)
 PROGRESS_FILE = VISIT_PROGRESS_FILE
 
 
+# 好友名单缓存（仪表盘下拉用）：调度器扫好友时写，避免手输好友名
+from datetime import datetime
+from src.config import PROJECT_ROOT
+
+FRIENDS_CACHE_FILE = PROJECT_ROOT / 'runs' / 'friends_cache.json'
+
+
+def save_friends_cache(names: list[str]) -> None:
+    """把累积好友名单写入缓存（供仪表盘下拉选择）。
+
+    数据源是好友列表控件的 content-desc（形如 "好友 墨瞳"）—— 这是游戏给的
+    原生描述，不是 OCR 结果，所以准确。**只收带 "好友 " 前缀的项**：
+    调用方传的是累积名单，但保险起见仍做前缀校验，避免把其它 content-desc
+    混进来（如"当前可见好友"之类的日志文本、纯符号昵称）。
+
+    保留结构：
+      {"names": [...], "updated": "...", "source": "friend_list_content_desc"}
+    source 标注数据来源，便于前端说明"这是主人昵称，不是宠物名"。
+    """
+    import json as _json
+    clean: list[str] = []
+    for raw in names:
+        n = str(raw or '').strip()
+        if not n.startswith('好友 '):
+            continue                    # 只收好友列表项，其余一律丢弃
+        n = n[3:].strip()
+        if not n or len(n) > 24:
+            continue
+        # 至少含一个字母/数字/汉字（过滤纯符号）
+        if not any(ch.isalnum() or '\u4e00' <= ch <= '\u9fff' for ch in n):
+            continue
+        if n not in clean:
+            clean.append(n)
+    if not clean:
+        return
+    try:
+        FRIENDS_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        old: list[str] = []
+        if FRIENDS_CACHE_FILE.exists():
+            try:
+                old = _json.loads(FRIENDS_CACHE_FILE.read_text('utf-8')).get('names') or []
+            except Exception:  # noqa: BLE001
+                old = []
+        merged = list(old)
+        for n in clean:
+            if n not in merged:
+                merged.append(n)
+        FRIENDS_CACHE_FILE.write_text(
+            _json.dumps({
+                'names': merged,
+                'source': 'friend_list_content_desc',
+                'note': '好友列表的主人昵称（非宠物名）；宠物名请在设置页手动输入',
+                'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            }, ensure_ascii=False, indent=1),
+            encoding='utf-8')
+    except OSError as e:
+        log(f'写好友缓存失败: {e}')
+
+
 class VisitScenario(DeviceScenario):
     def __init__(self, dev=None):
         super().__init__(dev)
@@ -130,7 +189,11 @@ class VisitScenario(DeviceScenario):
         return items
 
     def _accumulate_friends(self) -> list[tuple[str, int, int]]:
-        """抓取当前可见好友并追加进累积名单（不删除滚出屏幕的项），返回可见项。"""
+        """抓取当前可见好友并追加进累积名单（不删除滚出屏幕的项），返回可见项。
+
+        同时把名单持久化到 runs/friends_cache.json，供仪表盘下拉选择
+        （避免手输好友名 —— OCR/输入都容易错）。
+        """
         visible = self._friend_items()
         new = [desc for desc, _, _ in visible if desc and desc not in self._friends]
         for desc in new:
@@ -138,6 +201,8 @@ class VisitScenario(DeviceScenario):
         log(f'累积好友名单({len(self._friends)}): '
             + (', '.join(self._friends) or '无')
             + (f'（新增: {", ".join(new)}）' if new else ''))
+        if new:
+            save_friends_cache(self._friends)
         return visible
 
     def is_non_friend_page(self, screen=None) -> bool:

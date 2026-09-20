@@ -65,6 +65,30 @@ self.addEventListener('fetch', e => {
 
 # ---------------------------------------------------------------- 数据读取
 
+def list_friends() -> list[str]:
+    """读调度器写的好友名单缓存（runs/friends_cache.json）里的名字列表。
+
+    缓存由 scenarios/visit.py 扫好友时写入，数据源是好友列表控件的
+    content-desc（"好友 墨瞳"）—— 即**主人昵称**，非宠物名。
+    """
+    try:
+        data = json.loads((RUNS / 'friends_cache.json').read_text('utf-8'))
+        names = data.get('names') or []
+        return [str(n) for n in names if str(n).strip()]
+    except (OSError, ValueError):
+        return []
+
+
+def friends_meta() -> dict:
+    """好友缓存的元信息（来源/更新时间/说明），供前端展示。"""
+    try:
+        data = json.loads((RUNS / 'friends_cache.json').read_text('utf-8'))
+        return {'source': data.get('source') or '', 'note': data.get('note') or '',
+                'updated': data.get('updated') or ''}
+    except (OSError, ValueError):
+        return {'source': '', 'note': '', 'updated': ''}
+
+
 def read_json(name: str) -> dict:
     try:
         return json.loads((RUNS / name).read_text('utf-8'))
@@ -992,6 +1016,7 @@ def build_data() -> dict:
         'today_duration': today_duration(log_lines, efficiency_tiers_of(sched_cfg)),
         'last_line': log_lines[-1] if log_lines else '',
         'editable': editable_snapshot(),
+        'friends': list_friends(),
     }
 
 
@@ -1449,6 +1474,15 @@ body{
   font-size:calc(var(--u) * 11);font-weight:600;
   color:var(--sub);letter-spacing:.06em;
 }
+/* 标题右侧的收尾队列提示（原为单独一行，现并到标题行） */
+.qpend{
+  margin-left:auto;
+  font-size:calc(var(--u) * 10.5);
+  color:var(--sub);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  max-width:60%;
+}
+.qpend .run{color:var(--accent);font-weight:600}
 .qgrp{font-size:10.5px;color:var(--sub);letter-spacing:.06em;margin:10px 0 2px}
 .tasklist .mrow{
   display:flex;gap:10px;padding:9px 2px;
@@ -1610,12 +1644,15 @@ body{
 
 /* 运行信息（只读） */
 .cfg .row{
-  display:flex;justify-content:space-between;gap:12px;
-  padding:7px 0;border-top:1px dashed var(--line);font-size:13.5px;
+  display:flex;justify-content:space-between;gap:calc(var(--u) * 10);
+  /* 左右内距与 .form .frow 一致（16dp）：.form .fsec 卡片本身没有 padding，
+     靠行自带内距撑开。原来写 padding:7px 0 时内容贴到卡片边缘（实测踩坑）。 */
+  padding:calc(var(--u) * 9) calc(var(--u) * 16);
+  border-top:1px solid #F0F0F2;font-size:calc(var(--u) * 14);
 }
 .cfg .row:first-child{border-top:0}
-.cfg .k{color:var(--sub);flex:none}
-.cfg .v{text-align:right}
+.cfg .k{color:#1C1C1E;flex:none}
+.cfg .v{text-align:right;color:#8A8A8E;word-break:break-word}
 
 /* ---------- 10. 日志 ---------- */
 .logctl{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
@@ -1879,6 +1916,23 @@ main > section[data-page]:not([data-page="main"]) > .saveMsg,
 main > section[data-page]:not([data-page="main"]) > .plannote{
   margin-left:calc(var(--u) * 12);margin-right:calc(var(--u) * 12);
 }
+
+/* ---------- 好友名选择器（下拉 + 手输兜底） ---------- */
+.fpick{display:flex;align-items:center;justify-content:flex-end;gap:calc(var(--u) * 6);
+  flex:1;min-width:0;max-width:62%}
+.fpsel{
+  border:0;background:transparent;color:#8A8A8E;
+  font-size:calc(var(--u) * 14);text-align:right;
+  padding:calc(var(--u) * 4) 0;max-width:100%;min-width:0;
+  -webkit-appearance:none;appearance:none;   /* 去掉 iOS 默认箭头，保持简洁 */
+  text-align-last:right;
+}
+.fpinput{
+  border:0;background:transparent;color:#8A8A8E;
+  font-size:calc(var(--u) * 14);text-align:right;
+  padding:calc(var(--u) * 4) 0;width:calc(var(--u) * 140);
+}
+.fpinput.hide{display:none}
 </style>
 </head>
 <body>
@@ -1986,7 +2040,7 @@ main > section[data-page]:not([data-page="main"]) > .plannote{
     <!-- 中部场景层（官方是 3D 宠物；此处放任务队列） -->
     <div class="flt scene">
       <div class="qpanel">
-        <div class="qhead"><span class="qtitle">任务列表</span></div>
+        <div class="qhead"><span class="qtitle">任务列表</span><span class="qpend" id="qPend"></span></div>
         <div class="tasklist" id="taskList"></div>
       </div>
     </div>
@@ -2053,6 +2107,23 @@ main > section[data-page]:not([data-page="main"]) > .plannote{
         <span class="navtitle">设置</span>
       </div>
       <div class="form" id="setMenu"></div>
+      <!-- 小号工具人 + 运行信息：只在一级列表显示。
+           包在 .form 容器内 —— 卡片样式（.form .fgrp/.fsect/.fsec/.frow）
+           都要求 .form 祖先，否则样式全失效、内容贴到屏幕边缘（实测踩坑）。 -->
+      <div class="form">
+        <div class="fgrp">
+          <div class="fsect">小号工具人</div>
+          <div class="fsec">
+            <div class="frow"><span class="k">大号名称</span><input type="text" id="txtAltMain" placeholder="大号的主人昵称或宠物名（服务端匹配）"></div>
+            <div class="frow"><span class="k">一键配置小号</span><button class="minibtn" id="btnAltPreset">应用小号预设</button></div>
+          </div>
+        </div>
+        <div class="saveMsg" id="presetMsg"></div>
+        <div class="fgrp">
+          <div class="fsect">运行信息（只读）</div>
+          <div class="fsec"><div class="cfg" id="cfgList"></div></div>
+        </div>
+      </div>
     </div>
     <!-- 第二级：某个分类的设置项 -->
     <div id="setDetail" class="hide">
@@ -2063,16 +2134,7 @@ main > section[data-page]:not([data-page="main"]) > .plannote{
       <div class="form" id="setForm"></div>
       <div class="saveMsg" id="saveMsg"></div>
     </div>
-    <div class="form" style="margin-top:16px">
-      <div class="fsec"><div class="fsect">小号工具人</div>
-        <div class="frow"><span class="k">大号名称</span><input type="text" id="txtAltMain" placeholder="大号的主人昵称或宠物名（服务端匹配）"></div>
-        <div class="frow"><span class="k">一键配置小号</span><button class="minibtn" id="btnAltPreset" style="padding:7px 14px;font-size:12.5px">应用小号预设</button></div>
-      </div>
-      <div class="saveMsg" id="presetMsg"></div>
-    </div>
-    <div class="subh">运行信息（只读）</div>
-    <div class="cfg" id="cfgList"></div>
-  </section>
+</section>
 
   <section class="card" data-page="log">
     
@@ -2266,9 +2328,10 @@ function renderData(d){
       +'<span class="mcb'+(on&&st!=='disabled'?' on':'')+'" data-k="'+k+'"></span></div>';
   };
   if(qLive){
-    // 面板标题固定为「任务列表」（原状态行/更新时间已按需求移除）
-    if(q.pending) rows+='<div class="mrow"><span class="mname">收尾队列</span>'
-      +'<span class="mdet"><span class="run">'+q.pending+' 待结算</span></span></div>';
+    // 收尾队列：写在标题行右侧（原来单独占一行，视觉上像多了一个任务）
+    const _qp=document.getElementById('qPend');
+    if(_qp) _qp.innerHTML = q.pending
+      ? ('<span class="run">'+q.pending+' 待结算</span>') : '';
     const ks=Object.keys(qt).slice().sort((a,b)=>qRank(a)-qRank(b));
     for(const k of ks){
       const st=qt[k].state||'';
@@ -2276,6 +2339,7 @@ function renderData(d){
       rows+=rowOf(k, st!=='disabled', st, nx);
     }
   }else{
+    const _qp2=document.getElementById('qPend'); if(_qp2) _qp2.innerHTML='';
     const te=cfg.tasks_enabled||{};
     const keys=qOrder.length?qOrder:Object.keys(te);
     const allKeys=(keys.length?keys:Object.keys(TASKNAME)).slice().sort((a,b)=>qRank(a)-qRank(b));
@@ -2292,7 +2356,17 @@ function renderData(d){
     $('#shotCard').classList.remove('hide');
     $('#shots').innerHTML=shots.map(s=>'<a href="/files/'+encodeURIComponent(s.name)+'" target="_blank"><img loading="lazy" src="/files/'+encodeURIComponent(s.name)+'"><span class="cap">'+s.mtime+'</span></a>').join('');
   }
-  if(d.editable && !setDirty) renderSettings(d.editable);
+  // 好友名单（供表单下拉）：变化时更新，并强制重渲染表单让下拉项生效
+  if(Array.isArray(d.friends)){
+    const changed = JSON.stringify(d.friends)!==JSON.stringify(FRIENDS);
+    FRIENDS = d.friends;
+    if(changed && window.__lastEditable && !setDirty) renderSettings(window.__lastEditable);
+  }
+  if(d.editable) window.__lastEditable=d.editable;
+    // 重建表单会销毁正在操作的控件（下拉被自动关闭、输入焦点丢失）。
+  // 三种情况都不重建：①有未保存改动 ②焦点在表单内 ③刚有过交互(2s 内)。
+  // 见 markDirtyAndSave / __formBusy。
+  if(d.editable && !setDirty && !formBusy()) renderSettings(d.editable);
   if(window.__wrapPages) window.__wrapPages();
   renderCfg((d.config||{}).rows);
   // 页面底部的策略行（footer）已按需求移除，这里不再拼文案
@@ -2620,6 +2694,66 @@ function rowKv(label, ctrl, tip){
 }
 
 let setInit=null, setDirty=false;
+
+// 表单"正忙"判定：避免定时刷新重建表单把用户正在操作的控件销毁。
+// 现象：下拉/选择框点开后几秒被自动关闭、输入框失焦（每 6s 的 refreshData 重建表单）。
+let _lastFormTouch = 0;
+function formBusy(){
+  const ae = document.activeElement;
+  // 焦点在设置/通知表单内（含 select/input/button）
+  if(ae && ae.closest && ae.closest('#setForm, #notifyForm')) return true;
+  // 刚有过交互（2 秒保护期）—— 覆盖"点了下拉但焦点已转移"的瞬间
+  return (Date.now() - _lastFormTouch) < 2000;
+}
+document.addEventListener('pointerdown', e=>{
+  if(e.target.closest && e.target.closest('#setForm, #notifyForm')) _lastFormTouch = Date.now();
+}, true);
+document.addEventListener('focusin', e=>{
+  if(e.target.closest && e.target.closest('#setForm, #notifyForm')) _lastFormTouch = Date.now();
+}, true);
+// 好友名单（由 /api/data 的 friends 字段带入），供各表单的下拉选择
+let FRIENDS = [];
+// 生成"可输入下拉"：既可从已有好友里选，也保留手输能力（用 datalist）
+// 为什么用 datalist：原生、无依赖、iOS Safari 支持良好，且不破坏现有
+// "读 input.value 保存"的逻辑（id/name 不变，保存代码零改动）。
+function friendPicker(id, cur, placeholder){
+  // 用原生 <select> 让用户直接选（iOS Safari 对 datalist 支持差：
+  // 只在键盘上方出建议条，观感仍是"输入框"）。
+  // 结构：select（选已有好友 / 手动输入）+ input（保留原 id，存实际值）。
+  // input 保持原 id 不变 -> 保存逻辑（读取该 input 的 value）零改动。
+  const val = cur||'';
+  const opts = FRIENDS.map(n=>'<option value="'+esc(n)+'"'
+      + (n===val?' selected':'')+'>'+esc(n)+'</option>').join('');
+  const isCustom = val && FRIENDS.indexOf(val)<0;
+  // 下拉里的是【好友列表的主人昵称】（content-desc 抓取，准确）；
+  // 宠物名不在列表里 —— 用「手动输入…」填。
+  const cnt = FRIENDS.length;
+  return '<span class="fpick">'
+    + '<select class="fpsel" data-for="'+id+'"'
+      + (cnt?'':' title="还没有好友名单：跑一次踩踩/福袋后自动生成"')+'>'
+      + '<option value="">（未设置）</option>'
+      + (cnt?('<optgroup label="好友昵称（'+cnt+'）">'+opts+'</optgroup>')
+            :'<option value="" disabled>（暂无好友名单）</option>')
+      + '<option value="__custom__"'+(isCustom?' selected':'')+'>手动输入宠物名/昵称…</option>'
+    + '</select>'
+    + '<input type="text" id="'+id+'" class="fpinput'+(isCustom?'':' hide')+'"'
+      + ' autocomplete="off" placeholder="'+esc(placeholder||'输入宠物名或主人昵称')+'"'
+      + ' value="'+esc(val)+'">'
+  + '</span>';
+}
+// 下拉选择后同步到 input（并触发自动保存）
+document.addEventListener('change', function(e){
+  const sel=e.target.closest && e.target.closest('.fpsel');
+  if(!sel) return;
+  const inp=document.getElementById(sel.dataset.for);
+  if(!inp) return;
+  const v=sel.value;
+  if(v==='__custom__'){ inp.classList.remove('hide'); inp.focus(); return; }
+  inp.classList.add('hide');
+  inp.value=v;
+  inp.dispatchEvent(new Event('input',{bubbles:true}));   // 触发改动即保存
+}, true);
+
 function renderSettings(ed){
   if(!ed) return;
   setInit=Object.assign({},ed);
@@ -2643,7 +2777,7 @@ function renderSettings(ed){
     FG('打工',[
     '<div class="frow"><span class="k">打工地点</span>'+sel('selLoc', ed.work_locations||[], ed.work_location)+'</div>',
     '<div class="frow"><span class="k">打工时长</span>'+sel('selDur', ['10分钟','45分钟','2小时'], ed.work_duration)+'</div>',
-    '<div class="frow"><span class="k">优先雇佣</span><input type="text" id="txtHire" placeholder="宠物名/主人名，空=自动选收益最高" value="'+esc(ed.hire_name||'')+'"></div>',
+    '<div class="frow"><span class="k">优先雇佣</span>'+friendPicker('txtHire', ed.hire_name, '宠物名/主人名，空=自动选收益最高')+'</div>',
     '<div class="frow"><span class="k">等TA空闲</span><button class="sw'+(ed.hire_wait?' on':'')+'" id="swHireWait" title="开=优先雇佣的好友正在打工/学习（面板显示 出门中/被雇佣中）时不换人，点头像进主页读剩余时间，等到他结束再雇（期间先跑冒险/护理等其他任务）；显示 对方今天很累了 时等待无意义，仍换收益最高的人。需先填「优先雇佣」"></button></div>',
     ],'work')+
     FG('学习 / 打工 总控（8h 共享预算）',[
@@ -2674,9 +2808,9 @@ function renderSettings(ed){
     ],'visit')+
     FG('PK',[
     '<div class="frow"><span class="k">PK 次数/天</span><input type="number" id="numPk" min="0" step="1" value="'+(ed.pk_times??'')+'"></div>',
-    '<div class="frow"><span class="k">PK 只打</span><input type="text" id="txtPkOnly" placeholder="昵称或宠物名，逗号分隔，空=不限" value="'+esc(ed.pk_only||'')+'"></div>',
-    '<div class="frow"><span class="k">PK 跳过</span><input type="text" id="txtPkSkip" placeholder="昵称或宠物名，逗号分隔，空=不跳过" value="'+esc(ed.pk_skip||'')+'"></div>',
-    '<div class="frow"><span class="k">PK 打手</span><input type="text" id="txtPkHelper" placeholder="只雇这些宠物代打（逗号分隔，按优先序）" value="'+esc(ed.pk_helper||'')+'"></div>',
+    '<div class="frow"><span class="k">PK 只打</span>'+friendPicker('txtPkOnly', ed.pk_only, '昵称或宠物名，逗号分隔，空=不限')+'</div>',
+    '<div class="frow"><span class="k">PK 跳过</span>'+friendPicker('txtPkSkip', ed.pk_skip, '昵称或宠物名，逗号分隔，空=不跳过')+'</div>',
+    '<div class="frow"><span class="k">PK 打手</span>'+friendPicker('txtPkHelper', ed.pk_helper, '只雇这些宠物代打（逗号分隔，按优先序）')+'</div>',
     '<div class="frow"><span class="k">打手兜底</span><button class="sw'+(ed.pk_helper_fallback?' on':'')+'" id="swPkHf" title="开=名单里的打手都不可雇（被雇佣中/不可雇佣/已达上限）时，自动雇战力最高的可雇宠物"></button></div>',
     '<div class="frow"><span class="k">PK 等级上限</span><input type="number" id="numPkLv" min="-2" step="1" title="-1=只打比我低；-2=只打比打手低" value="'+(ed.pk_max_level??0)+'"></div>',
     '<div class="frow"><span class="k">等级过滤说明</span><span style="color:var(--sub);font-size:12px">0=不限；-1=只打比我低的；-2=只打比打手低的</span></div>',
@@ -2691,7 +2825,7 @@ function renderSettings(ed){
     ],'care')+
     FG('好友护理',[
     '<div class="frow"><span class="k">好友护理</span><button class="sw'+(ed.friend_care_enabled?' on':'')+'" id="swFC" title="开=按间隔到指定好友家护理（体力/清洁<90自动补）"></button></div>',
-    '<div class="frow"><span class="k">好友护理对象</span><input type="text" id="txtFCName" placeholder="宠物名或主人名" value="'+esc(ed.friend_care_name||'')+'"></div>',
+    '<div class="frow"><span class="k">好友护理对象</span>'+friendPicker('txtFCName', ed.friend_care_name, '宠物名或主人名')+'</div>',
     '<div class="frow"><span class="k">好友护理间隔（秒）</span><input type="number" id="numFCInt" min="30" step="30" value="'+(ed.friend_care_interval??'')+'"></div>',
     '<div class="frow"><span class="k">好友护理方式</span>'+sel('selFCMethod', ['ocr检测','一键护理'], ed.friend_care_method)+'</div>',
     ],'friend_care')+
@@ -2949,6 +3083,7 @@ async function saveNotifySettings(silent){
 let _autoT=null;
 function markDirtyAndSave(){
   setDirty=true;
+  _lastFormTouch=Date.now();
   if(_autoT) clearTimeout(_autoT);
   _autoT=setTimeout(async()=>{
     _autoT=null;
@@ -3123,6 +3258,18 @@ try{
   // 注意：#tabbar 只含左列 4 个按钮，set/log/shot 在 #tabbar2 —— 要全局找
   if(qp && document.querySelector('button[data-tab="'+qp+'"]')) initTab=qp;
 }catch(e){}
+// 初始：先取好友名单（下拉选择用），再渲染 tab —— 否则首次渲染
+// 的 datalist 是空的，用户以为"没有好友可选"
+(async function initFriends(){
+  try{
+    const r=await fetch('/api/friends'); const d=await r.json();
+    if(Array.isArray(d.friends) && d.friends.length){
+      FRIENDS=d.friends;
+      // 名单到手后重渲染一次设置表单，让下拉项立刻可用
+      if(window.__lastEditable) renderSettings(window.__lastEditable);
+    }
+  }catch(e){}
+})();
 // 初始：把当前 tab 写进历史（replace 不产生新记录），
 // 之后每次切页 pushState -> 侧滑返回可逐级回退
 try{ history.replaceState({tab:initTab}, '', location.pathname + location.search); }catch(e){}
@@ -3242,6 +3389,10 @@ class Handler(BaseHTTPRequestHandler):
                 body = json.dumps(adventure_data((q.get('date') or [''])[0]),
                                   ensure_ascii=False).encode('utf-8')
                 self._send(200, 'application/json; charset=utf-8', body)
+            elif path == '/api/friends':
+                body = json.dumps({'friends': list_friends(), **friends_meta()},
+                                  ensure_ascii=False).encode('utf-8')
+                self._send(200, 'application/json; charset=utf-8', body)
             elif path == '/api/plan':
                 body = json.dumps(plan_data(), ensure_ascii=False).encode('utf-8')
                 self._send(200, 'application/json; charset=utf-8', body)
@@ -3306,6 +3457,13 @@ class Handler(BaseHTTPRequestHandler):
                 audit(f'设置保存(来自 {self.client_address[0]}): 提交 {updates} '
                       f'→ 生效 {result["applied"]}'
                       + (f' 拒绝 {result["rejected"]}' if result['rejected'] else ''))
+                # 唤醒调度器立即重读配置（否则它可能正在 30s 轮询睡眠里等下一轮）
+                if result.get('ok') and result.get('applied'):
+                    try:
+                        (RUNS / 'reload.signal').write_text(
+                            str(time.time()), encoding='utf-8')
+                    except OSError:
+                        pass
                 body = json.dumps(result, ensure_ascii=False).encode('utf-8')
                 self._send(200 if result['ok'] else 400,
                            'application/json; charset=utf-8', body)
