@@ -340,7 +340,20 @@ class ScreenStream:
                 time.sleep(0.05)
 
     # ---------------- 状态 ----------------
+    def _probe_device_size(self) -> None:
+        """读一次设备分辨率（只读 `wm size`，不会启动流）——供前端占位框按真实比例预留。"""
+        try:
+            out = self._adb('shell', 'wm size').stdout
+            for tok in out.replace(':', ' ').split():
+                if 'x' in tok and tok[0].isdigit():
+                    self.dev_w, self.dev_h = (int(v) for v in tok.split('x'))
+                    return
+        except Exception as e:                             # noqa: BLE001 - 探测失败不影响主流程
+            _log(f'读取设备分辨率失败：{e}')
+
     def status(self) -> dict:
+        if not (self.dev_w and self.dev_h):
+            self._probe_device_size()                      # 只探测一次，之后一直复用
         return {
             'running': self.running,
             'hls_ready': (STREAM_DIR / 'index.m3u8').is_file(),

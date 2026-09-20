@@ -1875,6 +1875,11 @@ body{
 .shotpage .livecard{--live-ar-w:9;--live-ar-h:20;position:relative;display:flex;align-items:center;justify-content:center;background:#000;overflow:hidden;align-self:center;aspect-ratio:var(--live-ar-w)/var(--live-ar-h);width:min(100%,calc((100vh - 210px) * var(--live-ar-w) / var(--live-ar-h)));width:min(100%,calc((100dvh - 210px) * var(--live-ar-w) / var(--live-ar-h)))}
 .shotpage #liveVideo{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;display:block;touch-action:manipulation}
 .shotpage .livehint{position:absolute;left:12px;right:12px;bottom:10px;color:#cbd5e1;font-size:12px;line-height:1.5;text-align:center;pointer-events:none}
+/* 点击接收层（盖在 video 上）与操作反馈气泡：注入结果一律给反馈，
+   否则"点了没反应"分不清是没接管、没开播、还是被服务端拒绝 */
+.shotpage .livetap{position:absolute;inset:0;z-index:1;cursor:crosshair}
+.shotpage .livetoast{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);z-index:3;max-width:92%;padding:5px 14px;border-radius:999px;font-size:12px;color:#fff;background:rgba(0,0,0,.72);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0;transition:opacity .18s;pointer-events:none}
+.shotpage .livetoast.on{opacity:1}
 .shotpage #btnTakeover.on{background:#16a34a;color:#fff;border-color:#16a34a}
 .shotpage #liveMeta{font-size:12px;color:#64748b;align-self:center}
 .scenecard{position:relative;display:block;border-radius:var(--r-xl);overflow:hidden}
@@ -2492,7 +2497,10 @@ main > section[data-page]:not([data-page="main"]) > .plannote{
          iOS Safari 走原生 HLS；桌面 Chrome 无原生 HLS，走 MSE 拉同一份 fMP4 分片。 -->
     <div class="scenecard livecard">
       <video id="liveVideo" playsinline webkit-playsinline muted></video>
+      <!-- 透明覆盖层接收点击：iOS Safari 里 <video> 自身会吞掉 click/touch -->
+      <div id="liveTap" class="livetap"></div>
       <div id="liveHint" class="livehint">点「开始直播」看手机实时画面（首次启动约 3~7 秒；不看了点停止，服务端 30 秒无观众会自动回收）</div>
+      <div id="liveToast" class="livetoast"></div>
     </div>
     <div class="shotpage-ctl">
       <button class="savebtn" id="btnLive">开始直播</button>
@@ -3831,29 +3839,66 @@ async function liveStart(){
   liveTimer=setInterval(async()=>{
     if(!liveOn)return;
     const s=await liveStatus();
+    liveInfo=s;                       // 保持尺寸最新（点击换算用）
     $('#liveMeta').textContent=s.running?('流运行中 '+(s.uptime||0)+'s · '+(s.video||'')):'流已停止';
     if(!s.running && s.error)liveHint('流异常：'+s.error);
+    // 接管状态跟随调度器：别处（仪表盘/GUI）又把调度器拉起来时，注入会被服务端拒绝，这里同步失效
+    if(takeover && s.scheduler_alive){
+      takeover=false;
+      const b=$('#btnTakeover'); if(b){b.classList.remove('on'); b.textContent='接管操作';}
+      liveToast('调度器已重新启动，接管失效（需要再点一次接管）',2800);
+    }
   },3000);
 }
 $('#btnLive').onclick=()=>{ liveOn?liveStop():liveStart(); };
+// 操作反馈气泡：注入成功/失败/前置条件不满足都要说话，否则"点了没反应"无从排查
+let liveToastTimer=null;
+function liveToast(msg,ms){
+  const el=$('#liveToast'); if(!el)return;
+  el.textContent=msg; el.classList.add('on');
+  if(liveToastTimer)clearTimeout(liveToastTimer);
+  liveToastTimer=setTimeout(()=>el.classList.remove('on'),ms||1800);
+}
+// 取「视频尺寸 + 设备尺寸」：首次开播时 status 早于流启动、video 可能为空，这里按需补查一次
+async function liveDims(){
+  const pick=s=>{
+    const ok=a=>a.length===2&&a[0]>0&&a[1]>0;
+    const v=((s&&s.video)||'').split('x').map(Number);
+    const d=((s&&s.device)||'').split('x').map(Number);
+    if(ok(v)&&ok(d))return {video:v,device:d};
+    if(ok(v))return {video:v,device:v};        // 设备尺寸缺失时按同一比例换算（scrcpy 保持宽高比）
+    return null;
+  };
+  let r=pick(liveInfo);
+  if(!r){ liveInfo=await liveStatus(); r=pick(liveInfo); }
+  return r;
+}
 $('#btnTakeover').onclick=async()=>{
   const btn=$('#btnTakeover');
-  if(takeover){takeover=false; btn.classList.remove('on'); btn.textContent='接管操作'; liveHint('已交还控制权（调度器需手动启动）'); return;}
-  const r=await (await fetch('/api/runner/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
-  if(r&&r.ok){takeover=true; btn.classList.add('on'); btn.textContent='已接管·点击生效'; liveHint('已接管：点击画面即可操作手机（再点一次交还）');}
-  else{btn.textContent='接管失败';}
+  if(takeover){takeover=false; btn.classList.remove('on'); btn.textContent='接管操作'; liveToast('已交还控制权（调度器需手动启动）',2600); return;}
+  try{
+    const r=await (await fetch('/api/runner/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
+    if(r&&r.ok){takeover=true; btn.classList.add('on'); btn.textContent='已接管·点击生效'; liveToast('已接管：点击画面即可操作手机',2600);}
+    else{ btn.textContent='接管失败'; liveToast('接管失败：'+((r&&r.msg)||'调度器未停止')); }
+  }catch(e){ btn.textContent='接管失败'; liveToast('接管请求失败：'+e.message); }
 };
-$('#liveVideo').addEventListener('click',async ev=>{
-  if(!liveOn||!takeover)return;
+// 点击画面 → 注入。绑在透明覆盖层上（iOS 的 <video> 会吞掉 click），且每个分支都给反馈
+$('#liveTap').addEventListener('pointerdown',async ev=>{
+  if(!liveOn){ liveToast('请先点「开始直播」'); return; }
+  if(!takeover){ liveToast('请先点「接管操作」（会停掉调度器）'); return; }
+  const dims=await liveDims();
+  if(!dims){ liveToast('还没拿到画面尺寸，等 1~2 秒再点'); return; }
   const v=$('#liveVideo'), rect=v.getBoundingClientRect();
-  const vw=v.videoWidth||1, vh=v.videoHeight||1;
-  const sc=Math.min(rect.width/vw, rect.height/vh);
+  const vw=dims.video[0], vh=dims.video[1], dw=dims.device[0], dh=dims.device[1];
+  const sc=Math.min(rect.width/vw, rect.height/vh)||1;
   const vidX=(ev.clientX-rect.left-(rect.width-vw*sc)/2)/sc;
   const vidY=(ev.clientY-rect.top-(rect.height-vh*sc)/2)/sc;
-  const dv=(liveInfo.device||'').split('x').map(Number), vv=(liveInfo.video||'').split('x').map(Number);
-  if(dv.length!==2||vv.length!==2||!dv[0]||!vv[0])return;
-  const x=Math.round(vidX*dv[0]/vv[0]), y=Math.round(vidY*dv[1]/vv[1]);
-  try{await fetch('/api/stream/tap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({x:x,y:y})});}catch(e){}
+  const x=Math.round(vidX*dw/vw), y=Math.round(vidY*dh/vh);
+  try{
+    const r=await (await fetch('/api/stream/tap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({x:x,y:y})})).json();
+    if(r&&r.ok){ liveToast('已点击 ('+x+', '+y+')'); }
+    else{ liveToast('注入被拒：'+((r&&r.msg)||'未知原因')); }
+  }catch(e){ liveToast('请求失败：'+e.message); }
 });
 // 切走该页 / 页面隐藏即停止拉流，让服务端尽快回收（挂机期间不占设备编码器）
 document.querySelectorAll('#tabbar button, #tabbar2 button, [data-back]').forEach(b=>{
@@ -4110,16 +4155,20 @@ def stream_inject(kind: str, payload: dict) -> dict:
     if not get_stream:
         return {'ok': False, 'msg': '流模块不可用'}
     if scheduler_info().get('alive'):
-        return {'ok': False, 'msg': '调度器正在运行，请先点「接管操作」'}
-    try:
-        if kind == 'tap':
-            get_stream().inject_tap(int(payload.get('x', 0)), int(payload.get('y', 0)))
-        else:
-            get_stream().inject_swipe(int(payload.get('x1', 0)), int(payload.get('y1', 0)),
-                                      int(payload.get('x2', 0)), int(payload.get('y2', 0)))
-        return {'ok': True}
-    except Exception as e:                                 # noqa: BLE001
-        return {'ok': False, 'msg': f'{type(e).__name__}: {e}'}
+        result = {'ok': False, 'msg': '调度器正在运行，请先点「接管操作」'}
+    else:
+        try:
+            if kind == 'tap':
+                get_stream().inject_tap(int(payload.get('x', 0)), int(payload.get('y', 0)))
+            else:
+                get_stream().inject_swipe(int(payload.get('x1', 0)), int(payload.get('y1', 0)),
+                                          int(payload.get('x2', 0)), int(payload.get('y2', 0)))
+            result = {'ok': True}
+        except Exception as e:                             # noqa: BLE001
+            result = {'ok': False, 'msg': f'{type(e).__name__}: {e}'}
+    # 记一行日志：网页端"点了没反应"时，据此判断请求到底有没有到服务端
+    print(f'[stream {datetime.now():%H:%M:%S}] 网页注入 {kind} {payload} → {result}', flush=True)
+    return result
 
 
 class Handler(BaseHTTPRequestHandler):
