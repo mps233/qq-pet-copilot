@@ -3803,17 +3803,21 @@ async function liveMse(v){
     try{
       const txt=await (await fetch('/stream/index.m3u8?t='+Date.now(),{cache:'no-store'})).text();
       const segs=txt.split('\n').map(s=>s.trim()).filter(s=>s&&s.charAt(0)!=='#');
-      for(const s of segs){
+      // 只补最新两片：从头补历史分片会让播放位置一直停在旧时间点，延迟越滚越大（踩过坑）
+      for(const s of segs.slice(-2)){
         if(!liveOn)return;
         if(liveSeen.has(s))continue;
         liveSeen.add(s);
         const buf=await (await fetch('/stream/'+s,{cache:'no-store'})).arrayBuffer();
-        await new Promise(r=>{sb.addEventListener('updateend',r,{once:true}); sb.appendBuffer(buf);});
-        if(sb.buffered.length) v.currentTime=Math.max(0,sb.buffered.end(sb.buffered.length-1)-0.4);
-        if(sb.buffered.length>1) sb.remove(0,sb.buffered.start(sb.buffered.length-1));
+        try{ await new Promise(r=>{sb.addEventListener('updateend',r,{once:true}); sb.appendBuffer(buf);}); }catch(e){}
+      }
+      // 缓冲只留最近约 3 秒：MSE 缓冲无上限增长会撞 QuotaExceeded，之后新分片全都追加不进
+      if(sb.buffered.length){
+        const st=sb.buffered.start(0), en=sb.buffered.end(sb.buffered.length-1);
+        if(en-st>4){ try{ sb.remove(st,en-3); }catch(e){} }
       }
     }catch(e){}
-    setTimeout(pump,700);
+    setTimeout(pump,500);
   };
   pump();
 }
@@ -3840,8 +3844,17 @@ async function liveStart(){
     if(!liveOn)return;
     const s=await liveStatus();
     liveInfo=s;                       // 保持尺寸最新（点击换算用）
-    $('#liveMeta').textContent=s.running?('流运行中 '+(s.uptime||0)+'s · '+(s.video||'')):'流已停止';
+    // 延迟看门狗：HLS（尤其 iOS 原生播放器）会自行缓冲、延迟越滚越大，
+    // 落后超过阈值就跳到直播边缘 —— 否则会从 2~3 秒一路涨到 8~9 秒。
+    const lag=liveLag();
+    $('#liveMeta').textContent=(lag!==null?('延迟 '+lag.toFixed(1)+'s · '):'')
+      +(s.running?('流运行中 '+(s.uptime||0)+'s'):'流已停止');
     if(!s.running && s.error)liveHint('流异常：'+s.error);
+    if(lag!==null && lag>2){
+      const v=$('#liveVideo');
+      try{ v.currentTime=Math.max(0,v.seekable.end(v.seekable.length-1)-0.3); }catch(e){}
+      liveToast('已追到直播边缘（原落后 '+lag.toFixed(1)+'s）',1600);
+    }
     // 接管状态跟随调度器：别处（仪表盘/GUI）又把调度器拉起来时，注入会被服务端拒绝，这里同步失效
     if(takeover && s.scheduler_alive){
       takeover=false;
@@ -3872,6 +3885,16 @@ async function liveDims(){
   let r=pick(liveInfo);
   if(!r){ liveInfo=await liveStatus(); r=pick(liveInfo); }
   return r;
+}
+// 当前延迟（秒）= 可 seek 末端 - 播放位置；MSE 下 seekable 等于 buffered，iOS 原生 HLS 下是 m3u8 窗口
+function liveLag(){
+  const v=$('#liveVideo'); if(!v)return null;
+  try{
+    const sk=v.seekable;
+    if(!sk||!sk.length)return null;
+    const lag=sk.end(sk.length-1)-v.currentTime;
+    return (isFinite(lag)&&lag>0)?lag:0;
+  }catch(e){ return null; }
 }
 $('#btnTakeover').onclick=async()=>{
   const btn=$('#btnTakeover');

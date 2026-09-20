@@ -45,7 +45,7 @@ SERVER_CANDIDATES = [
 STREAM_DIR = APP_ROOT / 'runs' / 'stream'
 IDLE_STOP_SECONDS = 30                  # 无访问多久后自动停止（省电/省设备编码器）
 START_TIMEOUT = 20.0
-HLS_SEGMENT_SECONDS = 1                 # 配合 scrcpy 的 i-frame-interval=1，延迟约 2~4s
+HLS_SEGMENT_SECONDS = 0.5               # 分片时长 = 固有延迟下限（0.5s 比 1s 少一半）
 
 # ---- scrcpy 控制消息（control_msg.c）----
 T_KEYCODE, T_TOUCH = 0, 2
@@ -147,8 +147,10 @@ class ScreenStream:
         if r.returncode != 0:
             raise RuntimeError(f'push scrcpy-server 失败：{r.stderr.strip()[:200]}')
 
-        # i-frame-interval=1 让 HLS 能按 1 秒切分片（否则分片受默认 GOP 限制、延迟大）
-        opts = f'video_codec_options=i-frame-interval:int={HLS_SEGMENT_SECONDS}'
+        # i-frame-interval 实测被这台设备的硬件编码器忽略（4 秒仍只有 1 个关键帧），
+        # 真正让 HLS 按时间切分片的是 ffmpeg 的 split_by_time；这里仍传一份：
+        # 支持的设备能顺便压短 GOP（注意必须是整数，写 0.5 会被 server 解析报错）。
+        opts = 'video_codec_options=i-frame-interval:int=1'
         shell_cmd = (
             f'CLASSPATH={DEVICE_JAR} setsid nohup app_process / '
             f'com.genymobile.scrcpy.Server {SCRCPY_VERSION} scid={SCID} log_level=info '
@@ -212,7 +214,7 @@ class ScreenStream:
             '-c', 'copy', '-an',
             '-f', 'hls',
             '-hls_time', str(HLS_SEGMENT_SECONDS),
-            '-hls_list_size', '6',
+            '-hls_list_size', '3',           # 窗口只留 3 片（约 1.5s）：播放器无处可落后
             '-hls_flags', 'delete_segments+omit_endlist+split_by_time',
             '-hls_segment_type', 'fmp4',
             '-hls_fmp4_init_filename', 'init.mp4',
