@@ -345,6 +345,25 @@ class ScreenStream:
                 time.sleep(0.05)
 
     # ---------------- 状态 ----------------
+    @property
+    def codec_string(self) -> str:
+        """从 init.mp4 的 avcC 解析实际编码 profile/level，拼出 MSE 需要的 codec 串。
+
+        前端曾写死 `avc1.42c01f`（Baseline），而设备硬编实际输出 High profile
+        （`avc1.64001f`）—— MSE 的 addSourceBuffer 不匹配时会静默不解码，
+        表现就是"流在跑但画面全黑"（iOS 原生 HLS 不看这字段，所以手机端正常）。
+        """
+        try:
+            data = (STREAM_DIR / 'init.mp4').read_bytes()
+            i = data.find(b'avcC')
+            if i > 0 and i + 7 < len(data):
+                prof, compat, level = data[i + 5], data[i + 6], data[i + 7]
+                return f'avc1.{prof:02x}{compat:02x}{level:02x}'
+        except OSError:
+            pass
+        return ''
+
+
     def _probe_device_size(self) -> None:
         """读一次设备分辨率（只读 `wm size`，不会启动流）——供前端占位框按真实比例预留。"""
         try:
@@ -361,6 +380,7 @@ class ScreenStream:
             self._probe_device_size()                      # 只探测一次，之后一直复用
         return {
             'running': self.running,
+            'codec': self.codec_string,
             'hls_ready': (STREAM_DIR / 'index.m3u8').is_file(),
             'video': f'{self.video_w}x{self.video_h}' if self.video_w else '',
             'device': f'{self.dev_w}x{self.dev_h}' if self.dev_w else '',

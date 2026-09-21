@@ -3826,10 +3826,18 @@ function liveStop(){
   liveHint('已停止。服务端无人观看 30 秒后自动回收设备端编码。');
 }
 async function liveMse(v){
+  // codec 串必须与设备实际编码 profile 一致，否则 addSourceBuffer 静默不解码（黑屏）。
+  // 优先用服务端从 init.mp4 的 avcC 解析出的精确值，再用常见 profile 兜底试。
+  const cands=[];
+  if(liveInfo && liveInfo.codec)cands.push('video/mp4; codecs="'+liveInfo.codec+'"');
+  ['avc1.64001f','avc1.42c01f','avc1.42e01f','avc1.4d401f','avc1.640028','avc1.640032','avc1.64001e']
+    .forEach(c=>cands.push('video/mp4; codecs="'+c+'"'));
+  const mime=cands.find(c=>window.MediaSource.isTypeSupported(c));
+  if(!mime){ liveToast('浏览器不支持该视频编码，请改用 Safari 或手机端观看'); throw new Error('no supported codec'); }
   liveMs=new MediaSource(); liveSeen=new Set();
   v.src=URL.createObjectURL(liveMs);
   await new Promise(r=>liveMs.addEventListener('sourceopen',r,{once:true}));
-  const sb=liveMs.addSourceBuffer('video/mp4; codecs="avc1.42c01f"');
+  const sb=liveMs.addSourceBuffer(mime);
   const initBuf=await (await fetch('/stream/init.mp4?t='+Date.now(),{cache:'no-store'})).arrayBuffer();
   await new Promise(r=>{sb.addEventListener('updateend',r,{once:true}); sb.appendBuffer(initBuf);});
   try{await v.play();}catch(e){}
