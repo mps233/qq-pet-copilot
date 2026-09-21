@@ -3855,7 +3855,7 @@ async function liveStart(){
     if(!s.running && s.error)liveHint('流异常：'+s.error);
     // 追帧：阈值 1.2s（原来 2s —— 那等于把稳态延迟锁在 2 秒以上）；3 秒内最多追一次，
     // 避免频繁 seek 让 iOS 原生播放器反复重新缓冲。
-    if(lag!==null && lag>1.2 && Date.now()-liveLastSeek>3000){
+    if(lag!==null && lag>1.0 && Date.now()-liveLastSeek>3000){
       liveLastSeek=Date.now();
       const v=$('#liveVideo');
       try{ v.currentTime=Math.max(0,v.seekable.end(v.seekable.length-1)-0.2); }catch(e){}
@@ -4245,6 +4245,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, 'text/plain', b'not ready')
             return
         data = fp.read_bytes()
+        if name == 'index.m3u8':
+            # ffmpeg 在分片 <0.5s 时会写出非法的 #EXT-X-TARGETDURATION:0（规范要求正整数），
+            # iOS 原生 HLS 播放器会因此拒绝播放（表现为黑屏）—— 这里兜底改成合法值
+            text = re.sub(r'#EXT-X-TARGETDURATION:[\d.]+',
+                          lambda m: '#EXT-X-TARGETDURATION:%d' % max(
+                              1, int(float(m.group(0).split(':')[1]) + 0.999)),
+                          data.decode('utf-8', 'replace'))
+            data = text.encode('utf-8')
         ctype = 'application/vnd.apple.mpegurl' if name.endswith('.m3u8') else 'video/mp4'
         self.send_response(200)
         self.send_header('Content-Type', ctype)
