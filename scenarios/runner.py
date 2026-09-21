@@ -1213,6 +1213,39 @@ RELOAD_SIGNAL = PROJECT_ROOT / 'runs' / 'reload.signal'
 _RELOAD_SEEN = None   # 上次已处理到的信号 mtime
 
 
+# 网页接管暂停信号：dashboard「接管操作」写入，调度器在安全点原地等待，恢复后从原处继续
+# —— 比停掉进程好：不丢 pending、不中断进度累计。带超时兜底：信号 mtime 超过
+# PAUSE_MAX_SECONDS 未续期（网页端接管期间每 3 秒 ping 续期）就自动忽略并删除，
+# 避免 dashboard 崩了把调度器永久挂住。
+PAUSE_SIGNAL = PROJECT_ROOT / 'runs' / 'pause.signal'
+PAUSE_MAX_SECONDS = 300
+
+
+def wait_if_paused() -> None:
+    """存在暂停信号时原地等待（不退出进程、状态全保留）。在安全点调用。"""
+    waited = 0
+    while True:
+        try:
+            if not PAUSE_SIGNAL.exists():
+                break
+            age = time.time() - PAUSE_SIGNAL.stat().st_mtime
+        except OSError:
+            break
+        if age > PAUSE_MAX_SECONDS:
+            log(f'暂停信号超过 {PAUSE_MAX_SECONDS}s 未续期，自动恢复调度')
+            try:
+                PAUSE_SIGNAL.unlink()
+            except OSError:
+                pass
+            break
+        if waited == 0:
+            log('已暂停：网页端接管中（点「交还控制」恢复，或超时自动恢复）')
+        waited += 1
+        time.sleep(1)
+    if waited:
+        log(f'恢复调度（共暂停 {waited} 秒）')
+
+
 def sleep_interruptible(seconds: float, chunk: float = 1.0) -> None:
     """可被配置热加载信号打断的睡眠。
 
@@ -1240,6 +1273,7 @@ def sleep_interruptible(seconds: float, chunk: float = 1.0) -> None:
         if remain <= 0:
             return
         time.sleep(min(chunk, remain))
+        wait_if_paused()          # 网页接管：睡眠期间也能秒级让路
         try:
             if RELOAD_SIGNAL.exists():
                 cur = RELOAD_SIGNAL.stat().st_mtime
@@ -1371,6 +1405,7 @@ class TaskQueueRunner(Runner):
             self._career_check(tasks, order, '启动检查')
         while True:
             try:
+                wait_if_paused()          # 网页接管：每轮调度开头让路，不打断进行中的场景
                 # 热修改：每轮调度前重读配置（含 tasks.order 与各任务调度设置）
                 self.reload_config()
                 self._apply_tasks_config(tasks, order)

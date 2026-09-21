@@ -213,8 +213,43 @@ def scheduler_start() -> dict:
     return {'ok': False, 'msg': '启动后 8 秒内未检测到进程，请看 runs/runner_console.log'}
 
 
+PAUSE_SIGNAL = RUNS / 'pause.signal'
+
+
+def scheduler_pause() -> dict:
+    """网页接管：写暂停信号，让调度器在安全点让路（不退出进程、pending 与进度全保留）。"""
+    try:
+        PAUSE_SIGNAL.write_text(str(time.time()), encoding='utf-8')
+    except OSError as e:
+        return {'ok': False, 'msg': f'写暂停信号失败：{e}'}
+    audit('调度器让路（网页接管，来自仪表盘）')
+    return {'ok': True, 'msg': '已请求让路（调度器在下一个安全点暂停）',
+            'scheduler': scheduler_info()}
+
+
+def scheduler_resume() -> dict:
+    try:
+        PAUSE_SIGNAL.unlink(missing_ok=True)
+    except OSError as e:
+        return {'ok': False, 'msg': f'清除暂停信号失败：{e}'}
+    audit('调度器恢复（交还控制，来自仪表盘）')
+    return {'ok': True, 'msg': '已交还控制权，调度器继续'}
+
+
+def scheduler_paused() -> bool:
+    """让路是否已生效：信号存在且已过一个响应周期（调度器睡眠切片 1 秒）。"""
+    try:
+        return time.time() - PAUSE_SIGNAL.stat().st_mtime > 2.0
+    except OSError:
+        return False
+
+
 def scheduler_stop() -> dict:
     """停止调度器：先 SIGINT 优雅退出（任务收尾），12 秒不退再 SIGTERM/SIGKILL 兜底。"""
+    try:
+        PAUSE_SIGNAL.unlink(missing_ok=True)   # 停调度器时清掉暂停信号，避免残留挂住下次启动
+    except OSError:
+        pass
     pids = _runner_pids()
     if not pids:
         return {'ok': True, 'msg': '调度器本来就没有在运行', 'scheduler': scheduler_info()}
@@ -3862,10 +3897,10 @@ async function liveStart(){
       liveToast('已追到直播边缘（原落后 '+lag.toFixed(1)+'s）',1600);
     }
     // 接管状态跟随调度器：别处（仪表盘/GUI）又把调度器拉起来时，注入会被服务端拒绝，这里同步失效
-    if(takeover && s.scheduler_alive){
+    if(takeover && s.scheduler_alive && !s.scheduler_paused){
       takeover=false;
       const b=$('#btnTakeover'); if(b){b.classList.remove('on'); b.textContent='接管操作';}
-      liveToast('调度器已重新启动，接管失效（需要再点一次接管）',2800);
+      liveToast('调度器已恢复运行，接管失效（需要再点一次接管）',2800);
     }
   },3000);
 }
@@ -3904,11 +3939,31 @@ function liveLag(){
 }
 $('#btnTakeover').onclick=async()=>{
   const btn=$('#btnTakeover');
-  if(takeover){takeover=false; btn.classList.remove('on'); btn.textContent='接管操作'; liveToast('已交还控制权（调度器需手动启动）',2600); return;}
+  if(takeover){
+    takeover=false; btn.classList.remove('on'); btn.textContent='接管操作';
+    try{ await fetch('/api/runner/resume',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); }catch(e){}
+    liveToast('已交还控制权，调度器继续跑',2600); return;
+  }
   try{
-    const r=await (await fetch('/api/runner/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
-    if(r&&r.ok){takeover=true; btn.classList.add('on'); btn.textContent='已接管·点击生效'; liveToast('已接管：点击画面即可操作手机',2600);}
-    else{ btn.textContent='接管失败'; liveToast('接管失败：'+((r&&r.msg)||'调度器未停止')); }
+    const st=await liveStatus();
+    if(!st.scheduler_alive){          // 调度器本来没跑，直接接管
+      takeover=true; btn.classList.add('on'); btn.textContent='已接管·点击生效';
+      liveToast('已接管（调度器未运行）',2600); return;
+    }
+    const r=await (await fetch('/api/runner/pause',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
+    if(!r||!r.ok){ btn.textContent='接管失败'; liveToast('接管失败：'+((r&&r.msg)||'未知原因')); return; }
+    // 让路在"当前步骤完成后"生效：轮询等它真正停下（最多 60 秒），期间不打断任务
+    btn.textContent='等待让路…'; liveHint('调度器正在完成当前步骤，随后让路…（不会中断任务、不丢进度）');
+    for(let i=0;i<40;i++){
+      await new Promise(res=>setTimeout(res,1500));
+      const s2=await liveStatus();
+      if(!s2.scheduler_alive || s2.scheduler_paused){
+        takeover=true; btn.classList.add('on'); btn.textContent='已接管·点击生效';
+        liveHint(''); liveToast('已接管：调度器已让路（任务未中断）',3000); return;
+      }
+    }
+    btn.textContent='接管失败';
+    liveToast('调度器 60 秒内未让路；可回总览页点「停止」强制结束',3800);
   }catch(e){ btn.textContent='接管失败'; liveToast('接管请求失败：'+e.message); }
 };
 // 点击画面 → 注入。绑在透明覆盖层上（iOS 的 <video> 会吞掉 click），且每个分支都给反馈
@@ -4179,6 +4234,7 @@ def stream_status() -> dict:
         return {'running': False, 'error': '流模块不可用'}
     st = get_stream().status()
     st['scheduler_alive'] = bool(scheduler_info().get('alive'))
+    st['scheduler_paused'] = scheduler_paused()
     return st
 
 
@@ -4190,8 +4246,8 @@ def stream_inject(kind: str, payload: dict) -> dict:
     """
     if not get_stream:
         return {'ok': False, 'msg': '流模块不可用'}
-    if scheduler_info().get('alive'):
-        result = {'ok': False, 'msg': '调度器正在运行，请先点「接管操作」'}
+    if scheduler_info().get('alive') and not scheduler_paused():
+        result = {'ok': False, 'msg': '调度器正在运行，请点「接管操作」让它让路（不会中断任务）'}
     else:
         try:
             if kind == 'tap':
@@ -4453,6 +4509,11 @@ class Handler(BaseHTTPRequestHandler):
                 body = json.dumps(result, ensure_ascii=False).encode('utf-8')
                 self._send(200 if result.get('ok') else 400,
                            'application/json; charset=utf-8', body)
+            elif u.path in ('/api/runner/pause', '/api/runner/resume'):
+                result = scheduler_pause() if u.path.endswith('pause') else scheduler_resume()
+                body = json.dumps(result, ensure_ascii=False).encode('utf-8')
+                self._send(200 if result.get('ok') else 400,
+                           'application/json; charset=utf-8', body)
             elif u.path == '/api/runner/stop':
                 result = scheduler_stop()
                 body = json.dumps(result, ensure_ascii=False).encode('utf-8')
@@ -4463,6 +4524,11 @@ class Handler(BaseHTTPRequestHandler):
                 # "有没有人在看"会把正在操作的会话误回收（踩过：操作 1 分钟后流被回收）
                 if get_stream:
                     get_stream().touch_access()
+                if PAUSE_SIGNAL.exists():
+                    try:
+                        PAUSE_SIGNAL.touch()      # 网页接管期间续期，防止超时自动恢复
+                    except OSError:
+                        pass
                 self._send(200, 'application/json; charset=utf-8', b'{"ok": true}')
             elif u.path == '/api/stream/stop':
                 if get_stream:
