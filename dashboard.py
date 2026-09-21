@@ -3804,6 +3804,14 @@ $('#btnShot').onclick=()=>{ showTab('shot'); if(!liveOn) liveStart(); };
 // ---- 实时直播（设备端 scrcpy-server + 本机 ffmpeg 转 HLS；按需启停，服务端 30s 空闲自动回收）----
 // iOS Safari 支持原生 HLS，直接喂 m3u8；桌面 Chrome 不支持原生 HLS，改走 MSE 拉同一份 fMP4 分片。
 let liveOn=false, liveMs=null, liveSeen=new Set(), liveInfo={}, liveTimer=null, takeover=false, liveRestarting=false, liveLastSeek=0;
+let liveSb=null, liveDbg={codec:'',init:0,segs:0,err:'',step:''};
+function liveDbgLine(){
+  const v=$('#liveVideo'); let buf=0;
+  try{ buf=(liveSb&&liveSb.buffered.length)?(liveSb.buffered.end(liveSb.buffered.length-1)-liveSb.buffered.start(0)):0; }catch(e){}
+  return 'step='+(liveDbg.step||'-')+' codec='+(liveDbg.codec||'?')+' init='+liveDbg.init+'B segs='+liveDbg.segs
+    +' buf='+buf.toFixed(1)+'s t='+(v?Number(v.currentTime).toFixed(1):'-')
+    +' rs='+(v?v.readyState:'-')+' paused='+(v?v.paused:'-')+(liveDbg.err?(' ERR='+liveDbg.err):'');
+}
 function liveHint(t){const el=$('#liveHint'); if(el){el.textContent=t||''; el.style.display=t?'block':'none';}}
 // 用实际设备/视频尺寸校正占位比例（默认 9:20；一加 1080x2412 这类只差千分之几，校正后与画面完全对齐）
 function applyLiveAspect(st){
@@ -3834,36 +3842,50 @@ async function liveMse(v){
     .forEach(c=>cands.push('video/mp4; codecs="'+c+'"'));
   const mime=cands.find(c=>window.MediaSource.isTypeSupported(c));
   if(!mime){ liveToast('浏览器不支持该视频编码，请改用 Safari 或手机端观看'); throw new Error('no supported codec'); }
+  liveDbg.codec=mime.replace(/^video\/mp4; codecs="|"$/g,''); liveDbg.init=0; liveDbg.segs=0; liveDbg.err='';
+  liveDbg.step='mksource';
   liveMs=new MediaSource(); liveSeen=new Set();
   v.src=URL.createObjectURL(liveMs);
   await new Promise(r=>liveMs.addEventListener('sourceopen',r,{once:true}));
+  liveDbg.step='addsb';
   const sb=liveMs.addSourceBuffer(mime);
+  liveSb=sb;
+  liveDbg.step='fetchinit';
   const initBuf=await (await fetch('/stream/init.mp4?t='+Date.now(),{cache:'no-store'})).arrayBuffer();
-  await new Promise(r=>{sb.addEventListener('updateend',r,{once:true}); sb.appendBuffer(initBuf);});
-  try{await v.play();}catch(e){}
+  liveDbg.step='appendinit';
+  try{ await new Promise(r=>{sb.addEventListener('updateend',r,{once:true}); sb.appendBuffer(initBuf);}); liveDbg.init=initBuf.byteLength; }
+  catch(e){ liveDbg.err='init:'+e.name; }
+  // 顺序很重要：先 pump 灌数据、播放用"点火不等待"。反过来会死锁 ——
+  // play() 要等 MSE 有数据才 resolve，而数据要等 pump 去拉，两边互等（真实浏览器上表现为永远黑屏）。
+  liveDbg.step='pump';
   const pump=async()=>{
     if(!liveOn)return;
     try{
       const txt=await (await fetch('/stream/index.m3u8?t='+Date.now(),{cache:'no-store'})).text();
       const segs=txt.split('\n').map(s=>s.trim()).filter(s=>s&&s.charAt(0)!=='#');
-      // 只补最新两片：从头补历史分片会让播放位置一直停在旧时间点，延迟越滚越大（踩过坑）
-      for(const s of segs.slice(-2)){
+      // 全部未见分片都要 append：HLS 分片按时间切（非关键帧起始），只补最新两片会缺少
+      // 参考帧、MSE 直接解不出来（表现为黑屏）；延迟交给追帧与缓冲裁剪控制，不靠丢分片。
+      for(const s of segs){
         if(!liveOn)return;
         if(liveSeen.has(s))continue;
         liveSeen.add(s);
         const buf=await (await fetch('/stream/'+s,{cache:'no-store'})).arrayBuffer();
-        try{ await new Promise(r=>{sb.addEventListener('updateend',r,{once:true}); sb.appendBuffer(buf);}); }
-        catch(e){ liveSeen.delete(s); }   // 追加失败（分片已被删/QuotaExceeded）允许下轮重试
+        try{ await new Promise(r=>{sb.addEventListener('updateend',r,{once:true}); sb.appendBuffer(buf);});
+             if(liveDbg.segs===0)v.play().catch(()=>{});   // 有数据了再点火
+             liveDbg.segs++; }
+        catch(e){ liveDbg.err='seg:'+e.name; liveSeen.delete(s); }   // 失败允许下轮重试
       }
       // 缓冲只留最近约 3 秒：MSE 缓冲无上限增长会撞 QuotaExceeded，之后新分片全都追加不进
       if(sb.buffered.length){
         const st=sb.buffered.start(0), en=sb.buffered.end(sb.buffered.length-1);
-        if(en-st>4){ try{ sb.remove(st,en-3); }catch(e){} }
+        // 只在缓冲明显过长时裁掉播放点之前的部分（保留 v.currentTime-1 起的内容）
+        if(en-st>10){ const cut=Math.max(st, v.currentTime-1); if(cut>st) try{ sb.remove(st,cut); }catch(e){} }
       }
     }catch(e){}
     setTimeout(pump,300);
   };
   pump();
+  v.play().catch(()=>{});
 }
 async function liveStart(){
   $('#btnLive').textContent='连接中…';
@@ -3875,19 +3897,32 @@ async function liveStart(){
   if(!st.running && st.error){liveHint('启动失败：'+st.error); $('#btnLive').textContent='重试'; return;}
   liveHint('缓冲中…（设备端采集启动约 3~7 秒）');
   liveOn=true;
-  if(v.canPlayType('application/vnd.apple.mpegurl')){
-    v.src='/stream/index.m3u8?t='+Date.now();     // iOS Safari 原生 HLS
-    try{await v.play();}catch(e){}
-  }else if(window.MediaSource){
-    await liveMse(v);                             // 桌面 Chrome：MSE + fMP4 分片
-  }else{
-    liveOn=false; liveHint('当前浏览器既不支持原生 HLS 也不支持 MSE，请用 Safari 或 Chrome 桌面版'); return;
+  // 播放路径选择（踩过坑）：**不能**用 canPlayType 的真值判断 ——
+  // Chrome 对 'application/vnd.apple.mpegurl' 返回 "maybe"（真值！），会误走原生 HLS 分支，
+  // 而 Chrome 并不支持 HLS → m3u8 加载不出画面（黑屏）。只有 Safari/WebKit 返回 "probably"。
+  // 规则：iPhone（无 MSE）走原生 HLS；其余（桌面 Chrome/Edge/Safari）一律走 MSE，延迟也更可控。
+  const isIOS=/iPhone|iPad|iPod/.test(navigator.userAgent);
+  const nativeHls=v.canPlayType('application/vnd.apple.mpegurl')==='probably';
+  try{
+    if(isIOS || (!window.MediaSource && nativeHls)){
+      v.src='/stream/index.m3u8?t='+Date.now();   // iOS Safari 原生 HLS
+      v.play().catch(()=>{});
+    }else if(window.MediaSource){
+      await liveMse(v);                           // 桌面：MSE + fMP4 分片
+    }else{
+      liveOn=false; liveHint('当前浏览器既不支持 MSE 也不支持原生 HLS，请用 Chrome/Safari'); return;
+    }
+  }catch(e){
+    // 绝不静默：把失败原因显示出来（踩过"黑屏但什么都不说"的坑）
+    liveDbg.err='start:'+((e&&e.name)||'')+' '+((e&&e.message)||'');
+    liveOn=false; $('#btnLive').textContent='重试';
+    liveHint('直播启动失败：'+liveDbg.err); return;
   }
   $('#btnLive').textContent='停止直播'; $('#btnLive').classList.add('on');
   liveHint('');
   liveTimer=setInterval(async()=>{
     if(!liveOn)return;
-    try{ await fetch('/api/stream/ping',{method:'POST'}); }catch(e){}   // 心跳保活，别让看门狗误判无人观看
+    try{ await fetch('/api/stream/ping'+(window.__autoLive?('?dbg='+encodeURIComponent(liveDbgLine())):''),{method:'POST'}); }catch(e){}   // 心跳保活；自动开播时回传诊断
     const s=await liveStatus();
     liveInfo=s;                       // 保持尺寸最新（点击换算用）
     // 延迟看门狗：HLS（尤其 iOS 原生播放器）会自行缓冲、延迟越滚越大，
@@ -3896,6 +3931,7 @@ async function liveStart(){
     $('#liveMeta').textContent=(lag!==null?('延迟 '+lag.toFixed(1)+'s · '):'')
       +(s.running?('流运行中 '+(s.uptime||0)+'s'):'流已停止');
     if(!s.running && s.error)liveHint('流异常：'+s.error);
+    if(window.__autoLive)liveHint(liveDbgLine());   // 自动开播模式下把 MSE 状态显示出来，便于截图定位
     // 追帧：阈值 1.2s（原来 2s —— 那等于把稳态延迟锁在 2 秒以上）；3 秒内最多追一次，
     // 避免频繁 seek 让 iOS 原生播放器反复重新缓冲。
     if(lag!==null && lag>1.0 && Date.now()-liveLastSeek>3000){
@@ -4003,7 +4039,7 @@ $('#liveTap').addEventListener('pointerdown',async ev=>{
 document.querySelectorAll('#tabbar button, #tabbar2 button, [data-back]').forEach(b=>{
   b.addEventListener('click',()=>{ if(liveOn && b.dataset.tab!=='shot') liveStop(); });
 });
-document.addEventListener('visibilitychange',()=>{ if(document.hidden&&liveOn) liveStop(); });
+document.addEventListener('visibilitychange',()=>{ if(document.hidden&&liveOn&&!window.__autoLive) liveStop(); });
 
 
 // 任务开关：点击勾选 → 写入 config（ruamel 保注释），调度器下一轮热加载生效
@@ -4148,6 +4184,8 @@ try{
 // **必须在这里读、并且存进独立变量**，两个坑：
 //   ① showTab('main') 会清 window.__setGrp（"离开设置页重置层级"），存那里会被抹掉；
 //   ② showTab('set') 会把 URL 重写成 '?tab=set'，之后再读 location.search 就没有 grp 了。
+let _liveFromUrl=false;
+try{ _liveFromUrl=new URLSearchParams(location.search).get('live')==='1'; }catch(e){}
 let _grpFromUrl='';
 try{ _grpFromUrl=new URLSearchParams(location.search).get('grp')||''; }catch(e){}
 // 初始：先取好友名单（下拉选择用），再渲染 tab —— 否则首次渲染
@@ -4183,6 +4221,9 @@ setInterval(()=>{if(!document.hidden)refreshData()},6000);
 setInterval(()=>{if(!document.hidden)refreshAdventure()},10000);
 setInterval(()=>{if(!document.hidden)refreshPlan()},15000);
 refreshData();refreshLogs();refreshAdventure();refreshPlan();
+// ?tab=shot&live=1 直接进实时画面并开播（分享链接/调试/自动验收用）
+// 注意：不能用 location.search 现读 —— showTab 会重写 URL 把 live 参数抹掉（同 grp 的坑）
+if(_liveFromUrl){ window.__autoLive=true; showTab('shot'); liveStart(); }
 // 占位框一开始就用设备真实比例（只读 status，不会启动流）
 liveStatus().then(applyLiveAspect).catch(()=>{});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden){refreshData();refreshLogs();refreshAdventure();refreshPlan()}});
@@ -4537,6 +4578,9 @@ class Handler(BaseHTTPRequestHandler):
                         PAUSE_SIGNAL.touch()      # 网页接管期间续期，防止超时自动恢复
                     except OSError:
                         pass
+                _dbg = parse_qs(u.query).get('dbg')
+                if _dbg:
+                    print(f'[stream diag] {_dbg[0]}', flush=True)   # 页面内 MSE 状态回传（远程排查用）
                 self._send(200, 'application/json; charset=utf-8', b'{"ok": true}')
             elif u.path == '/api/stream/stop':
                 if get_stream:
