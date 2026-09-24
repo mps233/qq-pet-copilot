@@ -41,6 +41,7 @@ DEFAULTS = {
     'adventure.start_time': '08:00',
     'adventure.skip_bad_weather': False,
     'adventure.batch': 12,
+    'adventure.type': '附近走走',
     'visit.times_per_day': 10,
     'visit.start_time': '00:01',
     'pk.times_per_day': 15,
@@ -90,6 +91,8 @@ def validate_field(key: str, value):
         return (True, value) if value in ('力量', '智力', '魅力') else (False, default)
     if key == 'work.duration':
         return (True, value) if value in ('10分钟', '45分钟', '2小时') else (False, default)
+    if key == 'adventure.type':
+        return (True, value) if value in ('附近走走', '诗和远方') else (False, default)
     if key == 'care.method' or key == 'friend_care.method':
         return (True, value) if value in ('ocr检测', '一键护理') else (False, default)
     if key in ('friend_care.time_range', 'employed.time_range', 'hire_friend.time_range'):

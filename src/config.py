@@ -143,6 +143,8 @@ class AdventureConfig:
     skip_bad_weather: bool = False
     # 一轮连跑的冒险次数（跑满后回主页面）
     batch: int = 12
+    # 冒险类型（2026-09 更新后准备页可选）：附近走走（约45秒）/ 诗和远方（约2小时）
+    type: str = "附近走走"
 
 
 @dataclass

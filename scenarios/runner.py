@@ -544,6 +544,10 @@ class Runner:
         self.adventure.times_per_day = adv.times_per_day
         self.adventure.skip_bad_weather = adv.skip_bad_weather
         self.adventure.batch = adv.batch
+        if adv.type in ('附近走走', '诗和远方'):
+            self.adventure.adv_type = adv.type
+        else:
+            log(f'冒险类型配置无效 {adv.type!r}，沿用旧值 {self.adventure.adv_type}')
         start_time = adv.start_time
         if isinstance(start_time, int):
             # YAML 1.1 会把不带引号的 9:00 解析成分钟数 540，转回 HH:MM

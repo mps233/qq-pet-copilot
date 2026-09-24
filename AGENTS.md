@@ -90,6 +90,12 @@ $PY build.py --emulator          # 模拟器版（内置 frida 客户端；frida
   （`care.read_status` 读状态面板已不走 `status_region` 定位——深层 xpath 在好友
   宠物页会误命中底部好友列表栏，直接 OCR 屏幕上半部分；`status_region` 仅
   `tools/test_locator_all.py` 校准用。）
+  **出门地图建筑入口**（school/town/adventure）：2026-09 起直接用各建筑专属
+  content-desc（`study`/`work`/`adventure`）锚定——旧的 `map_blank/FrameLayout[n]`
+  序号路径随建筑增删漂移（曾指向错误建筑，点"职业小镇"开出学校面板），仅留作兜底。
+  **学习/打工轮播选择框**（`select_box_container`）：锚定嵌套双层 RecyclerView 的
+  内层卡片行容器 `//RV//RV/FrameLayout[1]`（对中间 FrameLayout 层级增减免疫），
+  容器 bounds 按 2:2:1 分割出三个可见卡槽中心。
 - **洗澡搓洗**：搓洗点位按分辨率百分比（`care.py` 的 `SCRUB_TOP_PCT` / `SCRUB_BOTTOM_PCT`），
   起点取 `shower_10` 控件中心；搓洗中清洁连续 `SCRUB_STALL_REPRESS` 回合不提升判定
   按压失效（模拟器 minitouch 会话静默中断，touch_move 全丢），自动抬手重按肥皂自愈；
@@ -122,6 +128,14 @@ $PY build.py --emulator          # 模拟器版（内置 frida 客户端；frida
   **返回方式**（`schedule.back_method`，设置页下拉）：所有“回退”统一走基类
   `go_back()`——`系统返回`（默认）用 `dev.d.press('back')`；`返回图标` 定位
   `back` 按钮点击，找不到返回 False 由调用方决定（重试/放弃），避免误按系统返回退过头。
+- **冒险类型选择**（2026-09 更新）：冒险准备页改版——开始按钮改名"出发"
+  （`adventure_start` 保留"开始"兜底），新增类型卡"附近走走（约45秒）/诗和远方（约2小时）"。
+  类型卡 canvas 自绘、控件树不可见、选中态无属性可读：`adventure.py` 的
+  `_ensure_adventure_type()`（`do_adventure` 点出发前调用）OCR 卡名定位 +
+  `_card_selected()` 蓝框像素检测（选中卡边框行/列蓝色占比 >0.5，实测选中 ~0.80 /
+  未选中 ~0.14）判断选中态，未选中才点击（点已选中卡可能反取消）；识别/选中失败
+  只记日志不阻塞。类型配置 `adventure.type`（默认 附近走走）。结算页新增"继续冒险"
+  按钮，但连跑仍走 quit 回出门页再进的老链路。
 - **OCR 置信度**：命中下限 `src/locators.py` 的 `OCR_MIN_SCORE`（默认 0.5）。
 - **异常分级重试**：场景抛异常 → 先回主页面重进场景重试一次（页面错乱多半能
   自愈，不必重启）→ 仍失败才走 `Runner.recover()`（`src/recover.py`：adb reboot →
@@ -143,7 +157,7 @@ $PY build.py --emulator          # 模拟器版（内置 frida 客户端；frida
   `schedule.encourage_times` / `schedule.main_page_checks` 曾漏同步）。规则：
   - 场景 `__init__` 里从 `self.cfg.xxx` 拷成 `self.xxx` 的**副本属性**必须逐字段同步
     （如 `work.duration`、`care.energy_threshold/clean_threshold/method`、
-    `school.attribute/times_per_day`、`adventure.times_per_day/skip_bad_weather/batch`、
+    `school.attribute/times_per_day`、`adventure.times_per_day/skip_bad_weather/batch/adv_type`、
     `visit/pk.times_per_day`）；
   - 运行时直接读 `scen.cfg.xxx` 的字段也要同步对应场景的 cfg（如 `care_due()` 读
     `care.cfg.care.interval_seconds`、`hire_friend._select_job()` 读

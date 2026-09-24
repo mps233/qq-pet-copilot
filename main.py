@@ -264,6 +264,7 @@ TASK_SETTING_FIELDS = [
     ('adventure.start_time', '冒险调度时间', 'str'),
     ('adventure.skip_bad_weather', '冒险跳过"天色不对"', 'bool'),
     ('adventure.batch', '单轮冒险次数', 'int'),
+    ('adventure.type', '冒险类型', ['附近走走', '诗和远方']),
     ('visit.times_per_day', '每天踩踩次数（0 不踩）', 'int'),
     ('visit.start_time', '踩踩调度时间', 'str'),
     ('pk.times_per_day', '每天 PK 次数（0 不 PK）', 'int'),

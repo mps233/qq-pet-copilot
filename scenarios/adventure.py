@@ -4,8 +4,9 @@
 1. 主页面（main_sign="出门"）-> 点击出门
 2. 出门后若正在上课/工作/冒险/被雇佣中（school_in / work_in / adventure_in / employed_in）
    -> 等待结束并退出，回主页面结束本轮
-3. 点击 adventure 进入准备页面，直到出现 adventure_start 按钮
-4. 点击 adventure_start 开始冒险，直到出现 adventure_in 标志；
+3. 点击 adventure 进入准备页面，直到出现 adventure_start（"出发"）按钮
+4. 确保选中配置的冒险类型（adventure.type：附近走走/诗和远方，2026-09 新增），
+   点击 adventure_start 开始冒险，直到出现 adventure_in 标志；
    配置 adventure.skip_bad_weather 开启时，开始 5 秒后 OCR 下半屏（冒险详情框）：
    含"天色不对"则点"召回"->"确认召回"，计入一次冒险，不再等冒险结束
 5. 冒险中按配置的检查间隔（schedule.check_interval）检查，直到出现 adventure_end 标志
@@ -22,7 +23,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.ocr import find_text, ocr_texts
+from src.ocr import find_text, ocr_fullscreen, ocr_texts
 from src.progress import (
     ADVENTURE_PROGRESS_FILE,
     count_cross,
@@ -38,6 +39,11 @@ BAD_WEATHER_KEYWORD = '天色不对'
 RECALL_KEYWORD = '召回'
 ADVENTURE_BATCH = 12      # 一轮连跑的冒险次数（跑满后回主页面，供执行器重新判断）
 RECALL_CONFIRM_TRIES = 3  # 点召回后等/重试确认弹窗的次数（不再傻等 10 次）
+# 冒险类型（2026-09 更新后准备页可选）：附近走走（约45秒）/ 诗和远方（约2小时）
+ADVENTURE_TYPES = ('附近走走', '诗和远方')
+# 选中卡的蓝色边框检测：边框行/列上蓝色像素占比超过该阈值视为选中
+# （实测选中卡 ~0.80，未选中卡 ~0.14）
+CARD_BORDER_BLUE_MIN = 0.5
 
 PROGRESS_FILE = ADVENTURE_PROGRESS_FILE
 
@@ -48,9 +54,13 @@ class AdventureScenario(DeviceScenario):
         self.times_per_day = self.cfg.adventure.times_per_day
         self.skip_bad_weather = self.cfg.adventure.skip_bad_weather
         self.batch = self.cfg.adventure.batch
+        self.adv_type = self.cfg.adventure.type
+        if self.adv_type not in ADVENTURE_TYPES:
+            log(f'冒险类型配置无效: {self.adv_type!r}，回退为 {ADVENTURE_TYPES[0]}')
+            self.adv_type = ADVENTURE_TYPES[0]
         log(f'每天冒险次数: {self.times_per_day if self.times_per_day else "不冒险"}'
             f'，跳过"天色不对": {"开" if self.skip_bad_weather else "关"}'
-            f'，单轮冒险次数 {self.batch}')
+            f'，单轮冒险次数 {self.batch}，冒险类型 {self.adv_type}')
 
     # ---- 各阶段 ----
 
@@ -77,6 +87,50 @@ class AdventureScenario(DeviceScenario):
             raise
         return None
 
+    def _card_selected(self, screen, hit) -> bool:
+        """类型卡是否已选中：hit=(x, y, score) 为卡名文字中心，
+        选中卡有蓝色边框（某行/某列蓝色像素占比 > CARD_BORDER_BLUE_MIN）。
+        卡片是 canvas 自绘（控件树不可见），只能从截图像素判断。"""
+        h, w = screen.shape[:2]
+        x, y = hit[0], hit[1]
+        # 卡名文字在卡片下部：框取卡片本体（宽约 0.33 屏宽，文字上方约 0.105 屏高
+        # 到下方约 0.055 屏高），略大于卡片也没关系，面板底色不是蓝色
+        half_w = int(w * 0.17)
+        x1, x2 = max(0, x - half_w), min(w, x + half_w)
+        y1, y2 = max(0, y - int(h * 0.115)), min(h, y + int(h * 0.06))
+        region = screen[y1:y2, x1:x2].astype(int)
+        if region.size == 0:
+            return False
+        r, g, b = region[:, :, 0], region[:, :, 1], region[:, :, 2]
+        blue = (b > 180) & (b - r > 60) & (g > 100) & (g < 220)
+        return bool(blue.mean(axis=1).max() > CARD_BORDER_BLUE_MIN
+                    or blue.mean(axis=0).max() > CARD_BORDER_BLUE_MIN)
+
+    def _ensure_adventure_type(self) -> None:
+        """准备页面上确保选中配置的冒险类型（附近走走/诗和远方）。
+
+        类型卡 canvas 自绘、选中态不在控件树里：OCR 卡名定位 + 蓝框检测选中态，
+        未选中才点击（点击已选中卡可能反而取消选中），点完再验证一次。
+        识别失败/点击未生效只记日志不阻塞——按当前选中类型出发比整个任务失败好。
+        """
+        want = self.adv_type
+        screen = self.screen()
+        hit = find_text(ocr_fullscreen(screen), want)
+        if not hit:
+            log(f'未识别到冒险类型 {want!r} 卡片，跳过类型选择')
+            return
+        if self._card_selected(screen, hit):
+            return
+        log(f'冒险类型 {want} 未选中，点击选择 ({hit[0]}, {hit[1]})')
+        self.click(hit[0], hit[1])
+        time.sleep(CLICK_INTERVAL)
+        screen = self.screen()
+        hit = find_text(ocr_fullscreen(screen), want)
+        if hit and self._card_selected(screen, hit):
+            log(f'已选择冒险类型: {want}')
+        else:
+            log(f'冒险类型 {want} 点击后仍未选中，按当前选中类型出发')
+
     def do_adventure(self) -> bool:
         """准备页面 -> 开始冒险 -> 等待 adventure_end -> 点 quit 退出。
         开关开启时开始后先检测"天色不对"：命中则召回并确认，不再等冒险结束
@@ -85,6 +139,7 @@ class AdventureScenario(DeviceScenario):
         调度器 finish_pending 收尾计数；召回同步完成则立即 count_cross 计数。
         返回 True 表示走了"天色不对"召回（召回成功后回到主页面，不是"出门"页，
         调用方应回主页面重进而不是直接点冒险入口）。"""
+        self._ensure_adventure_type()
         self.click_until_gone_or_see('adventure_start', 'adventure_in', '开始冒险')
         if self.skip_bad_weather and self.recall_bad_weather():
             if self.defer_wait:

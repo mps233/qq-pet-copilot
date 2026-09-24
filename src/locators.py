@@ -66,15 +66,13 @@ def ocr_screen(screen: np.ndarray) -> list[tuple[str, int, int, float]]:
     """整屏 OCR（同一 screen 复用结果）；给 see() 之外的自定义解析用。"""
     return _ocr_texts_cached(screen)
 
-# 学习/工作选择框共用前缀：三条 xpath 仅最后一段 FrameLayout 序号不同。
-# 锚定"嵌套双层 RecyclerView"（选课面板里的卡片轮播），真机验证命中；
-# 之前从 ckj 出发的绝对路径层级深、随页面结构漂移，容易整链失效。
-# 选课/选工作三栏容器：纯子节点步进（中间不再用 // 后代搜索），u2 引擎解析更快更稳。
-# 外层 RecyclerView(首命中) -> FL[1] -> FL[1] -> 内层 RecyclerView[1] -> FL[1]（课程卡容器）
+# 学习/工作选择框共用锚点：嵌套双层 RecyclerView 的内层 RV 的卡片行容器
+# （外层 RV=面板内容，内层 RV=课程/工作卡片轮播，其 FL[1] 的 3 个 FL 子节点即三个可见卡槽）。
+# 2026-09 更新中间多了一层 FrameLayout 导致旧的纯子节点步进路径再次失效，
+# 改为 "//RV//RV" 后代锚定，对中间层级增减免疫；真机验证学习/打工面板均命中。
 SELECT_BOX_XPATH = (
     '//androidx.recyclerview.widget.RecyclerView'
-    '/android.widget.FrameLayout[1]/android.widget.FrameLayout[1]'
-    '/androidx.recyclerview.widget.RecyclerView[1]'
+    '//androidx.recyclerview.widget.RecyclerView'
     '/android.widget.FrameLayout[1]'
 )
 
@@ -120,9 +118,8 @@ LOCATORS: dict[str, dict] = {
     # 容器 xpath 命中一次后 cache bounds，select_box_N 由它推导（免各自 dump）
     'select_box_container': {
         'cache': True,
-        # 锚定"外层 RecyclerView -> FL[1] -> FL[1] -> 内层 RecyclerView[1] -> FL[1]"
-        # 的卡片容器，不依赖 ckj 下会随 QQ 更新漂移的深层绝对路径（实测 2026-08-18
-        # 打工面板实际是 ckj/.../FrameLayout[3]/RecyclerView[7]/...，旧路径全链失效）。
+        # 锚定嵌套双层 RecyclerView 的内层卡片行容器（见 SELECT_BOX_XPATH 注释），
+        # 不依赖会随 QQ 更新漂移的深层绝对路径。
         'xpath': [SELECT_BOX_XPATH],
     },
     # 2:2:1 分割：左 2/5 中心=1/5 宽，中 2/5 中心=3/5 宽，右 1/5 中心=9/10 宽
@@ -131,8 +128,11 @@ LOCATORS: dict[str, dict] = {
     'select_box_3': {'from_bounds': 'select_box_container', 'split': (9, 10)},
 
     # ---- 学习 ----
+    # 出门地图入口：2026-09 起各建筑有专属 content-desc（study/work/adventure），
+    # 直接锚定；旧的 map_blank/FrameLayout[n] 序号路径随建筑增删漂移，仅作兜底
     'school': {
-        'xpath': ['//*[@content-desc="map_blank"]/android.widget.FrameLayout[2]/android.widget.FrameLayout[1]']
+        'xpath': ['//*[@content-desc="study"]',
+                  '//*[@content-desc="map_blank"]/android.widget.FrameLayout[2]/android.widget.FrameLayout[1]']
                ,'ocr': ['宠物学园']},
     'school_start': {
         'xpath': ['//*[@content-desc="去上课"]']
@@ -150,7 +150,8 @@ LOCATORS: dict[str, dict] = {
 
     # ---- 打工 ----
     'town': {
-        'xpath': ['//*[@content-desc="map_blank"]/android.widget.FrameLayout[4]/android.widget.FrameLayout[1]']
+        'xpath': ['//*[@content-desc="work"]',
+                  '//*[@content-desc="map_blank"]/android.widget.FrameLayout[4]/android.widget.FrameLayout[1]']
                ,'ocr': ['职业小镇']},
     'work_start': {'xpath': ['//*[@content-desc="去打工"]']},
     # work_start 被"去照顾一下"弹窗挡住时：点它进护理，一键护理+back 后回工作面板（work.py _recover_work_start）
@@ -185,13 +186,20 @@ LOCATORS: dict[str, dict] = {
     # ---- 冒险 ----
     'adventure': {
         'cache': True,
-        'xpath': ['//*[@content-desc="map_blank"]/android.widget.FrameLayout[3]/android.widget.FrameLayout[1]']
+        'xpath': ['//*[@content-desc="adventure"]',
+                  '//*[@content-desc="map_blank"]/android.widget.FrameLayout[3]/android.widget.FrameLayout[1]']
                ,'ocr': ['冒险']},
     'adventure_start': {
         # 不能加 cache：连跑衔接里要靠它判断是否真的进了冒险准备页，
         # 缓存会让 see() 在还没进准备页时也返回旧坐标（误报"已出现 adventure_start"，
         # 随后在出门页面傻点"开始"、adventure_in 永远不出现）
-        'xpath': ['//*[@content-desc="开始"]']},
+        # 2026-09 更新：开始按钮改名"出发"（准备页新增冒险类型选择：附近走走/诗和远方）
+        'xpath': ['//*[@content-desc="出发"]', '//*[@content-desc="开始"]'],
+        'ocr': ['出发', '开始']},
+    # 冒险类型卡（2026-09 新增）：canvas 自绘，控件树不可见，只能 OCR 卡名定位；
+    # 选中卡有蓝色边框，选中态判断见 adventure.py 的 _card_selected
+    'adventure_type_near': {'ocr': ['附近走走']},
+    'adventure_type_far': {'ocr': ['诗和远方']},
     'adventure_in': {'ocr': ['正在冒险', '冒险中']},
     'adventure_end': {'xpath': ['//*[@content-desc="分享"]']},
     # 冒险详情框（"天色不对"检测）不再用 xpath 裁剪：游戏更新会改控件层级导致
