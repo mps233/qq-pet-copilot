@@ -1541,29 +1541,23 @@ main section[data-page]:not([data-page="main"]){
   margin:0;padding:0 0 calc(var(--u) * 24);
   border:0;border-radius:0;box-shadow:none;
 }
-/* 选择器**必须带 `main` 前缀**：内页那条 `main section[data-page]:not([data-page="main"])`
-   的特异性是 (0,2,2)（`:not()` 括号里的参数也计入），而裸的 `section[data-page="adv"]` 只有
-   (0,1,1)、`main section[data-page="adv"]` 也只有 (0,1,2) —— 都被它压住、padding 完全不生效
-   （实测两次：图表始终贴在 x=0，探针读到 paddingLeft=0）。补上 `.card` 类才凑到 (0,2,2)，
-   靠"同特异性时后写的胜出"生效。
+/* 内页专属规则的特异性坑（**将来加内页规则还会踩到，别删这段**）：内页容器那条
+   `main section[data-page]:not([data-page="main"])` 的特异性是 (0,2,2)
+   —— `:not()` 括号里的参数也计入；而裸的 `section[data-page="adv"]` 只有 (0,1,1)、
+   `main section[data-page="adv"]` 也只有 (0,1,2)，都会被它压住、padding 完全不生效
+   （实测两次：图表始终贴在 x=0，探针读到 paddingLeft=0）。当年是靠补上 `.card` 类
+   凑到同特异性 (0,2,2)、再靠"后写的胜出"生效。
 
-   冒险 / 职业这两页的元素（.advcap/.advlist/.subline/.planbars/.subh/.plansteps…
-   ）**都不自带左右内边距**，而内页容器是 `padding: 0 0 24u` —— 真机上内容从屏幕
-   最左开始、图表贴着两条边（用户截图实测）。设置页/日志页不受影响是因为它们靠
-   `.pgsec` 自带 `margin: 0 12u` + `padding: 12u 14u`（内容距边 26u）。
-   所以这里**只给这两页补**，不要给所有内页加（那会让设置页变成双重内边距）。 */
-main section.card[data-page="adv"],
-main section.card[data-page="plan"]{
-  padding-left:calc(var(--u) * 14);
-  padding-right:calc(var(--u) * 14);
-}
-/* 这两页的区块间距也跟着 u 走：原来 .advcap 是固定 margin-top:8px，
-   配 u 单位的内容在真机上显得挤 */
-main section.card[data-page="adv"] .advcap,
-main section.card[data-page="plan"] .subh{margin-top:calc(var(--u) * 14)}
-main section.card[data-page="adv"] .advchart{margin-top:calc(var(--u) * 10)}
-main section.card[data-page="adv"] #advMeta,
-main section.card[data-page="plan"] #planMeta{margin-top:calc(var(--u) * 8)}
+   ——历史说明（已删除）——
+   这里原来有一段临时补丁：给冒险 / 职业两页单独补
+   `padding-left/right: 14u`，并把 .advcap / .subh / .advchart / #advMeta / #planMeta
+   的间距换成 u 单位。起因是这两页的元素（.advcap/.advlist/.subline/.planbars/.subh/
+   .plansteps…）都不自带左右内边距，而内页容器只有 `padding: 0 0 24u`，真机上内容从屏幕
+   最左开始、图表贴着两条边（用户截图实测）；设置页 / 日志页不受影响是因为它们早已走
+   `.pgsec` 骨架（自带 `margin:0 12u` + `padding:12u 14u`，内容距边 26u）。
+   现在冒险页 / 职业页也全部改用 `.pgsec` 骨架分节，这条补丁不但多余、留着还会叠成
+   双重内边距，所以整段移除。**内页内容的水平内缩一律由 `.pgsec` 提供，不要再加
+   页面级 padding。** */
 
 /* 分节：小标题（卡外） + 白卡（卡内） */
 .pgsec{margin-top:calc(var(--u) * 14)}.pgsec:first-of-type{margin-top:calc(var(--u) * 10)}

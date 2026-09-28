@@ -111,82 +111,97 @@ export function PlanPage() {
 
   return (
     <>
-      <div className="advcap" id="planMeta" style={{ marginTop: 'calc(var(--u) * 6)' }}>
-        总属性 {d.total}/{d.total_target} · 更新 {d.updated || ''}
-      </div>
-
-      <div className="planbars" id="planBars">
-        <PlanBar t="属性总进度" c={d.total} tg={d.total_target} col="var(--accent)" />
-        <PlanBar t="见习解锁" c={d.jr_n} tg={8} col="#16a34a" />
-        <PlanBar t="初级解锁" c={d.ch_n} tg={8} col="#ea580c" />
-      </div>
-
-      <div className="subh">
-        隐藏职业哨兵{' '}
-        <span id="watchMeta" style={{ fontWeight: 400, fontSize: 10.5 }}>
-          {w.last_check ? `上次检查 ${String(w.last_check).slice(11, 16)}` : ''}
-        </span>
-      </div>
-      <div className="watchbox" id="watchBox">
-        <div className="wstate">
-          {!w.enabled
-            ? '监控已关闭（设置页「职业」区可开）'
-            : !w.alive
-              ? '调度器未运行 — 启动后自动监控'
-              : `监控中 · ${w.interval ? `每节课后 + 每 ${w.interval} 分钟兜底` : '每节课后'}${w.stop_study ? ' · 解锁后自动停学' : ' · 仅通知'}`}
+      {/* 节 1 · 属性总进度：总属性读数当卡外小标题，进度条进白卡 */}
+      <div className="pgsec">
+        <div className="pgsec-t" id="planMeta">
+          总属性 {d.total}/{d.total_target} · 更新 {d.updated || ''}
         </div>
-        {evs.length ? (
-          evs.map((e, i) => (
-            <div className="wrow" key={`${e.ts}-${i}`}>
-              <span className="wbadge">
-                🎉 {e.career || ''}（见习·{e.name || '?'}）
-              </span>
-              <span style={{ color: 'var(--sub)', fontSize: 11.5 }}>{String(e.ts || '').slice(5, 16)}</span>
-            </div>
-          ))
-        ) : (
-          <div className="wrow" style={{ color: 'var(--sub)' }}>
-            <span>尚未解锁（武术家 / 梦境旅人 / 大明星）</span>
-            <span />
+        <div className="pgsec-c">
+          <div className="planbars" id="planBars">
+            <PlanBar t="属性总进度" c={d.total} tg={d.total_target} col="var(--accent)" />
+            <PlanBar t="见习解锁" c={d.jr_n} tg={8} col="#16a34a" />
+            <PlanBar t="初级解锁" c={d.ch_n} tg={8} col="#ea580c" />
           </div>
-        )}
+        </div>
       </div>
 
-      <div className="subh">进度录入（新号的当前数值，改完点保存）</div>
-      <div className="plinedit" id="planEdit">
-        {(
-          [
-            ['力', '力量'],
-            ['智', '智力'],
-            ['魅', '魅力'],
-            ['工分', '工分'],
-            ['金币', '金币'],
-          ] as const
-        ).map(([k, label]) => (
-          <label key={k}>
-            {label}
-            <input
-              type="number"
-              min={0}
-              value={String(edit[k] ?? 0)}
-              onChange={(e) => setOne(k, e.target.value)}
-            />
-          </label>
-        ))}
-        <div className="planeditrow">
-          <span>学园：</span>
-          <button
-            type="button"
-            className={'sw' + (edit['初级毕业'] ? ' on' : '')}
-            onClick={() => setOne('初级毕业', !edit['初级毕业'])}
-          />
-          <span>初级毕业</span>
-          <button
-            type="button"
-            className={'sw' + (edit['中级毕业'] ? ' on' : '')}
-            onClick={() => setOne('中级毕业', !edit['中级毕业'])}
-          />
-          <span>中级毕业</span>
+      {/* 节 2 · 隐藏职业哨兵 */}
+      <div className="pgsec">
+        <div className="pgsec-t">
+          隐藏职业哨兵{' '}
+          <span id="watchMeta" style={{ fontWeight: 400, fontSize: 10.5 }}>
+            {w.last_check ? `上次检查 ${String(w.last_check).slice(11, 16)}` : ''}
+          </span>
+        </div>
+        <div className="pgsec-c">
+          <div className="watchbox" id="watchBox">
+            <div className="wstate">
+              {!w.enabled
+                ? '监控已关闭（设置页「职业」区可开）'
+                : !w.alive
+                  ? '调度器未运行 — 启动后自动监控'
+                  : `监控中 · ${w.interval ? `每节课后 + 每 ${w.interval} 分钟兜底` : '每节课后'}${w.stop_study ? ' · 解锁后自动停学' : ' · 仅通知'}`}
+            </div>
+            {evs.length ? (
+              evs.map((e, i) => (
+                <div className="wrow" key={`${e.ts}-${i}`}>
+                  <span className="wbadge">
+                    🎉 {e.career || ''}（见习·{e.name || '?'}）
+                  </span>
+                  <span style={{ color: 'var(--sub)', fontSize: 11.5 }}>{String(e.ts || '').slice(5, 16)}</span>
+                </div>
+              ))
+            ) : (
+              <div className="wrow" style={{ color: 'var(--sub)' }}>
+                <span>尚未解锁（武术家 / 梦境旅人 / 大明星）</span>
+                <span />
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* 节 3 · 进度录入（保存/识别按钮与提示留在 `.pgsec` 外 —— 内页对
+          `> .btnrow2` / `> .saveMsg` 有直系子对齐规则，包进卡里会双重内缩） */}
+      <div className="pgsec">
+        <div className="pgsec-t">进度录入（新号的当前数值，改完点保存）</div>
+        <div className="pgsec-c">
+          <div className="plinedit" id="planEdit">
+            {(
+              [
+                ['力', '力量'],
+                ['智', '智力'],
+                ['魅', '魅力'],
+                ['工分', '工分'],
+                ['金币', '金币'],
+              ] as const
+            ).map(([k, label]) => (
+              <label key={k}>
+                {label}
+                <input
+                  type="number"
+                  min={0}
+                  value={String(edit[k] ?? 0)}
+                  onChange={(e) => setOne(k, e.target.value)}
+                />
+              </label>
+            ))}
+            <div className="planeditrow">
+              <span>学园：</span>
+              <button
+                type="button"
+                className={'sw' + (edit['初级毕业'] ? ' on' : '')}
+                onClick={() => setOne('初级毕业', !edit['初级毕业'])}
+              />
+              <span>初级毕业</span>
+              <button
+                type="button"
+                className={'sw' + (edit['中级毕业'] ? ' on' : '')}
+                onClick={() => setOne('中级毕业', !edit['中级毕业'])}
+              />
+              <span>中级毕业</span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -202,48 +217,58 @@ export function PlanPage() {
         {msg}
       </div>
 
-      <div className="subh">阶梯路线</div>
-      <div className="plansteps" id="planSteps">
-        {(d.steps || []).map((s, i) => {
-          let cls = 'st'
-          let dot = '○'
-          if (s[2]) {
-            cls += ' done'
-            dot = '✅'
-          } else if (!firstOpen) {
-            cls += ' cur'
-            dot = '▶'
-            firstOpen = true
-          }
-          return (
-            <div className={cls} key={`${s[0]}-${i}`}>
-              <span className="dot2">{dot}</span>
-              <span className="tx">{`${s[0]} · ${s[1]}`}</span>
-              <span className="pr">{s[3]}</span>
-            </div>
-          )
-        })}
-      </div>
-      <div className="plannote">
-        隐藏线解锁有概率性：数值达标只进入候选，实际以职业树实测为准（哨兵每节课后检测）。
+      {/* 节 4 · 阶梯路线（步骤表 + 概率说明同一张卡） */}
+      <div className="pgsec">
+        <div className="pgsec-t">阶梯路线</div>
+        <div className="pgsec-c">
+          <div className="plansteps" id="planSteps">
+            {(d.steps || []).map((s, i) => {
+              let cls = 'st'
+              let dot = '○'
+              if (s[2]) {
+                cls += ' done'
+                dot = '✅'
+              } else if (!firstOpen) {
+                cls += ' cur'
+                dot = '▶'
+                firstOpen = true
+              }
+              return (
+                <div className={cls} key={`${s[0]}-${i}`}>
+                  <span className="dot2">{dot}</span>
+                  <span className="tx">{`${s[0]} · ${s[1]}`}</span>
+                  <span className="pr">{s[3]}</span>
+                </div>
+              )
+            })}
+          </div>
+          <div className="plannote">
+            隐藏线解锁有概率性：数值达标只进入候选，实际以职业树实测为准（哨兵每节课后检测）。
+          </div>
+        </div>
       </div>
 
-      <div className="subh">
-        8 线解锁状态（见习 / 初级）{' '}
-        <span id="planLinesMeta" style={{ fontWeight: 400, fontSize: 10.5 }}>
-          {d.lines_meta || ''}
-        </span>
-      </div>
-      <div className="planlines" id="planLines">
-        {(d.lines || []).map((l) => (
-          <div className="ln" key={l.name}>
-            <span>{l.name}</span>
-            <span>
-              <span className={'chipx' + (l.jr ? ' ok' : '')}>见习</span>
-              <span className={'chipx' + (l.ch ? ' ok' : '')}>初级</span>
-            </span>
+      {/* 节 5 · 8 线解锁状态 */}
+      <div className="pgsec">
+        <div className="pgsec-t">
+          8 线解锁状态（见习 / 初级）{' '}
+          <span id="planLinesMeta" style={{ fontWeight: 400, fontSize: 10.5 }}>
+            {d.lines_meta || ''}
+          </span>
+        </div>
+        <div className="pgsec-c">
+          <div className="planlines" id="planLines">
+            {(d.lines || []).map((l) => (
+              <div className="ln" key={l.name}>
+                <span>{l.name}</span>
+                <span>
+                  <span className={'chipx' + (l.jr ? ' ok' : '')}>见习</span>
+                  <span className={'chipx' + (l.ch ? ' ok' : '')}>初级</span>
+                </span>
+              </div>
+            ))}
           </div>
-        ))}
+        </div>
       </div>
     </>
   )

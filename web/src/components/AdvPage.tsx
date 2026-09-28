@@ -152,163 +152,178 @@ export function AdvPage() {
 
   return (
     <>
-      <div className="navmeta" id="advMeta" style={{ fontWeight: 400, fontSize: 10.5, display: 'block', marginTop: 4 }}>
-        {meta}
-      </div>
-
-      <div className="advcap" id="advDateRow" style={{ margin: '-2px 0 4px' }}>
-        统计范围{' '}
-        <select
-          value={d.date}
-          style={{ font: 'inherit', padding: '1px 4px' }}
-          onChange={(e) => {
-            setSel(null)
-            setDate(e.target.value)
-          }}
-        >
-          {(d.dates || []).map((dt) => (
-            <option key={dt} value={dt}>
-              {dt === d.today ? '今天' : dt === d.yesterday ? '昨天' : dt.slice(5).replace('-', '/')}
-            </option>
-          ))}
-          <option value="all">全部</option>
-        </select>
-      </div>
-
-      <div className="workline">
-        <span className="big" id="advNet" style={{ color: d.net > 0 ? 'var(--gold)' : d.net < 0 ? '#dc2626' : undefined }}>
-          {fmtNet(d.net)}
-        </span>
-        <span className="hint" id="advNetHint">
-          金币收益合计（结算页口径） · 平均 {d.avg > 0 ? '+' : ''}
-          {d.avg}/把
-        </span>
-      </div>
-      <div className="subline" id="advSub">
-        有收益 {d.win} 把 · 零收益 {d.zero} 把
-      </div>
-
-      <div className="advchips" id="advChips">
-        {(d.gains || []).map((g) => (
-          <span className="chip" key={g[0]}>
-            {g[0]} +{g[2]} ×{g[1]}
-          </span>
-        ))}
-      </div>
-
-      <div className="advtip" id="advTip">
-        {tip}
-      </div>
-
-      <div className="advcap">累计收益曲线（金币）</div>
-      <svg className="advchart" viewBox="0 0 340 84" {...bind('cum', d)}>
-        <line x1="0" y1="42" x2={W} y2="42" stroke="#e2e5ec" strokeWidth="1" strokeDasharray="4 4" />
-        {(() => {
-          const ys = cum.map((p) => p[1])
-          const mx = Math.max(10, ...ys.map((v) => Math.abs(v))) * 1.15
-          return (
-            <>
-              {cum.length > 1 ? (
-                <polyline
-                  points={cum.map((p) => `${sx(p[0], tx).toFixed(1)},${syMoney(p[1], mx).toFixed(1)}`).join(' ')}
-                  fill="none"
-                  stroke="#ea580c"
-                  strokeWidth="2"
-                  strokeLinejoin="round"
-                />
-              ) : null}
-              {cum.length ? (
-                <circle
-                  cx={sx(cum[cum.length - 1]![0], tx).toFixed(1)}
-                  cy={syMoney(cum[cum.length - 1]![1], mx).toFixed(1)}
-                  r="3"
-                  fill="#ea580c"
-                />
-              ) : null}
-              {sel?.chart === 'cum' && sel.k in cumMap ? (
-                <>
-                  <line
-                    x1={sx(sel.k, tx).toFixed(1)}
-                    y1="4"
-                    x2={sx(sel.k, tx).toFixed(1)}
-                    y2="80"
-                    stroke="#94a3b8"
-                    strokeWidth="1"
-                    strokeDasharray="3 3"
-                  />
-                  <circle
-                    cx={sx(sel.k, tx).toFixed(1)}
-                    cy={syMoney(cumMap[sel.k] ?? 0, mx).toFixed(1)}
-                    r="4"
-                    fill="#ea580c"
-                    stroke="#fff"
-                    strokeWidth="1.5"
-                  />
-                </>
-              ) : null}
-            </>
-          )
-        })()}
-      </svg>
-
-      <div className="advcap">单次收益散点（橙虚线=平均）</div>
-      <svg className="advchart" viewBox="0 0 340 84" {...bind('pts', d)}>
-        <line x1="0" y1="42" x2={W} y2="42" stroke="#e2e5ec" strokeWidth="1" strokeDasharray="4 4" />
-        {(() => {
-          const ys = pts.map((p) => p[1])
-          const mx = Math.max(10, ...ys.map((v) => Math.abs(v))) * 1.2
-          return (
-            <>
-              {d.avg != null ? (
-                <line
-                  x1="0"
-                  y1={syMoney(d.avg, mx).toFixed(1)}
-                  x2={W}
-                  y2={syMoney(d.avg, mx).toFixed(1)}
-                  stroke="#f59e0b"
-                  strokeWidth="1"
-                  strokeDasharray="5 4"
-                />
-              ) : null}
-              {pts.map((p) => (
-                <circle
-                  key={p[0]}
-                  cx={sx(p[0], tx).toFixed(1)}
-                  cy={syMoney(p[1], mx).toFixed(1)}
-                  r="2.2"
-                  fill="#0ea5e9"
-                  opacity=".85"
-                />
+      {/* 节 1 · 顶部信息：meta 当卡外小标题，统计范围与本次读数进白卡 */}
+      <div className="pgsec">
+        <div className="pgsec-t" id="advMeta">
+          {meta}
+        </div>
+        <div className="pgsec-c">
+          <div className="advcap" id="advDateRow" style={{ margin: '0 0 4px' }}>
+            统计范围{' '}
+            <select
+              value={d.date}
+              style={{ font: 'inherit', padding: '1px 4px' }}
+              onChange={(e) => {
+                setSel(null)
+                setDate(e.target.value)
+              }}
+            >
+              {(d.dates || []).map((dt) => (
+                <option key={dt} value={dt}>
+                  {dt === d.today ? '今天' : dt === d.yesterday ? '昨天' : dt.slice(5).replace('-', '/')}
+                </option>
               ))}
-              {sel?.chart === 'pts' && sel.k in dlMap ? (
-                <>
-                  <line
-                    x1={sx(sel.k, tx).toFixed(1)}
-                    y1="4"
-                    x2={sx(sel.k, tx).toFixed(1)}
-                    y2="80"
-                    stroke="#94a3b8"
-                    strokeWidth="1"
-                    strokeDasharray="3 3"
-                  />
-                  <circle
-                    cx={sx(sel.k, tx).toFixed(1)}
-                    cy={syMoney(dlMap[sel.k] ?? 0, mx).toFixed(1)}
-                    r="4"
-                    fill="#0ea5e9"
-                    stroke="#fff"
-                    strokeWidth="1.5"
-                  />
-                </>
-              ) : null}
-            </>
-          )
-        })()}
-      </svg>
+              <option value="all">全部</option>
+            </select>
+          </div>
 
+          <div className="workline">
+            <span className="big" id="advNet" style={{ color: d.net > 0 ? 'var(--gold)' : d.net < 0 ? '#dc2626' : undefined }}>
+              {fmtNet(d.net)}
+            </span>
+            <span className="hint" id="advNetHint">
+              金币收益合计（结算页口径） · 平均 {d.avg > 0 ? '+' : ''}
+              {d.avg}/把
+            </span>
+          </div>
+          <div className="subline" id="advSub">
+            有收益 {d.win} 把 · 零收益 {d.zero} 把
+          </div>
+
+          <div className="advchips" id="advChips">
+            {(d.gains || []).map((g) => (
+              <span className="chip" key={g[0]}>
+                {g[0]} +{g[2]} ×{g[1]}
+              </span>
+            ))}
+          </div>
+
+          <div className="advtip" id="advTip">
+            {tip}
+          </div>
+        </div>
+      </div>
+
+      {/* 节 2 · 累计收益曲线 */}
+      <div className="pgsec">
+        <div className="pgsec-t">累计收益曲线（金币）</div>
+        <div className="pgsec-c">
+          <svg className="advchart" viewBox="0 0 340 84" {...bind('cum', d)}>
+            <line x1="0" y1="42" x2={W} y2="42" stroke="#e2e5ec" strokeWidth="1" strokeDasharray="4 4" />
+            {(() => {
+              const ys = cum.map((p) => p[1])
+              const mx = Math.max(10, ...ys.map((v) => Math.abs(v))) * 1.15
+              return (
+                <>
+                  {cum.length > 1 ? (
+                    <polyline
+                      points={cum.map((p) => `${sx(p[0], tx).toFixed(1)},${syMoney(p[1], mx).toFixed(1)}`).join(' ')}
+                      fill="none"
+                      stroke="#ea580c"
+                      strokeWidth="2"
+                      strokeLinejoin="round"
+                    />
+                  ) : null}
+                  {cum.length ? (
+                    <circle
+                      cx={sx(cum[cum.length - 1]![0], tx).toFixed(1)}
+                      cy={syMoney(cum[cum.length - 1]![1], mx).toFixed(1)}
+                      r="3"
+                      fill="#ea580c"
+                    />
+                  ) : null}
+                  {sel?.chart === 'cum' && sel.k in cumMap ? (
+                    <>
+                      <line
+                        x1={sx(sel.k, tx).toFixed(1)}
+                        y1="4"
+                        x2={sx(sel.k, tx).toFixed(1)}
+                        y2="80"
+                        stroke="#94a3b8"
+                        strokeWidth="1"
+                        strokeDasharray="3 3"
+                      />
+                      <circle
+                        cx={sx(sel.k, tx).toFixed(1)}
+                        cy={syMoney(cumMap[sel.k] ?? 0, mx).toFixed(1)}
+                        r="4"
+                        fill="#ea580c"
+                        stroke="#fff"
+                        strokeWidth="1.5"
+                      />
+                    </>
+                  ) : null}
+                </>
+              )
+            })()}
+          </svg>
+        </div>
+      </div>
+
+      {/* 节 3 · 单次收益散点 */}
+      <div className="pgsec">
+        <div className="pgsec-t">单次收益散点（橙虚线=平均）</div>
+        <div className="pgsec-c">
+          <svg className="advchart" viewBox="0 0 340 84" {...bind('pts', d)}>
+            <line x1="0" y1="42" x2={W} y2="42" stroke="#e2e5ec" strokeWidth="1" strokeDasharray="4 4" />
+            {(() => {
+              const ys = pts.map((p) => p[1])
+              const mx = Math.max(10, ...ys.map((v) => Math.abs(v))) * 1.2
+              return (
+                <>
+                  {d.avg != null ? (
+                    <line
+                      x1="0"
+                      y1={syMoney(d.avg, mx).toFixed(1)}
+                      x2={W}
+                      y2={syMoney(d.avg, mx).toFixed(1)}
+                      stroke="#f59e0b"
+                      strokeWidth="1"
+                      strokeDasharray="5 4"
+                    />
+                  ) : null}
+                  {pts.map((p) => (
+                    <circle
+                      key={p[0]}
+                      cx={sx(p[0], tx).toFixed(1)}
+                      cy={syMoney(p[1], mx).toFixed(1)}
+                      r="2.2"
+                      fill="#0ea5e9"
+                      opacity=".85"
+                    />
+                  ))}
+                  {sel?.chart === 'pts' && sel.k in dlMap ? (
+                    <>
+                      <line
+                        x1={sx(sel.k, tx).toFixed(1)}
+                        y1="4"
+                        x2={sx(sel.k, tx).toFixed(1)}
+                        y2="80"
+                        stroke="#94a3b8"
+                        strokeWidth="1"
+                        strokeDasharray="3 3"
+                      />
+                      <circle
+                        cx={sx(sel.k, tx).toFixed(1)}
+                        cy={syMoney(dlMap[sel.k] ?? 0, mx).toFixed(1)}
+                        r="4"
+                        fill="#0ea5e9"
+                        stroke="#fff"
+                        strokeWidth="1.5"
+                      />
+                    </>
+                  ) : null}
+                </>
+              )
+            })()}
+          </svg>
+        </div>
+      </div>
+
+      {/* 节 4 · 状态曲线（只有有 stats 时才在；配色说明留在标题行） */}
       {hasStats ? (
-        <>
-          <div className="advcap" id="capStats">
+        <div className="pgsec">
+          <div className="pgsec-t" id="capStats">
             <span style={{ color: '#16a34a' }}>体力</span> / <span style={{ color: '#0891b2' }}>清洁</span> /{' '}
             <span style={{ color: '#d97706' }}>心情</span>（红虚线=阈值
             <span id="capThr">
@@ -317,103 +332,110 @@ export function AdvPage() {
             </span>
             ，红竖线=护理）
           </div>
-          <svg className="advchart" viewBox="0 0 340 84" {...bind('stats', d)}>
-            <line
-              x1="0"
-              y1={syState(d.care_energy ?? 60).toFixed(1)}
-              x2={W}
-              y2={syState(d.care_energy ?? 60).toFixed(1)}
-              stroke="#ef4444"
-              strokeWidth="1"
-              strokeDasharray="5 4"
-              opacity=".7"
-            />
-            {(
-              [
-                [1, '#16a34a'],
-                [2, '#0891b2'],
-                [3, '#d97706'],
-              ] as const
-            ).map(([idx, col]) => {
-              const rows2 = stats.filter((r) => r[idx] != null)
-              if (rows2.length < 2) return null
-              return (
-                <g key={idx}>
-                  <polyline
-                    points={rows2
-                      .map((r) => `${sx(r[0], tx).toFixed(1)},${syState(r[idx] ?? 0).toFixed(1)}`)
-                      .join(' ')}
-                    fill="none"
-                    stroke={col}
-                    strokeWidth="1.8"
+          <div className="pgsec-c">
+            <svg className="advchart" viewBox="0 0 340 84" {...bind('stats', d)}>
+              <line
+                x1="0"
+                y1={syState(d.care_energy ?? 60).toFixed(1)}
+                x2={W}
+                y2={syState(d.care_energy ?? 60).toFixed(1)}
+                stroke="#ef4444"
+                strokeWidth="1"
+                strokeDasharray="5 4"
+                opacity=".7"
+              />
+              {(
+                [
+                  [1, '#16a34a'],
+                  [2, '#0891b2'],
+                  [3, '#d97706'],
+                ] as const
+              ).map(([idx, col]) => {
+                const rows2 = stats.filter((r) => r[idx] != null)
+                if (rows2.length < 2) return null
+                return (
+                  <g key={idx}>
+                    <polyline
+                      points={rows2
+                        .map((r) => `${sx(r[0], tx).toFixed(1)},${syState(r[idx] ?? 0).toFixed(1)}`)
+                        .join(' ')}
+                      fill="none"
+                      stroke={col}
+                      strokeWidth="1.8"
+                    />
+                    <circle
+                      cx={sx(rows2[rows2.length - 1]![0], tx).toFixed(1)}
+                      cy={syState(rows2[rows2.length - 1]![idx] ?? 0).toFixed(1)}
+                      r="2.6"
+                      fill={col}
+                    />
+                  </g>
+                )
+              })}
+              {stats
+                .filter((r) => r[4] === 1)
+                .map((r) => (
+                  <line
+                    key={`care-${r[0]}`}
+                    x1={sx(r[0], tx).toFixed(1)}
+                    y1={PAD}
+                    x2={sx(r[0], tx).toFixed(1)}
+                    y2={H - PAD}
+                    stroke="#ef4444"
+                    strokeWidth="1"
+                    strokeDasharray="2 3"
+                    opacity=".6"
                   />
-                  <circle
-                    cx={sx(rows2[rows2.length - 1]![0], tx).toFixed(1)}
-                    cy={syState(rows2[rows2.length - 1]![idx] ?? 0).toFixed(1)}
-                    r="2.6"
-                    fill={col}
-                  />
-                </g>
-              )
-            })}
-            {stats
-              .filter((r) => r[4] === 1)
-              .map((r) => (
-                <line
-                  key={`care-${r[0]}`}
-                  x1={sx(r[0], tx).toFixed(1)}
-                  y1={PAD}
-                  x2={sx(r[0], tx).toFixed(1)}
-                  y2={H - PAD}
-                  stroke="#ef4444"
-                  strokeWidth="1"
-                  strokeDasharray="2 3"
-                  opacity=".6"
-                />
-              ))}
-          </svg>
-        </>
+                ))}
+            </svg>
+          </div>
+        </div>
       ) : null}
 
-      <div className="advcap">
-        逐次明细（新→旧）{' '}
-        <button
-          className={'minibtn' + (showAll ? ' on' : '')}
-          style={{ float: 'right', marginTop: -2 }}
-          onClick={() => setShowAll((v) => !v)}
-        >
-          {showAll ? '全部' : '仅变化'}
-        </button>
-      </div>
-      <div className="advlist" id="advList">
-        {rows.length ? (
-          rows.map((r) => {
-            const v = r[2]
-            const cls = v != null && v > 0 ? 'pos' : v != null && v < 0 ? 'neg' : 'zero'
-            const vt = v == null ? '?' : v > 0 ? `+${v}` : String(v)
-            return (
-              <div className="arow" key={`${r[0]}-${r[1]}`}>
-                <span className="ai">
-                  #{r[0]} {(r[1] || '').slice(0, 11)}
-                </span>
-                <span className="ag">
-                  {r[3] || ''}
-                  {r[4] ? (
-                    <>
-                      {r[3] ? ' ' : ''}
-                      <span style={{ color: '#dc2626' }}>扣费{r[4]}</span>
-                    </>
-                  ) : null}
-                </span>
-                <span className={`av ${cls}`}>{vt}</span>
+      {/* 节 5 · 逐次明细：筛选钮留在标题行（自带 float:right），列表进白卡 */}
+      <div className="pgsec">
+        <div className="pgsec-t">
+          逐次明细（新→旧）{' '}
+          <button
+            className={'minibtn' + (showAll ? ' on' : '')}
+            style={{ float: 'right', marginTop: -2 }}
+            onClick={() => setShowAll((v) => !v)}
+          >
+            {showAll ? '全部' : '仅变化'}
+          </button>
+        </div>
+        <div className="pgsec-c">
+          <div className="advlist" id="advList">
+            {rows.length ? (
+              rows.map((r) => {
+                const v = r[2]
+                const cls = v != null && v > 0 ? 'pos' : v != null && v < 0 ? 'neg' : 'zero'
+                const vt = v == null ? '?' : v > 0 ? `+${v}` : String(v)
+                return (
+                  <div className="arow" key={`${r[0]}-${r[1]}`}>
+                    <span className="ai">
+                      #{r[0]} {(r[1] || '').slice(0, 11)}
+                    </span>
+                    <span className="ag">
+                      {r[3] || ''}
+                      {r[4] ? (
+                        <>
+                          {r[3] ? ' ' : ''}
+                          <span style={{ color: '#dc2626' }}>扣费{r[4]}</span>
+                        </>
+                      ) : null}
+                    </span>
+                    <span className={`av ${cls}`}>{vt}</span>
+                  </div>
+                )
+              })
+            ) : (
+              <div className="arow">
+                <span className="ag">暂无记录</span>
               </div>
-            )
-          })
-        ) : (
-          <div className="arow">
-            <span className="ag">暂无记录</span>
+            )}
           </div>
-        )}
+        </div>
       </div>
     </>
   )
