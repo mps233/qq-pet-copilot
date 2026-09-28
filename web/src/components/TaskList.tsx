@@ -31,11 +31,14 @@ function RowBody({
   t,
   pendingKey,
   nowDate,
+  onToggle,
 }: {
   k: string
   t: QueueTaskState | undefined
   pendingKey: string
   nowDate: string
+  /** 点勾选框切换该任务启用状态（写回 `<k>_enabled`） */
+  onToggle: (k: string, on: boolean) => void
 }) {
   const st = t?.state ?? ''
   const on = st !== 'disabled'
@@ -57,7 +60,17 @@ function RowBody({
           <span className={'mdet' + (det.cls ? ` ${det.cls}` : '')}>{det.text}</span>
         ) : null}
       </span>
-      <span className={'mcb' + (on ? ' on' : '')} data-k={k} />
+      <span
+        className={'mcb' + (on ? ' on' : '')}
+        data-k={k}
+        // 勾选框：阻止冒泡，免得 dnd-kit 挂在行上的 listeners 把这次按下当成拖拽起手
+        // （legacy 是在 pointerdown 里 `if(e.target.closest('.mcb')) return` 做同样的事）
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation()
+          onToggle(k, !on)
+        }}
+      />
     </>
   )
 }
@@ -78,6 +91,7 @@ function SortableRow(props: {
   t: QueueTaskState | undefined
   pendingKey: string
   nowDate: string
+  onToggle: (k: string, on: boolean) => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: props.k,
@@ -102,7 +116,13 @@ function SortableRow(props: {
   )
 }
 
-function StaticRow(props: { k: string; t: QueueTaskState | undefined; pendingKey: string; nowDate: string }) {
+function StaticRow(props: {
+  k: string
+  t: QueueTaskState | undefined
+  pendingKey: string
+  nowDate: string
+  onToggle: (k: string, on: boolean) => void
+}) {
   return (
     <div className={rowClass(props.k, props.t, props.pendingKey)} data-k={props.k}>
       <RowBody {...props} />
@@ -112,7 +132,16 @@ function StaticRow(props: { k: string; t: QueueTaskState | undefined; pendingKey
 
 /** 任务列表：分两组 —— 「日常轮巡」= 循环类，顺序固定不可拖；
  *  「任务顺序」= 其余，长按拖动排序，松手写回 tasks.order / tasks.main_order。 */
-export function TaskList({ data, onReorder }: { data: Data; onReorder: (order: string[]) => void }) {
+export function TaskList({
+  data,
+  onReorder,
+  onToggle,
+}: {
+  data: Data
+  onReorder: (order: string[]) => void
+  /** 点勾选框切启用 —— 对应 legacy 里挂在 #taskList 上的那个 click 委托 */
+  onToggle: (k: string, on: boolean) => void
+}) {
   const qt = data.queue.tasks || {}
   const nowDate = (data.now || '').slice(0, 10)
   const pendingKey = data.queue.pending ? data.queue.pending_key || '' : ''
@@ -151,7 +180,7 @@ export function TaskList({ data, onReorder }: { data: Data; onReorder: (order: s
               <span className="tghint">按间隔巡检 · 顺序固定</span>
             </div>
             {loop.map((k) => (
-              <StaticRow key={k} k={k} t={qt[k]} pendingKey={pendingKey} nowDate={nowDate} />
+              <StaticRow key={k} k={k} t={qt[k]} pendingKey={pendingKey} nowDate={nowDate} onToggle={onToggle} />
             ))}
           </>
         ) : null}
@@ -171,7 +200,7 @@ export function TaskList({ data, onReorder }: { data: Data; onReorder: (order: s
             >
               <SortableContext items={rest} strategy={verticalListSortingStrategy}>
                 {rest.map((k) => (
-                  <SortableRow key={k} k={k} t={qt[k]} pendingKey={pendingKey} nowDate={nowDate} />
+                  <SortableRow key={k} k={k} t={qt[k]} pendingKey={pendingKey} nowDate={nowDate} onToggle={onToggle} />
                 ))}
               </SortableContext>
             </DndContext>

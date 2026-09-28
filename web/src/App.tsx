@@ -252,6 +252,7 @@ export default function App() {
           onStart={() => void start()}
           onStop={() => void stop()}
           onReorder={(o) => void onReorder(o)}
+          onToggle={(k, on) => void saveOne({ [`${k}_enabled`]: on })}
         />
       )
     }

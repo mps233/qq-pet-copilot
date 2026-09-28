@@ -21,6 +21,7 @@ export function Overview({
   onStart,
   onStop,
   onReorder,
+  onToggle,
 }: {
   data: Data
   busy: string
@@ -29,6 +30,8 @@ export function Overview({
   onStart: () => void
   onStop: () => void
   onReorder: (order: string[]) => void
+  /** 点任务行勾选框切启用（写回 `<k>_enabled`） */
+  onToggle: (k: string, on: boolean) => void
 }) {
   const [petOpen, setPetOpen] = useState(false)
   const [bgOpen, setBgOpen] = useState(false)
@@ -100,7 +103,7 @@ export function Overview({
 
       {/* 中部场景层（官方是 3D 宠物；这里放任务队列） */}
       <div className="flt scene">
-        <TaskList data={data} onReorder={onReorder} />
+        <TaskList data={data} onReorder={onReorder} onToggle={onToggle} />
       </div>
 
       <FuncBar
