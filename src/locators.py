@@ -69,12 +69,19 @@ def ocr_screen(screen: np.ndarray) -> list[tuple[str, int, int, float]]:
 # 学习/工作选择框共用前缀：三条 xpath 仅最后一段 FrameLayout 序号不同。
 # 锚定"嵌套双层 RecyclerView"（选课面板里的卡片轮播），真机验证命中；
 # 之前从 ckj 出发的绝对路径层级深、随页面结构漂移，容易整链失效。
-# 选课/选工作三栏容器：纯子节点步进（中间不再用 // 后代搜索），u2 引擎解析更快更稳。
-# 外层 RecyclerView(首命中) -> FL[1] -> FL[1] -> 内层 RecyclerView[1] -> FL[1]（课程卡容器）
+# 三栏容器：头部两层锚定后，中间改用 // 后代搜索找内层 RecyclerView，尾部保持纯步进。
+# 外层 RecyclerView(首命中) -> FL[1] -> FL[1] ->（中间层数不固定）-> 内层 RecyclerView[1] -> FL[1]
+# 中间之所以不能写死 '/FL[1]'：2026-09-24 实测游戏更新后中间多包了一层 FrameLayout
+# （实际结构是 FL[1]/FL[1]/FL[1]/RecyclerView[1]），原 "/" 步进让整条链断掉 ——
+# select_box_1/3 全部定位失败，打工任务报"未定位到选择框，无法归位"，
+# 重试/回主页/重启恢复三级全挂后发告警退出；而 _bounds_cache 是模块级缓存，
+# 进程内早已缓存的旧 bounds 掩盖了这个问题，直到调度器重启才暴露。
+# 现在头部两层仍用纯步进（解析快，且不会被页面下方其它 RecyclerView 抢中），
+# 只把中间层数放开为 // —— 实测新旧结构都能命中同一个卡片容器。
 SELECT_BOX_XPATH = (
     '//androidx.recyclerview.widget.RecyclerView'
     '/android.widget.FrameLayout[1]/android.widget.FrameLayout[1]'
-    '/androidx.recyclerview.widget.RecyclerView[1]'
+    '//androidx.recyclerview.widget.RecyclerView[1]'
     '/android.widget.FrameLayout[1]'
 )
 
