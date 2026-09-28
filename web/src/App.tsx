@@ -3,6 +3,7 @@ import { TASK_GROUP, TASK_NAME, isLoopTask, runnerStart, runnerStop, saveSetting
 import { Overview, type PageKey } from './components/Overview'
 import { LogPage } from './components/LogPage'
 import { NavHead } from './components/NavHead'
+import { NotifyPage } from './components/NotifyPage'
 import { useData } from './lib/useData'
 import { useScene } from './lib/useScene'
 
@@ -63,6 +64,23 @@ export default function App() {
     }
   }, [reload])
 
+  /** 单字段保存（通知页的开关/文本框、设置页的表单都走这里）。
+   *  与 legacy 的「改动即自动保存」一致：后端 ruamel 往返写 config.yaml，下一轮生效。 */
+  const saveOne = useCallback(
+    async (updates: Record<string, unknown>) => {
+      try {
+        const r = await saveSettings(updates)
+        setOrderMsg(r.ok ? '已保存' : `保存失败：${r.rejected.join('、')}`)
+      } catch (e) {
+        setOrderMsg(`保存失败：${String(e)}`)
+      } finally {
+        window.setTimeout(() => setOrderMsg(''), 1800)
+        reload()
+      }
+    },
+    [reload],
+  )
+
   if (error && !data) {
     return (
       <div className="app">
@@ -104,6 +122,11 @@ export default function App() {
           <section className="card" data-page="log">
             <NavHead title="日志" onBack={() => setPage('main')} />
             <LogPage shots={data.shots ?? []} />
+          </section>
+        ) : page === 'notify' ? (
+          <section className="card" data-page="notify">
+            <NavHead title="通知" onBack={() => setPage('main')} />
+            <NotifyPage editable={data.editable ?? {}} onSave={saveOne} />
           </section>
         ) : (
           // 其余页面还没搬完：先给占位 + 回总览入口（旧界面 / 上功能是全的）
