@@ -17,6 +17,84 @@ export default function App() {
   const { data, error, reload } = useData(6000)
   const [busy, setBusy] = useState('')
   const [page, setPage] = useState<PageKey>('main')
+  /**
+   * 历史栈模型（与 legacy 的 showTab / popstate 一一对应）：
+   *   navDepth = 0（总览）/ 1（内页）/ 2（二级：设置 grp、日志子页）
+   *     往下一层   → pushState
+   *     同级互切   → replaceState（栈不增长）
+   *     回总览     → 一次退够（back 或 go(-navDepth)）
+   *     二级→别的内页 → 先退到总览再压目标（pendingTab 收尾）
+   *   **"返回"类操作绝不能 pushState** —— 按钮在压栈、手势在退栈，方向相反会退不回去。
+   *   这套是侧滑返回能用的前提；迁移时漏掉导致侧滑失效，这里补回来。
+   */
+  const navDepth = useRef(0)
+  const pendingTab = useRef<PageKey | null>(null)
+
+  const go = useCallback((name: PageKey) => {
+    const target = name === 'main' ? 0 : 1
+    const url = name === 'main' ? location.pathname : `?tab=${name}`
+    try {
+      if (target > navDepth.current) {
+        navDepth.current = target
+        history.pushState({ tab: name }, '', url)
+      } else if (target === navDepth.current) {
+        if (target === 1) history.replaceState({ tab: name }, '', url)
+      } else if (target === 0) {
+        const steps = navDepth.current
+        navDepth.current = 0
+        if (steps === 1) history.back()
+        else history.go(-steps)
+      } else {
+        pendingTab.current = name
+        navDepth.current = 0
+        history.go(-2)
+      }
+    } catch {
+      /* 某些环境禁 pushState，退化成纯状态切换 */
+    }
+    setPage(name)
+  }, [])
+
+  // 侧滑 / 浏览器返回
+  useEffect(() => {
+    const onPop = (e: PopStateEvent) => {
+      const st = (e.state || {}) as { tab?: PageKey }
+      if (pendingTab.current) {
+        // 跳级退栈的收尾：落回总览后再压目标页
+        const t = pendingTab.current
+        pendingTab.current = null
+        try {
+          history.pushState({ tab: t }, '', `?tab=${t}`)
+        } catch {
+          /* 忽略 */
+        }
+        navDepth.current = 1
+        setPage(t)
+        return
+      }
+      // state 拿不到就回退到 URL —— pushState 时 URL 一定写了 ?tab=xxx。
+      // 实测（headless）history.state 读出来是 null，不能只依赖它。
+      const fromUrl = new URLSearchParams(location.search).get('tab') as PageKey | null
+      const t: PageKey = (st.tab as PageKey) || fromUrl || 'main'
+      navDepth.current = t === 'main' ? 0 : 1
+      setPage(t)
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+
+  // 直开 ?tab=xxx（便于分享链接 / 截图 / 调试）
+  useEffect(() => {
+    try {
+      const t = new URLSearchParams(location.search).get('tab') as PageKey | null
+      if (t && ['adv', 'plan', 'log', 'notify', 'set', 'shot'].includes(t)) {
+        setPage(t)
+        navDepth.current = 1
+      }
+    } catch {
+      /* 忽略 */
+    }
+  }, [])
   const [orderMsg, setOrderMsg] = useState('')
   /** 切页滑入动画：只记"方向"这个 class，播完清掉（清掉才能在下一次切页重播）。
    *  首次加载不播 —— 用 ref 记上一页、为 null 就跳过（不能用 state 判断，第一次
@@ -156,34 +234,34 @@ export default function App() {
             data={data}
             busy={busy}
             scene={scene}
-            onNav={setPage}
+            onNav={go}
             onStart={() => void start()}
             onStop={() => void stop()}
             onReorder={(o) => void onReorder(o)}
           />
         ) : page === 'log' ? (
           <section className="card" data-page="log">
-            <NavHead title="日志" onBack={() => setPage('main')} />
+            <NavHead title="日志" onBack={() => go('main')} />
             <LogPage shots={data.shots ?? []} />
           </section>
         ) : page === 'shot' ? (
           <section className="shotpage" data-page="shot">
-            <NavHead title="实时画面" onBack={() => setPage('main')} />
+            <NavHead title="实时画面" onBack={() => go('main')} />
             <LivePage />
           </section>
         ) : page === 'adv' ? (
           <section className="card" data-page="adv">
-            <NavHead title="冒险记录" onBack={() => setPage('main')} />
+            <NavHead title="冒险记录" onBack={() => go('main')} />
             <AdvPage />
           </section>
         ) : page === 'plan' ? (
           <section className="card" data-page="plan">
-            <NavHead title="职业解锁计划" onBack={() => setPage('main')} />
+            <NavHead title="职业解锁计划" onBack={() => go('main')} />
             <PlanPage />
           </section>
         ) : page === 'notify' ? (
           <section className="card" data-page="notify">
-            <NavHead title="通知" onBack={() => setPage('main')} />
+            <NavHead title="通知" onBack={() => go('main')} />
             <NotifyPage editable={data.editable ?? {}} onSave={saveOne} />
           </section>
         ) : page === 'set' ? (
