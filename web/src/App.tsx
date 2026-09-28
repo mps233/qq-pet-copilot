@@ -1,80 +1,96 @@
-import { useEffect, useState } from 'react'
-import { fetchData, TASK_NAME, type Data } from './api'
+import { useState } from 'react'
+import { runnerStart, runnerStop } from './api'
+import { Overview, type PageKey } from './components/Overview'
+import { useData } from './lib/useData'
 
-/** 迁移期第一版：只验证「React 能拿到与旧界面相同的数据」。
- *  跑通后再按旧界面的视觉逐块搬（胶囊行 / 任务列表 / 状态卡）。 */
+/** 迁移中的外壳：目前只渲染总览页；其余页（冒险/职业/日志/通知/设置/实时画面）
+ *  与拖拽、背景切换等交互按计划逐块搬。旧界面仍在 `/` 上原样服务，互不影响。 */
 export default function App() {
-  const [data, setData] = useState<Data | null>(null)
-  const [err, setErr] = useState('')
+  const { data, error, reload } = useData(6000)
+  const [busy, setBusy] = useState('')
+  const [page, setPage] = useState<PageKey>('main')
 
-  useEffect(() => {
-    let alive = true
-    const tick = async () => {
-      try {
-        const d = await fetchData()
-        if (alive) {
-          setData(d)
-          setErr('')
-        }
-      } catch (e) {
-        if (alive) setErr(String(e))
-      }
+  const start = async () => {
+    setBusy('start')
+    try {
+      await runnerStart()
+    } finally {
+      window.setTimeout(() => {
+        setBusy('')
+        reload()
+      }, 3000)
     }
-    void tick()
-    const t = window.setInterval(tick, 6000)
-    return () => {
-      alive = false
-      window.clearInterval(t)
+  }
+  const stop = async () => {
+    setBusy('stop')
+    try {
+      await runnerStop()
+    } finally {
+      window.setTimeout(() => {
+        setBusy('')
+        reload()
+      }, 3000)
     }
-  }, [])
+  }
 
-  if (err) return <pre style={{ padding: 16 }}>连接失败：{err}</pre>
-  if (!data) return <div style={{ padding: 16 }}>加载中…</div>
+  if (error && !data) {
+    return (
+      <div className="app">
+        <main>
+          <section className="home" data-page="main">
+            <div style={{ padding: 'calc(var(--u) * 40)', color: '#b91c1c' }}>
+              连接失败：{error}
+            </div>
+          </section>
+        </main>
+      </div>
+    )
+  }
 
-  const loopKeys = Object.keys(data.queue.tasks).filter((k) => TASK_NAME[k])
+  if (!data) {
+    return (
+      <div className="app">
+        <main>
+          <section className="home" data-page="main">
+            <div style={{ padding: 'calc(var(--u) * 40)', opacity: 0.6 }}>加载中…</div>
+          </section>
+        </main>
+      </div>
+    )
+  }
 
   return (
-    <div style={{ padding: 16, fontFamily: 'system-ui, sans-serif', lineHeight: 1.9 }}>
-      <h2 style={{ margin: '0 0 8px' }}>QQ 宠物托管 · React 版</h2>
-      <div style={{ opacity: 0.7, fontSize: 13 }}>迁移中 —— 数据链路已通，界面逐块搬</div>
-
-      <hr />
-
-      <div>
-        <b>调度器</b>：
-        {data.scheduler.alive ? `运行中 · 已跑 ${data.scheduler.uptime}` : '已停止'}
-        {data.scheduler.pid ? `（PID ${data.scheduler.pid}）` : ''}
-      </div>
-      <div>
-        <b>宠物</b>：{data.status.pet_name} · 金币 {data.status.coins} · 体力{' '}
-        {data.status.energy} · 清洁 {data.status.clean} · 心情 {data.status.mood}
-      </div>
-      <div>
-        <b>队列</b>：当前 {data.queue.current || '—'} · 待结算 {data.queue.pending || '—'} · 下一项{' '}
-        {data.queue.next || '—'} {data.queue.next_at}
-      </div>
-      <div>
-        <b>节奏</b>：可执行 {data.queue.ready} · 等待中 {data.queue.waiting}
-      </div>
-
-      <hr />
-
-      <div>
-        <b>任务状态</b>（{loopKeys.length} 项）
-      </div>
-      <table style={{ borderCollapse: 'collapse', fontSize: 14 }}>
-        <tbody>
-          {loopKeys.map((k) => (
-            <tr key={k}>
-              <td style={{ padding: '2px 12px 2px 0' }}>{TASK_NAME[k]}</td>
-              <td style={{ padding: '2px 12px 2px 0', opacity: 0.75 }}>
-                {data.queue.tasks[k]?.state ?? '—'}
-              </td>
-              <td style={{ opacity: 0.6 }}>{data.queue.tasks[k]?.next ?? ''}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="app">
+      <main>
+        {page === 'main' ? (
+          <Overview
+            data={data}
+            busy={busy}
+            onNav={setPage}
+            onStart={() => void start()}
+            onStop={() => void stop()}
+          />
+        ) : (
+          // 其余页面还没搬完：先给个占位 + 回总览的入口（旧界面 / 上功能是全的）
+          <section className="card" data-page={page}>
+            <div className="navhead">
+              <button className="backbtn" data-back="main" title="返回总览" onClick={() => setPage('main')}>
+                <img src="/qp-icons/official/off_l1_back.png" alt="" />
+              </button>
+              <span className="navtitle">
+                {({ adv: '冒险记录', plan: '职业解锁计划', log: '日志', notify: '通知', set: '设置', shot: '实时画面' } as Record<string, string>)[page] ?? page}
+              </span>
+            </div>
+            <div style={{ padding: 'calc(var(--u) * 20)', opacity: 0.72, lineHeight: 1.9 }}>
+              这一页还在迁移中。功能完整的旧界面在{' '}
+              <a href="/" style={{ color: '#c2410c' }}>
+                这里
+              </a>
+              。
+            </div>
+          </section>
+        )}
+      </main>
     </div>
   )
 }

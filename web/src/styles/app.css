@@ -1,0 +1,1499 @@
+/* ==========================================================================
+   QQ 宠物托管 · 仪表盘样式（重写版）
+   --------------------------------------------------------------------------
+   设计依据：qqpet_assets/web/UI_TREE_OFFICIAL.md
+     · 官方运行时 uiautomator dump（Kuikly 暴露的 content-desc + bounds）
+     · 逻辑画布 480dp；边距 20dp；圆钮 42dp；胶囊高 28dp；
+       左列圆钮 y=28/86/146/206（步进 60dp）；胶囊行 y=86/126（步进 40dp）
+     · 配色取自 Kuikly 反编译代码里的 ARGB 常量（非目测）
+   组织原则：token 只定义一次；结构分层（token → 基础 → 骨架 → 总览 → 卡片
+             → 表单 → 响应式 → 深色），避免历史版本的选择器重复覆盖。
+   ========================================================================== */
+
+/* ---------- 1. 设计 token（唯一数据源） ---------- */
+:root{
+  /* 画布与间距（官方 dp） */
+  --side:20px;          /* 左右边距（官方 x=20dp） */
+  --rbtn:42px;          /* 圆钮尺寸（官方 42×42dp） */
+  --cap-h:28px;         /* 胶囊高（官方 28dp） */
+  --cap-r:14px;         /* 胶囊圆角 = 高/2（全圆角） */
+  --step-btn:60px;      /* 左列圆钮步进（官方 y 28→86→146→206） */
+  --step-cap:40px;      /* 胶囊两行步进（官方 y 86→126） */
+  --gap-card:10px;      /* 卡片间距 */
+
+  /* 顶部三块（资料卡 / 胶囊两行 / 任务面板）的纵坐标与**统一间距**。
+     改 --gap-top 一个值，三处间隙同步变化，不会各改各的又跑偏。
+     历史值：资料卡→胶囊 12.2 / 胶囊两行 17 / 胶囊→面板 6.5（三个不等，
+     视觉上疏密不一：面板被胶囊贴住，两行胶囊又散开）。 */
+  --top-card:34.3;      /* 资料卡顶 y（官方 y=26.2，本机下移让开顶部安全区） */
+  --h-card:46;          /* 资料卡高（官方 46.2） */
+  --h-cap:23;           /* 胶囊行高：图标 23dp 外凸于 20dp 胶囊体（官方图标 22.3） */
+  --gap-top:12;         /* 顶部区块统一间距（TDesign 间距阶梯 12；官方资料卡→胶囊实测 13.8） */
+  /* 由上面几个值推出后续纵坐标（不要再手写数字，否则改了间距就对不上）：
+     胶囊区顶 = 资料卡顶 + 资料卡高 + 间距
+     任务面板顶 = 胶囊区顶 + 胶囊行高 + 间距 + 胶囊行高 + 间距 */
+  --top-caps:calc(var(--top-card) + var(--h-card) + var(--gap-top));
+  --top-scene:calc(var(--top-caps) + var(--h-cap) + var(--gap-top) + var(--h-cap) + var(--gap-top));
+
+  /* 暖色拟物底（官方房间背景的同色系） */
+  --bg:#FCF7ED;
+  /* 状态栏带采样色：iOS 独立 Web App（添加到主屏）的状态栏那条带由**系统**绘制，
+     DOM 够不到（WebKit bug 301994：内容不能画到状态栏下方）。它的颜色取
+     "页面背景色" —— iOS 18 及更早读 <meta name="theme-color">，iOS 26 起
+     theme-color 支持被移除、改为直接采样 html/body 的 background-color
+     （WebKit bug 309956 / 317153）。两条路都要对齐，否则顶部就是一条
+     与页面割裂的白带。取值 = 各房间背景图最顶部实测色。
+     按场景拆成独立 token（--qp-sb-*）而不是直接写 --qp-statusbar：
+     深色模式的覆盖写在 :root 里，而 html[data-scene] 特异性更高会把它压掉，
+     拆开后深色只需覆盖 --qp-sb-*，由 data-scene 那条统一取值。 */
+  --qp-sb-main:#D5A758;
+  --qp-sb-feed:#CA9F5B;
+  --qp-sb-shower:#E7BC6C;
+  --qp-sb-record:#CAA05C;
+  --qp-sb-store:#BAD2FE;
+  --qp-statusbar:var(--qp-sb-main);
+  --qp-bg2:#EDD18F;
+  --card:#F9EFDE;       /* 卡片/资料卡底（官方 #F9EFDE） */
+  --line:#EFE3CF;
+  --text:#723900;       /* 主文字：深棕（官方 #FF723900，出现 11 次） */
+  --sub:#9A7A4A;        /* 次级文字（暖色系降饱和） */
+  --strong:#521C00;     /* 强调文字（官方暖色池最深的 #FF521C00） */
+  --accent:#FF990F;     /* 主强调橙（官方 #FF990F） */
+  --ok:#64C900;         /* 清洁绿（官方 #FF64C900） */
+  --warn:#FF8000;       /* 心情橙（官方 #FFFF8000） */
+  --gold:#CA810D;       /* 金币（官方 #FFCA810D） */
+
+  /* 圆钮（左=功能入口 / 右=装饰入口，官方是两套） */
+  --btn-l-bg:#F9F1E2;   /* 左圆钮底（官方 #F9F1E2）：**已不用**，左四钮现走 --panel-bg，
+                           留着是记官方原色，想还原成官方样只要把 .rbtn 的 background 换回它 */
+  --btn-l-fg:#BE6321;   /* 左圆钮图标棕（官方 #FFBE6321） */
+  /* 纯黑半透明蒙版（只压暗、不改色相）——**右圆钮与胶囊共用同一份材质**，
+     见 .col-r .rbtn / .cap::before。改一处两边同步，不会各调各的又跑偏。 */
+  --mask-black:rgba(0,0,0,.28);
+  --btn-r-bg:var(--mask-black);     /* 右圆钮底 */
+  --btn-r-fg:#FFEA70;   /* 右圆钮图标亮黄 */
+
+  /* 胶囊（用户要求改为**与右圆钮同材质**的黑色半透明蒙版；
+     官方原色 #99E1B053（本色 #E1B053、压在暖黄背景上合成 #B69251）已弃用。
+     明暗模式**必须完全一致**：深色模式的 media query 里不覆盖这个 token
+     （15. 深色模式一节只换房间背景图）——所以白天黑夜都是同一层黑色蒙版。 */
+  --cap-bg:var(--mask-black);
+  --cap-fg:#FFFFFF;
+
+  /* 进度条 */
+  --track:rgba(222,184,110,.55);
+  --energy:#0099FF;     /* 体力（官方 #FF0099FF） */
+  --clean:#64C900;      /* 清洁 */
+  --mood:#FF8000;       /* 心情 */
+
+  /* 圆角阶梯（TDesign token，官方设计体系） */
+  --r-sm:6px; --r-md:10px; --r-lg:14px; --r-xl:18px;
+
+  /* 阴影（TDesign shadow-1，最轻一档 */
+  --sh-1:0 1px 10px rgba(120,85,30,.06),0 4px 5px rgba(120,85,30,.06);
+  --sh-2:0 2px 12px rgba(120,85,30,.12);
+
+  /* 玻璃面板材质：任务卡 .qpanel 与底部弧形栏 .deck **共用同一份**
+     （用户要求"底部那条栏的材质跟任务列表一样"）。以后调材质只改这里。
+     深色模式不覆盖这两项 —— 与 .qpanel 现状一致（深色下两边一起保持同一观感）。 */
+  --panel-bg:rgba(255,255,255,.62);
+  --panel-blur:blur(6px);
+  /* 「更白一档」的白玻璃：**资料卡 + 左侧 4 个功能圆钮共用这一份**（用户要求
+     "把 QQ宠物托管这个胶囊的背景透明度调低一点，更白一点"、"左边的 4 个按钮的背景
+     跟它一样"）。比 --panel-bg(.62) 更实：实测底色 (249,241,224) → (252,248,239)。
+     任务卡 .qpanel / 底栏 .deck 仍走 --panel-bg，右侧圆钮仍是 --btn-r-bg 黑蒙版。 */
+  --panel-bg-strong:rgba(255,255,255,.80);
+
+  /* 房间背景（由 JS 按 html[data-scene] 内联切换；这里只是首帧兜底，见下方注释） */
+  --qp-room-main:url('/qp-icons/bg/room-main.jpg?v=5');
+  --qp-room-feed:url('/qp-icons/bg/room-feed.jpg?v=5');
+  --qp-room-shower:url('/qp-icons/bg/room-shower.jpg?v=5');
+  --qp-room-record:url('/qp-icons/bg/room-record.jpg?v=5');
+  --qp-room-store:url('/qp-icons/bg/room-store.jpg?v=5');
+  --qp-room:var(--qp-room-main);
+  /* 1dp = 可用宽度/360（全局：设置页等非 .home 页面也要用） */
+  --u:var(--vu, calc(100vw / 360));
+}
+
+/* ---------- 2. 基础 ---------- */
+*{box-sizing:border-box}
+html{
+  margin:0;padding:0;height:100%;min-height:100%;
+  /* 用状态栏采样色而不是 --bg（米白）：总览页这张背景图是 cover + center top，
+     必然盖满视口，所以这个底色在页面上**看不见**，只被系统拿去画状态栏那条带；
+     而 iOS 26+ 采样它、iOS 18- 读 theme-color meta，两边取值保持一致。
+     内页另有 html[data-page]:not([data-page="main"]){background-color:#fff} 覆盖。 */
+  background-color:var(--qp-statusbar);
+  background-image:var(--qp-room);
+  background-position:center top;background-size:cover;
+  background-repeat:no-repeat;background-attachment:fixed;
+  scrollbar-width:thin;scrollbar-color:#cfd3db transparent;
+  /* ---------- 滚动架构：html 只当画布，不滚动；真正滚的是 body ----------
+     （用户要求"把 PWA 上下滑的弹性回弹删了"）
+     为什么必须让**文档层不可滚**：iOS 独立 Web App 里，只要根滚动器还有可滚内容，
+     整页就会橡皮筋回弹，而 `overscroll-behavior` **管不到 iOS 的根滚动器**
+     （WebKit 把该属性映射到 UIScrollView 的 elasticity，根滚动器是特例）。
+     把 html 锁成 overflow:hidden，文档层就没有可滚内容，整页回弹直接失去来源。
+     下面 body 才是滚动容器，并显式 overscroll-behavior:none。
+     另：`contain` 只挡"链式传递"，**回弹照旧**，所以这里必须写 none。 */
+  overflow:hidden;
+  overscroll-behavior:none;
+}
+body{
+  margin:0;padding:0;background:transparent;
+  /* 顶部安全区：避免内容被状态栏/灵动岛遮挡（PWA 全屏时必需）。
+     只加上边距 —— 底部不加，否则会露白条（实测踩坑）。 */
+  padding-top:env(safe-area-inset-top, 0px);
+  color:var(--text);
+  font:15px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",Roboto,sans-serif;
+  -webkit-text-size-adjust:100%;
+  /* 唯一的滚动容器（原因见 html 处注释）：
+     - height:100% = 一屏（`*{box-sizing:border-box}` 已生效，padding-top 吃在里面，
+       所以内容区正好是"可视高 - 安全区"，与 .home 的 100dvh - 安全区 对齐，不会多出一条）
+     - -webkit-overflow-scrolling:touch 保留 iOS 的惯性滚动（只去掉边缘回弹，不去惯性）
+     - overscroll-behavior:none：WebKit 映射到 ScrollElasticityNone → 内层也不回弹
+     别改成 position:fixed 方案：那会让 body 成为固定后代的包含块，影响面更大。 */
+  height:100%;
+  overflow-y:auto;overflow-x:hidden;
+  -webkit-overflow-scrolling:touch;
+  overscroll-behavior:none;
+}
+::-webkit-scrollbar{width:7px;height:7px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#cfd3db;border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:#b4bac6}
+::-webkit-scrollbar-corner{background:transparent}
+.hide{display:none!important}
+
+/* ---------- 3. 骨架：480dp 浮动层舞台 ---------- */
+/* 单位系统：--u = 1dp = 屏宽/480。官方逻辑画布就是 480dp，所有坐标直接用它。 */
+.home{
+  /* 单位基准：1dp = 可用宽度 / 360。
+     **基准是 360 不是 480** —— 官方手机版逻辑画布是 360dp（真机 density480）：
+     按钮 42dp 占屏宽 11.67%。若按 480dp（平板/模拟器版）做，按钮只占 8.75%，
+     会明显偏小（实测小了 25%）。
+     不用 100vw：它含滚动条宽度，会让坐标偏大约 2%。由 JS 写入 --vu。 */
+
+  position:relative;
+  width:100%;max-width:100vw;
+  box-sizing:border-box;
+  overflow-x:hidden;
+  /* 官方画布 853dp；用 --u 乘出来即可。
+     注意不要写 calc(100% * N) —— 百分比在 min-height 里会被当相对高度算。 */
+  /* 高度 = 一屏 - 顶部安全区。
+     **两条的顺序不能反**：同优先级声明后写的胜出，所以 dvh 必须写在 vh 后面。
+     历史版本写成了「dvh 在前、vh 在后」，等于 dvh 是死代码，所有浏览器
+     实际都走 vh —— iOS 独立 Web App（添加到主屏）里 vh = 物理整屏高
+     （含顶部状态栏那条带），而 dvh = 该带以下的可见高度，于是 .home 比可视区
+     整整高出一条状态栏，底部 .deck（弧形面板/任务抽屉）被顶到折叠线以下，
+     真机表现就是「下面显示不全、要往下滑才看得全」。
+     （WebKit 相关 bug：254868 / 301994） */
+  min-height:calc(100vh - env(safe-area-inset-top, 0px));
+  min-height:calc(100dvh - env(safe-area-inset-top, 0px));
+  margin:0;padding:0;
+}
+/* 浮动元素通用：position:absolute；坐标由各具体类给出（写死 dp 字面量，
+   不用 CSS 变量传坐标 —— 变量在内联 style 里对 calc 的替换曾出现失败） */
+.flt{position:absolute;left:0;top:0}
+.flt-l{display:contents}
+
+/* ---------- 3b. 左右两列圆钮（官方坐标，逐项对齐） ---------- */
+/* 左列：x=20，y=28/86/146/206 */
+/* 官方手机版（360dp）实测：左列 x=20 y=36.3/94.3/154.3/214.3 */
+.col-l .rbtn:nth-child(1){left:calc(var(--u)*20);top:calc(var(--u)*36.3)}
+.col-l .rbtn:nth-child(2){left:calc(var(--u)*20);top:calc(var(--u)*94.3)}
+.col-l .rbtn:nth-child(3){left:calc(var(--u)*20);top:calc(var(--u)*154.3)}
+.col-l .rbtn:nth-child(4){left:calc(var(--u)*20);top:calc(var(--u)*214.3)}
+/* 右列：x=298 y=36.3/94.3/154.3（官方手机版） */
+.col-r .rbtn:nth-child(1){left:calc(var(--u)*298);top:calc(var(--u)*36.3)}
+.col-r .rbtn:nth-child(2){left:calc(var(--u)*298);top:calc(var(--u)*94.3)}
+.col-r .rbtn:nth-child(3){left:calc(var(--u)*298);top:calc(var(--u)*154.3)}
+.rbtn{
+  position:absolute;
+  width:calc(var(--u)*42);height:calc(var(--u)*42);
+  border:0;border-radius:50%;
+  /* 左列四个圆钮：材质跟任务卡/底栏同一份（用户要求）。
+     原来是官方那不透明米色 --btn-l-bg(#F9F1E2)；圆钮里是彩色图标，
+     底透明后图标依然清楚（图标自带描边/实色）。
+     现在与资料卡共用"更白"那份 --panel-bg-strong（用户要求：圆钮背景跟资料卡一样）。
+     右列圆钮下面 .col-r .rbtn 会覆盖成官方纯黑蒙版（--btn-r-bg），那颗保持原样。 */
+  background:var(--panel-bg-strong);
+  backdrop-filter:var(--panel-blur);-webkit-backdrop-filter:var(--panel-blur);
+  display:flex;align-items:center;justify-content:center;
+  padding:0;cursor:pointer;
+  box-shadow:var(--sh-1);
+  transition:transform .12s;
+}
+/* 左侧圆钮：米白底 + 棕色图标（官方 #F9F1E2 / #BE6321） */
+.col-l .rbtn img{width:55%;height:55%;object-fit:contain}
+/* 右侧圆钮：**纯黑半透明蒙版** + 原色图标（用户要求"改成纯黑色，然后变透明"）。
+   为什么用纯黑而不是调一个"深褐色"：
+   - 纯黑蒙版只做一件事 —— 把背景**压暗**，不引入任何自己的色相。
+     于是它永远与暖黄房间背景协调（同色系明度变化），不会"跟背景一点都不搭"。
+   - 历史踩坑：曾按官方合成色 #B18E49 反解出 rgba(154,144,72,.45)（橄榄绿），
+     虽数学上叠回官方值，但那是在"纯色叠加"假设下成立的；实际背景是带渐变+
+     条纹的暖黄，橄榄绿与它并置就发脏发怪（用户反馈"变得更怪了"）。
+     教训：**给半透明元素选底色时，用中性色（黑/白）最稳**，
+     想让底色"带点颜色"就得接受它在复杂背景上不可控。
+   - alpha 取 0.28：实测 0.15 太淡（圆钮轮廓几乎看不出、图标像浮在空中），
+     0.42 太重（职业那个纯黑帽子会糊进底色，只剩火苗和帽檐）。0.28 居中。
+     合成后约 #8D6535（背景 #C48C4A 压暗 45%），层次够、又不抢图标。
+   - 保留 backdrop-filter 与 .qpanel/.fb-group 质感统一。 */
+.col-r .rbtn{
+  /* 底色是官方那层纯黑蒙版（--btn-r-bg，与白玻璃面板**故意不同**），
+     但模糊半径跟面板共用 token，避免以后调材质时这里漏掉。 */
+  background:var(--btn-r-bg);
+  backdrop-filter:var(--panel-blur);-webkit-backdrop-filter:var(--panel-blur);
+}
+/* 右列图标尺寸：**逐个设**，不要统一一个百分比（用户要求"3 个图标都大一点"）。
+   原因：三张图的"可见内容占画布比例"差很多（实测 alpha/几何包围盒）：
+     指南针  88% × 88%     内容基本占满
+     公文包  91% × 79%     横向满、纵向扁
+     手机    66.5% × 93.3% 竖长条（卡通版重绘后的实测值，旧线性版是 64.6% × 89.6%）
+   若统一 43%，可见内容高度分别只有 15.89 / 14.27 / 14.45dp —— 看起来都偏小，
+   且彼此不等大（公文包最扁、最显小）。
+   故按"**可见内容高度统一到 18dp**"反解各自盒子尺寸（= 18 / 内容高占比）：
+     指南针 18/0.88   = 20.45dp = 48.7%
+     公文包 18/0.79   = 22.78dp = 54.2%
+     手机   见下方（**唯一例外**，不按 18dp，用户要求再大一点）
+   这样三者可见高度都是 18dp（比原来 15.9dp 放大 13%），宽度也接近（13~21dp），
+   视觉体量一致；18/42 = 43% 的占空比，圆钮内留白仍然充足。
+   **手机是唯一例外（52.5%）**：按 18dp 反解是 45.9%（= 18/0.9333/42），
+   但手机是**竖长条**，同样"可见高度"下面积只有指南针的一半（12.8×18 vs 18×18），
+   用户实测反馈"有点小，放大一点"→ 提到 52.5%（可见 14.7 × 20.6dp，约 +14%）。
+   教训：**"统一可见高度"对长宽比差很多的图标不够用**，窄图要按面积/宽度补一点。
+   改尺寸时**要重新量包围盒**，别直接改百分比 —— 各图留白不同，同百分比不等大
+   （手机图标换成卡通版时包围盒从 89.6% 变 93.3%，百分比就跟着从 47.8% 降到 45.9%）。 */
+.col-r .rbtn img{object-fit:contain}
+.col-r .rbtn:nth-child(1) img{width:48.7%;height:48.7%}   /* 冒险：指南针 */
+.col-r .rbtn:nth-child(2) img{width:54.2%;height:54.2%}   /* 职业：公文包（最扁，需最大盒子） */
+.col-r .rbtn:nth-child(3) img{width:52.5%;height:52.5%}   /* 画面：手机（唯一例外，见上：竖长条要按面积补） */
+.rbtn:active{transform:scale(.94)}
+/* 官方圆钮没有"选中态"：所有钮同底色 + 原色图标。
+   选中仅用轻微白色描边提示，不改底色（改底色与官方观感差很远）。 */
+.rbtn.on{box-shadow:0 0 0 calc(var(--u) * 2) rgba(255,255,255,.85),var(--sh-1)}
+.rbtn.on img{filter:none}
+
+/* 左上角第 1 个圆钮（#btnScene）**不再是"返回"**：总览页是根页面，返回无处可去，
+   历史上它是置灰死键（`.rbtn:disabled` 那条已随之删除）。现在它是"切换房间背景"，
+   所以照常参与 .rbtn 的按压反馈，但**不参与选中态**：
+   JS 给 tabbar 按钮刷 .on 时按 id 跳过它（否则总览页它常驻白环、又比其他钮大一圈）。
+   图标 = 官方黄衣 off_r1_tshirt（用户指定），**两处单独调**（均实测截图对比过）：
+   ① 尺寸 58.5%（不是左列统一的 55%）：该图内容包围盒 87.5%×71.9%，比其余左列图标
+      （~84%×86%）宽而扁；沿用 55% 时可见 20.2×16.6dp，比齿轮/日记（19.3×19.3dp）
+      明显小一圈。按**可见面积相等**反解 = 55% × √(0.711/0.629) ≈ 58.5%
+      （与右列手机图"按面积补"同一条经验：统一高度对长宽比差很多的图标不够用）。
+   ② 滤镜 brightness(.9) saturate(1.25)：原图是给右列深色钮配的亮黄 #FFE45C，
+      直接放在左列米白钮（#F9F1E2）上对比度极低、发飘发白；压暗加饱和后成金黄，
+      既保住"黄衣服"的观感，又与旁边三个棕图标（#BE6321）体量一致。
+      没走"整图染棕"（`brightness(0) invert(...)` 那套）—— 那是另一颗红棕色衣服，不是黄的了。 */
+/* 用户要求"衣服颜色跟左列其他图标一样"：不再用官方黄色 off_r1_tshirt + 提亮滤镜，
+   换成同色系的棕色素材 off_l1_tshirt.png（由官方素材改色而来：保留 alpha 与明暗结构，
+   色相/亮度按左列官方图标实测基色 #BD6221、亮度 ~106 重映射，色差 ΔRGB≈(2.6,1.1,0)）。
+   尺寸 58.5% 保持不动 —— 那是按衣服轮廓调过的，与其他图标的视觉大小一致。 */
+#tabbar #btnScene img{width:58.5%;height:58.5%}
+
+/* 切换房间背景的轻提示（#sceneToast，JS 的 sceneToast()）。
+   4 张房间图肉眼可辨，但"回到自动"这一步在任务场景恰好是主房间时看不出变化，
+   故给一句状态文字；位置取绝对定位居中偏下 —— 避开顶部资料卡/胶囊区，
+   也不会盖住底部抽屉（.deck）。1.6 秒自动淡出，pointer-events:none 不挡点击。
+   z-index 高于 .flt 各层（总览页里最高的是 .deck 的 5），保证压在最上面。 */
+#sceneToast{
+  position:absolute;left:50%;top:62%;transform:translate(-50%,-50%);
+  z-index:9;max-width:86%;padding:6px 14px;border-radius:999px;
+  font-size:12.5px;color:#fff;background:rgba(0,0,0,.72);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  opacity:0;transition:opacity .16s;pointer-events:none;
+}
+#sceneToast.on{opacity:1}
+
+/* 房间背景选择面板（#bgSheet，点左上角黄衣圆钮打开）
+   21 张 = 自动 + 5 套官方房间场景 + 15 款官方「装扮→背景」家居背景；
+   缩略图直接复用页面背景图（同一 URL，浏览器只下载一次，开面板不会额外占带宽）。
+   面板贴底、暖色卡片底（跟资料卡/任务面板一套色），最高 76vh 内部滚动。 */
+#bgSheet{position:fixed;inset:0;z-index:30;display:none}
+#bgSheet.on{display:block}
+#bgSheet .bgmask{position:absolute;inset:0;background:rgba(0,0,0,.42)}
+#bgSheet .bgpanel{
+  position:absolute;left:0;right:0;bottom:0;max-height:76vh;
+  display:flex;flex-direction:column;
+  padding:calc(var(--u) * 12) calc(var(--u) * 12)
+          calc(var(--u) * 12 + env(safe-area-inset-bottom, 0px));
+  background:var(--card);border-radius:calc(var(--u) * 16) calc(var(--u) * 16) 0 0;
+  box-shadow:0 -6px 24px rgba(80,50,10,.28);
+}
+#bgSheet .bghead{
+  display:flex;align-items:center;justify-content:space-between;
+  font-weight:650;font-size:calc(var(--u) * 14);color:var(--strong);
+  padding:0 calc(var(--u) * 2) calc(var(--u) * 10);
+}
+#bgSheet .bghead button{
+  border:0;background:none;color:var(--sub);font-size:calc(var(--u) * 13);
+  padding:calc(var(--u) * 2) calc(var(--u) * 4);
+}
+#bgSheet .bggrid{
+  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:calc(var(--u) * 8);overflow-y:auto;overscroll-behavior:none;
+}
+#bgSheet .bgtile{
+  border:0;background:none;padding:0;font:inherit;
+  display:flex;flex-direction:column;align-items:center;gap:calc(var(--u) * 3);
+}
+#bgSheet .bgthumb{
+  width:100%;aspect-ratio:15 / 32;object-fit:cover;display:block;
+  border-radius:calc(var(--u) * 8);box-shadow:var(--sh-1);background:#E9E2D4;
+}
+#bgSheet .bgtile.on .bgthumb{box-shadow:0 0 0 calc(var(--u) * 2) var(--accent)}
+#bgSheet .autothumb{
+  display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(160deg,#F7E4BC,#E9C98D);color:var(--text);
+  font-size:calc(var(--u) * 13);font-weight:600;
+}
+#bgSheet .bgname{
+  max-width:100%;font-size:calc(var(--u) * 10.5);color:var(--text);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+#bgSheet .bgtip{
+  padding-top:calc(var(--u) * 10);color:var(--sub);
+  font-size:calc(var(--u) * 10.5);line-height:1.55;
+}
+
+/* ---------- 4. 资料卡（官方 x=74 y=26 207×46） ---------- */
+.idcard{
+  left:calc(var(--u) * 74);
+  top:calc(var(--u) * var(--top-card));
+  width:calc(var(--u) * 207);
+  /* 高度**不写死**、由内容撑（`.idtop` 40u + 上下 padding 6u = 46u = --h-card）：
+     之前写死 46u 又把 .idtop 设成 46u，内容 52u 撑破胶囊 → 头像/状态环相对卡片背景
+     整体错位（用户实报）。 */
+  display:flex;flex-direction:column;
+  padding:calc(var(--u) * 3) calc(var(--u) * 8) calc(var(--u) * 3) calc(var(--u) * 3);
+  /* 顶部「QQ宠物托管」资料卡：材质同任务卡/底栏（用户要求），原来是 --card(#F9EFDE 不透明)。
+     用户后续要求"这个胶囊再白一点（透明度调低）"、"左边的 4 个按钮的背景跟它一样"
+     → 与左列圆钮共用 --panel-bg-strong(.80)；任务卡/底栏仍走 --panel-bg(.62)。
+     展开态沿用同一个背景。 */
+  background:var(--panel-bg-strong);
+  backdrop-filter:var(--panel-blur);-webkit-backdrop-filter:var(--panel-blur);
+  /* 圆角 = 胶囊圆角（高/2）；展开态**沿用同一个圆角**，不改成小圆角 */
+  border-radius:calc(var(--u) * var(--h-card) / 2);
+  box-shadow:var(--sh-1);
+  box-sizing:border-box;
+}
+/* 展开态（点右侧状态环）：胶囊原位向下展开，把体力/清洁/心情三行显示在名字下面 ——
+   官方就是这么做的手势（2026-09-28 真机实测：点环后卡片原位展开、没有遮罩/弹窗，
+   页面其它部分照常可见；点行右侧 › 才进游戏自己的详情页，点底部 ^ 收起）。
+   **宽度一律不变**（用户要求：展开时右边别被撑大；官方实拍展开态其实比胶囊宽
+   207→224u，这里不跟），只是下面的行区高度从 0 长出来；背景材质和圆角也都不动。 */
+.idcard.open{
+  z-index:6;                     /* 盖住下面的等级条/胶囊行 */
+}
+.idcard .idtop{
+  display:flex;align-items:center;gap:calc(var(--u) * 6);
+  height:calc(var(--u) * (var(--h-card) - 6));flex:none;   /* 46 - 上下 padding 6 = 40 */
+}
+/* 行区：高度 0 → 展开高度做动画（官方的"展开"就是这个手感；别用 display:none 硬切，
+   那样卡片会瞬间跳高、用户实报"展开动画不对"）。 */
+.idrows{
+  height:0;overflow:hidden;
+  transition:height .22s cubic-bezier(.22,.61,.36,1);
+}
+/* 行区高度：3 行 × 37.5u + 20u 收起箭头区（官方展开态卡片 34.3..214 = 179.7u 高，
+   = 46u 头部 + 133.7u 行区）。**尺寸全按官方原图量**（`qqpet_assets/01_ui_screenshots/
+   05_pet_status.png` 1080×2412，÷3 = CSS px，而页面的 --u = 100vw/360 正好等于 CSS px；
+   早先误按 ÷2.769（390 宽）量，整体大了 8%，字号/行距/条粗全偏 —— 用户实报）。 */
+.idcard.open .idrows{height:calc(var(--u) * 133)}
+/* 官方：头部（46u）与第一行中心（99.4u）之间有 3.3u 间隙。用 margin 加在第一行上，
+   收起态因为容器 height:0 + overflow:hidden 不受影响。 */
+.idrows .prow:first-child{margin-top:calc(var(--u) * 3.3)}
+.idcard .prow{
+  display:flex;align-items:center;
+  height:calc(var(--u) * 37.5);      /* 官方行距 37.5u（三行中心 99.4 / 136.9 / 175.5） */
+  padding:0 calc(var(--u) * 7) 0 calc(var(--u) * 5.5);
+}
+.pico{width:calc(var(--u) * 17);height:calc(var(--u) * 17);flex:none;object-fit:contain}
+.pname{font-size:calc(var(--u) * 12);font-weight:400;color:var(--strong);margin-left:calc(var(--u) * 0.8);flex:none}
+/* 数值字号 12u 与官方一致；**字重必须常规**（官方墨宽 12px / 笔划 1.5px；写 680 会变成
+   15px / 2.0px —— 明显比官方粗且宽，还把进度条往右挤，用户实报）。
+   不用 tabular-nums：等宽数字比官方（比例数字）宽 1~2u，列宽已有 min-width:20u 兜底，
+   "92→100" 切换时进度条不会跳。 */
+.pval{
+  font-size:calc(var(--u) * 12);font-weight:400;color:var(--strong);
+  margin-left:calc(var(--u) * 6);min-width:calc(var(--u) * 20);
+  font-variant-numeric:normal;
+}
+.pbar{
+  flex:1;height:calc(var(--u) * 4);border-radius:999px;   /* 官方条厚 4u（不是 5u） */
+  background:rgba(120,90,40,.28);overflow:hidden;margin-left:calc(var(--u) * 8);
+}
+.pbar>i{display:block;height:100%;border-radius:999px;transition:width .35s}
+.pbar>i.e{background:var(--energy)}
+.pbar>i.c{background:var(--clean)}
+.pbar>i.m{background:var(--mood)}
+/* 行右侧「›」：官方点它进游戏自己的详情页（心情值/体力值…），本工具没有那些页面，
+   只作视觉还原、不绑事件（别做成点了没反应的假按钮，所以 pointer-events:none）。 */
+.pchev{
+  flex:none;margin-left:calc(var(--u) * 10);color:#C0AE8E;
+  font-size:calc(var(--u) * 11);line-height:1;pointer-events:none;
+}
+/* 展开态底部中央的 ^ 收起箭头（官方底部同款）。它放在 .idrows 里面，
+   跟着行区一起"长出来"，不是 display 切换硬弹出来。 */
+.idfold{
+  display:flex;width:100%;height:calc(var(--u) * 17);   /* 官方：箭头区 ~17u，^ 居中 */
+  align-items:center;justify-content:center;
+  border:0;background:none;padding:0;
+}
+.idfold svg{width:calc(var(--u) * 8.4);height:calc(var(--u) * 4.3)}   /* 官方 ^ 实测 8.4×4.3u */
+.idfold path{stroke:#B9A585;stroke-width:2.2;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.petnone{color:var(--sub);font-size:calc(var(--u) * 11.5);padding:calc(var(--u) * 2) calc(var(--u) * 9) 0}
+.avatar{
+  width:calc(var(--u) * 40);height:calc(var(--u) * 40);
+  border-radius:50%;flex:none;background:#ffedd5;
+  overflow:hidden;display:flex;align-items:center;justify-content:center;
+}
+.avatar svg{display:block;width:100%;height:100%}
+/* 头像用官方表情图（static/qp-icons/official/mood_smile.png，160×160，四周留白约 5%）：
+   略微放大让表情填满圆形框，同时保留一点呼吸感（留白比 cap_paw 小，故只放大 5%） */
+.avatar img{display:block;width:106%;height:106%;object-fit:contain}
+.avatar.on{box-shadow:0 0 0 2px var(--ok)}
+.avatar.off{box-shadow:0 0 0 2px #ef4444}
+.idtxt{flex:1;min-width:0}
+.idname{
+  font-weight:680;font-size:calc(var(--u) * 13);line-height:1.15;
+  color:var(--strong);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.idsub{
+  font-size:calc(var(--u) * 10);color:var(--sub);line-height:1.2;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+/* 状态环：官方资料卡右侧的**三层同心进度环** —— 外圈=体力(蓝)、中圈=清洁(绿)、
+   内圈=心情(橙)，每圈按 0~100 画弧、未满那段是灰底（官方实拍
+   qqpet_assets/01_ui_screenshots/02_pet_home.png；点开后的体力/清洁/心情面板见
+   05_pet_status.png）。数值来自 runs/status_cache.json（护理巡检 OCR 状态面板写入），
+   没读到 = 三圈全灰。点环 = 官方交互：**胶囊原位向下展开**显示三行数值（见 .idcard.open）。
+   历史教训：早先是一条 conic-gradient 的固定比例三色块（绿 70%/橙 18%/蓝 12%），
+   只是"看着像官方"，实际既不是三个圈也不随数据变——别再改回那种画法。 */
+.idring{
+  width:calc(var(--u) * 27);height:calc(var(--u) * 27);
+  flex:none;padding:0;border:0;background:none;line-height:0;
+  -webkit-tap-highlight-color:transparent;
+}
+.idring svg{display:block;width:100%;height:100%;transform:rotate(-90deg)}
+/* 弧粗：官方径向实测 2.7~2.9u（含抗锯齿）；viewBox 40 渲染成 27u ⇒ 1u = 1.4815 vb，
+   取 3.3 vb（≈2.2u 几何 + 抗锯齿 ≈ 2.8u）。
+   原来写 2.6（= 1.76u）明显比官方细，用户实报。 */
+.idring circle{fill:none;stroke-width:3.3}
+/* 未满那段（官方是明显的灰弧，不能画得太淡——太淡在米白卡上等于看不见，
+   实测 rgba(...,.18) 在截图里完全看不出缺口） */
+.idring .trk{stroke:rgba(120,90,40,.30)}
+.idring .arc{stroke-linecap:round;transition:stroke-dashoffset .45s ease}
+.idring .arc.e{stroke:var(--energy)}
+.idring .arc.c{stroke:var(--clean)}
+.idring .arc.m{stroke:var(--mood)}
+
+
+
+/* ---------- 5. 胶囊两行（官方 y=86 三颗 + y=126 两颗，每颗 67×28 间距 4） ---------- */
+.caps{
+  /* 与资料卡同宽同左右缘（官方：资料卡 74~281，胶囊区 74~283，右缘基本齐平）。
+     行内三颗等分（官方每颗 67.1dp），gap 4dp -> (207-8)/3 = 66.3dp。
+     纵向位置由 --top-caps 推出，行间距 = --gap-top（与资料卡→胶囊、
+     胶囊→任务面板同一个值，见 token 区）。 */
+  left:calc(var(--u) * 74);
+  width:calc(var(--u) * 207);
+  top:calc(var(--u) * var(--top-caps));
+  display:flex;flex-direction:column;
+  gap:calc(var(--u) * var(--gap-top)) 0;
+}
+.caps-row{display:flex;gap:calc(var(--u) * 4)}
+/* 两行都等分，保证左右缘与资料卡对齐（不再按内容自适应 -> 右边参差） */
+.caps-row .cap{flex:1 1 0;min-width:0}
+
+.cap{flex:0 1 auto;min-width:calc(var(--u) * 63)}
+.caps-row:nth-child(2) .cap{flex:0 0 auto}
+
+.cap{
+  /* 官方结构：图标在胶囊【外面】且比胶囊大（22.3 vs 19.7dp），上下凸出；
+     图标左缘 = 胶囊左缘（胶囊左端被图标压住）。
+     .cap 高 = 图标高 23dp；::before 画 20dp 胶囊体，垂直居中。 */
+  position:relative;
+  display:flex;align-items:center;
+  height:calc(var(--u) * var(--h-cap));
+  padding:0;box-sizing:border-box;
+  color:var(--cap-fg);
+}
+.cap::before{
+  content:"";position:absolute;
+  left:0;right:0;
+  top:50%;transform:translateY(-50%);
+  height:calc(var(--u) * 20);
+  /* 材质 = 右侧圆钮那一套：纯黑半透明蒙版 + 同一份毛玻璃模糊（--panel-blur）。
+     背景色走 --cap-bg -> --mask-black，**明暗模式同一个值**，不随主题变。 */
+  background:var(--cap-bg);
+  backdrop-filter:var(--panel-blur);-webkit-backdrop-filter:var(--panel-blur);
+  border-radius:calc(var(--u) * 10);
+  /* 原本这里是"官方金色胶囊"的白色内高光（inset 0 1px 2px rgba(255,255,255,.28)）。
+     换成黑色蒙版后必须去掉：高光把上半部提亮成灰蒙蒙一片，跟右圆钮那种
+     "平整压暗"的观感不一致（用户要求两边材质一样）。右圆钮也没有这层高光。 */
+  z-index:0;
+}
+/* 文字层：占满胶囊体区域，水平+垂直居中（底部进度条由 .bar 绝对定位） */
+.cap .capbody{
+  position:relative;z-index:1;
+  flex:1;min-width:0;height:100%;
+  display:flex;align-items:center;justify-content:center;
+  gap:calc(var(--u) * 2);
+  padding-left:calc(var(--u) * 2);
+  padding-right:calc(var(--u) * 4);
+}
+.cap .cico{
+  width:calc(var(--u) * 23);height:calc(var(--u) * 23);
+  flex:none;position:relative;z-index:2;object-fit:contain;
+  /* 图标圆心 与 胶囊圆头圆心 对齐：
+       胶囊高 20dp（半径 10），left=0 -> 圆头圆心在 10dp
+       图标直径 23dp -> margin-left = 10 - 23/2 = -1.5dp
+     这样图标正好把胶囊左端的圆头完全盖住。 */
+  margin-left:calc(var(--u) * -1.5);
+}
+.cap .cval{
+  font-weight:680;font-size:calc(var(--u) * 10.5);color:#fff;
+  font-variant-numeric:tabular-nums;white-space:nowrap;
+  flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  letter-spacing:-.02em;text-align:center;line-height:1;
+}
+.cap .cunit{
+  font-size:calc(var(--u) * 8.5);color:rgba(255,255,255,.85);
+  white-space:nowrap;flex:0 1 auto;min-width:0;overflow:hidden;
+  text-overflow:ellipsis;max-width:46%;line-height:1;
+}
+/* 胶囊内进度条（官方等级胶囊那条"橙色斜纹"）。
+
+   **左右内缩必须与 .capbody 的 padding 一致**（left=padding-left=2dp，
+   right=padding-right=4dp）—— 这样进度条的水平中心**恒等于**文字中心，
+   不需要靠调数值去"凑"居中：
+     文字居中基准 = capbody 内容盒 = 23.5dp ~ 62.3dp（胶囊坐标），中心 42.9dp
+     条 = 同样的 23.5 ~ 62.3dp                      中心 42.9dp  ✅ 恒等
+   历史 bug：写的是 left:17dp / right:4dp，与 padding-left(2dp) 不一致，
+   于是条的范围是 38.5~62.3dp、中心 50.4dp —— **比文字中心偏右 7.5dp**，
+   且条只有 23.85dp 宽（比文字窄一截），看起来就是"贴在字下面的一小截、还歪"。
+   改成 2/4 后条宽 38.8dp（加长 63%），成为官方那种贯穿式轨道。
+
+   **定位用 left+right（相对 .capbody），不要写固定 width** ——
+   .bar 的包含块是 .capbody，其宽度是**被左侧图标（.cico 23dp +
+   margin-left:-1.5dp）挤过之后**的剩余宽度，且各胶囊不等宽（实测
+   金币 66.3 / 踩踩 66.3 / 冒险 41.9 / 学习打工 74.0dp），写死 width 必然对不上：
+   曾改成 width:45.3dp，结果 left(17)+width(45.3)=62.3dp 超出右缘 17.5dp，
+   进度条直接画到胶囊外面。
+
+   **曾经的误判（记下来避免重犯）**：早期看到 track=33.1px、以为"应该是 62.9px"，
+   就断言比例错了（"9/10 只画出 47%"）。其实 62.9px 是**胶囊**宽不是轨道宽，
+   正确算法 fill/track = 29.8/33.1 = 90.0%，**本来就是对的**。
+   > 判断比例时，分母必须取**同一元素**的实测值，别拿父级的宽度去除。
+
+   轨道色是"深色凹槽"：官方实测 #9A8353（亮度 132）**深于**胶囊底（179），
+   是挖进去的槽；改前用 rgba(255,255,255,.30) 反而比胶囊底亮 +32，像贴白胶带。
+   **胶囊底换成黑色蒙版后同步改**：原来的暖褐凹槽 rgba(90,70,35,.38) 压在黑色胶囊上
+   等于看不见（0.2h/12h 那种近乎空条只剩一个橙点，"槽"整个消失）。
+   现在用**同一支黑色蒙版再叠一层**（rgba(0,0,0,.30)，与 --mask-black 同色相、
+   只加深不引色相）：合成后比胶囊底明显更暗，仍是"挖进去的槽"，
+   橙色填充压在它上面照样跳得出来。
+
+   填充用官方条纹素材：static/qp-icons/official/cap_bar_fg.png
+   （源：cdn_assets 的 pet_level_progress_fg.png，688×32，官方等级进度条前景图）。
+   素材左右边缘色一致可无缝平铺、上下自带渐变，故不需再叠渐变；
+   background-size:auto 100% 保证条高变化时条纹不被拉伸。 */
+.cap .bar{
+  position:absolute;z-index:1;
+  left:calc(var(--u) * 2);    /* = .capbody padding-left，见上：保证与文字同中心 */
+  right:calc(var(--u) * 4);   /* = .capbody padding-right */
+  bottom:calc(var(--u) * 3.5);
+  height:calc(var(--u) * 2.5);
+  margin:0;
+  background:rgba(0,0,0,.30);
+  border-radius:calc(var(--u) * 1.25);
+  overflow:hidden;
+}
+.cap .bar>i{
+  display:block;height:100%;width:0;
+  background-image:url('/qp-icons/official/cap_bar_fg.png');
+  background-repeat:repeat-x;
+  background-size:auto 100%;
+  background-position:left center;
+  border-radius:calc(var(--u) * 1.25);
+}
+/* 长数值单独收小，避免裁字 */
+.cap .cval#coins,.cap .cval#advTxt{font-size:calc(var(--u) * 9)}
+.cap .cval#swTxt,.cap .cval#expTxt,.cap .cval#visitTxt,.cap .cval#pkTxt{font-size:calc(var(--u) * 9)}
+/* 金币的最后更新时刻在 67dp 胶囊里放不下（官方金币胶囊也只放数值），隐藏 */
+.cap .cunit#coinsAt{display:none}
+
+/* ---------- 5b. 中部场景层（官方是 3D 宠物；这里放任务队列） ---------- */
+.scene{
+  /* 内容区（74~281，与资料卡同宽）。高度按内容自适应 —— 原来用 bottom 固定
+     撑到页面底部，任务少时下方留大片空白（截图反馈）。
+     顶 = --top-scene（= 胶囊区底 + --gap-top），与上面两处间距一致。 */
+  left:calc(var(--u) * 74);
+  width:calc(var(--u) * 207);
+  top:calc(var(--u) * var(--top-scene));
+  display:flex;flex-direction:column;
+  overflow:hidden;
+}
+/* 任务队列面板：占据场景层剩余空间，可滚动 */
+.qpanel{
+  display:flex;flex-direction:column;
+  background:var(--panel-bg);              /* 材质见 :root 的 --panel-bg/--panel-blur */
+  /* 圆角：14 -> 22dp（用户要求"更圆一点"）。选 22 是因为右边那两粒胶囊 .fb-group 是 25dp，
+     同屏看着是一套；再大就变成胶囊形了。要调只改这个数（比如 18 更收敛 / 26 更圆）。
+     .qpanel 有 overflow:hidden，圆角会直接把里面的任务行裁出来，不用给行另加圆角。 */
+  border-radius:calc(var(--u) * 22);
+  /* 内边距按圆角配比：圆角 22u 时上下 8u / 左右 9u 会让标题和行贴着圆角走
+     （用户："这些东西离那个圆角的卡片边框就感觉不是很适配"）→ 收到 14u / 16u / 12u，
+     视觉上内容才"住在卡片里"。改圆角时记得一起看这里（经验值 ≈ 圆角的 0.6~0.7 倍）。 */
+  padding:calc(var(--u) * 14) calc(var(--u) * 16) calc(var(--u) * 12);
+  backdrop-filter:var(--panel-blur);-webkit-backdrop-filter:var(--panel-blur);
+  box-shadow:var(--sh-1);
+  overflow:hidden;
+  z-index:2;                 /* 面板在下 */
+}
+
+/* ---------- 5c. 右功能栏（官方 x=414，y=335/405/495，50×70） ---------- */
+.funcbar{
+  position:absolute;
+  left:calc(var(--u) * 294);
+  top:calc(var(--u) * 190);
+  width:calc(var(--u) * 50);
+  z-index:5;
+  display:flex;flex-direction:column;
+  gap:calc(var(--u) * 20);   /* 官方：两段之间空 20dp */
+}
+/* 分组容器承载磨砂底与圆角：组内按钮无缝连成一个胶囊体。
+   官方 View 树就是两段（上段 feed+shower 共用容器、下段 friend 独立）。 */
+.fb-group{
+  /* 材质 = :root 的 --panel-bg / --panel-blur，跟任务卡 .qpanel、底栏 .deck 同一份代码
+     （原来是自己写死的 rgba(255,255,255,.55)，比那两块略透一点）。 */
+  display:flex;flex-direction:column;
+  background:var(--panel-bg);
+  backdrop-filter:var(--panel-blur);-webkit-backdrop-filter:var(--panel-blur);
+  border-radius:calc(var(--u) * 25);
+  box-shadow:var(--sh-1);
+  overflow:hidden;
+}
+.fab{
+  width:calc(var(--u) * 50);height:calc(var(--u) * 70);
+  border:0;border-radius:0;background:transparent;box-shadow:none;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:calc(var(--u) * 2);
+  cursor:pointer;color:var(--button-fg,var(--strong));
+  font-size:calc(var(--u) * 10);padding:0;
+  transition:transform .12s;
+}
+.fab .fi{
+  /* 图标（SVG）与文字；原来的字符图标是 font-size，改成图片后需要显式尺寸 */
+  width:calc(var(--u) * 22);height:calc(var(--u) * 22);
+  object-fit:contain;display:block;
+}
+.fab .ft{font-size:calc(var(--u) * 10);line-height:1;color:var(--strong);font-weight:600}
+.fab:active{transform:scale(.94)}
+.fab:disabled{opacity:.45;cursor:default}
+.funcbar .fab:nth-child(3){margin-top:calc(var(--u) * 20)}
+/* 停止/画面图标是 SVG，颜色已内嵌（暖橙系），不再用 color 改色 */
+
+/* ---------- 5d. 底部入口（官方 y=728 居中，50×54） ---------- */
+/* 底部弧形面板（官方底部是一块满宽上凸的浅米色圆台：
+     顶点 y≈669dp 宽 48dp -> y=717dp 撑满全宽 359dp -> 延伸到画布底）。
+     用 border-radius 画上凸弧：顶部两侧大圆角。 */
+.deck{
+  left:0;
+  width:100%;
+  bottom:0;
+  top:auto;
+  height:calc(var(--u) * 135);   /* 669 -> 804dp */
+  /* 材质 = 任务卡那份（半透明白玻璃 + 背景模糊），底下房间图会透出来；
+     原来是官方那条不透明米色渐变（#EFDCC6→#E4CFB9→#E0C9B2），改后这两块观感统一。
+     弧形轮廓（border-radius 的 50%/52dp）保持不变 —— 那是官方底栏的形。 */
+  background:var(--panel-bg);
+  backdrop-filter:var(--panel-blur);-webkit-backdrop-filter:var(--panel-blur);
+  border-radius:50% 50% 0 0 / calc(var(--u) * 52) calc(var(--u) * 52) 0 0;
+  box-shadow:var(--sh-1);
+  z-index:1;
+}
+.drawer{
+  /* 底部信息：坐在 .deck 弧形面板上，水平居中、贴近弧顶（官方图标在弧顶下方）。
+     deck 高 135dp（669~804），图标中心约在 700dp -> 距 deck 顶 31dp。 */
+  left:50%;
+  transform:translateX(-50%);
+  top:calc(var(--u) * 22);
+  width:calc(var(--u) * 62);
+  display:flex;flex-direction:column;align-items:center;
+  gap:calc(var(--u) * 2);
+  background:transparent;box-shadow:none;
+  text-align:center;
+}
+.dico{
+  width:calc(var(--u) * 44);height:calc(var(--u) * 46);
+  object-fit:contain;flex:none;
+}
+.dcol{display:flex;flex-direction:column;align-items:center;gap:calc(var(--u) * 1)}
+.dtitle{
+  display:flex;align-items:center;justify-content:center;gap:calc(var(--u) * 3);
+  font-weight:680;font-size:calc(var(--u) * 14);color:var(--strong);white-space:nowrap;
+  /* 状态灯不参与排版（绝对定位到文字左侧）。
+     否则 flex 居中会把「绿点+文字」整组居中，文字被灯宽推偏约半个灯宽
+     （实测「打工中」偏右 5px，真机上看就是没对齐图标中心）。 */
+  position:relative;
+}
+.dtitle .dot{
+  position:absolute;left:calc(var(--u) * -12);
+  top:50%;transform:translateY(-50%);
+}
+.drow{display:contents}
+
+
+
+.dhint{display:none}
+.dsub{
+  font-size:calc(var(--u) * 9);color:var(--sub);
+  font-variant-numeric:tabular-nums;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;max-width:100%;
+}
+.dmeta{display:none}
+.dot{width:calc(var(--u) * 7);height:calc(var(--u) * 7);border-radius:50%;background:#9ca3af;flex:none}
+.dot.on{background:var(--ok)}
+.dot.off{background:#ef4444}
+.saveMsg{font-size:calc(var(--u) * 10);text-align:center;margin-top:calc(var(--u) * 2);min-height:0;color:var(--ok)}
+.saveMsg.err{color:#b45309}
+
+/* ---------- 6. 通用卡片与文字 ---------- */
+.card{
+  background:var(--card);border:1px solid var(--line);
+  border-radius:var(--r-xl);padding:12px 14px;
+}
+.card h2{
+  font-size:12px;color:var(--sub);font-weight:600;
+  margin:0 0 8px;letter-spacing:.03em;
+}
+.workline{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.workline .big{font-size:22px;font-weight:680;font-variant-numeric:tabular-nums;color:var(--strong)}
+.workline .hint{font-size:12px;color:var(--sub)}
+.subline{margin-top:6px;font-size:12px;color:var(--sub);font-variant-numeric:tabular-nums}
+.subh{font-size:11px;color:var(--sub);margin:14px 0 4px;letter-spacing:.03em}
+.err{color:#b45309;font-size:12px}
+
+/* 数值瓦片 */
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.tile{
+  background:var(--card);border:1px solid var(--line);
+  border-radius:var(--r-lg);padding:10px 8px;text-align:center;
+}
+.tile .v{font-size:19px;font-weight:680;font-variant-numeric:tabular-nums;color:var(--strong)}
+.tile .k{font-size:11px;color:var(--sub);margin-top:2px}
+
+/* 进度条（通用） */
+.bar{height:4px;background:var(--track);border-radius:2px;overflow:hidden;margin-top:7px}
+.bar>i{display:block;height:100%;background:var(--accent);width:0;border-radius:2px}
+/* 学习/打工胶囊的进度条：**单段**（学习+打工合计已用 / 合计停止点）。
+   原来是"学习橙 + 打工蓝"两段叠加，用户要求这个胶囊只显示总小时数、不再区分两者
+   → 两段合并成一段，直接用 .cap .bar>i 的官方橙色条纹素材（cap_bar_fg.png），
+   不再需要蓝色变体（static/qp-icons/official/cap_bar_fg_blue.png 保留作素材，
+   现已无人引用；若将来又要分段，可直接拿回来用——见 INTEGRATION.md 第六轮）。
+   两个阶段类名（bar-split / swBarSchool / swBarWork）已随之删除，别再生造。 */
+
+/* ---------- 7. 任务队列 ---------- */
+.qcard{border-radius:var(--r-xl)}
+.qhead{
+  display:flex;align-items:center;
+  /* 左右内距 = 任务行的内距，标题左缘与行内文字左缘对齐（不然标题比行名靠左 10u，
+     整块看着是斜的）；与第一行之间留 8u，标题不再"顶着"列表。 */
+  padding:0 calc(var(--u) * 8);
+  min-height:calc(var(--u) * 16);
+  margin-bottom:calc(var(--u) * 8);
+}
+/* 面板标题（原状态行已移除，只留固定标题） */
+.qtitle{
+  font-size:calc(var(--u) * 11.5);font-weight:600;
+  color:var(--sub);letter-spacing:.08em;
+}
+/* 标题右侧的收尾队列提示（原为单独一行，现并到标题行） */
+.qpend{
+  margin-left:auto;
+  font-size:calc(var(--u) * 10.5);
+  color:var(--sub);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  max-width:60%;
+}
+.qpend .run{color:var(--accent);font-weight:600}
+.qgrp{font-size:10.5px;color:var(--sub);letter-spacing:.06em;margin:10px 0 2px}
+.tasklist .mrow{
+  display:flex;gap:calc(var(--u) * 6);
+  padding:calc(var(--u) * 7.5) calc(var(--u) * 8);   /* 左右 8u：与标题行同一左缘（标题那侧也跟着调） */
+  align-items:center;border-radius:calc(var(--u) * 10);
+  /* 任务行分隔线：原来是 1px 实线 var(--line)(#EFE3CF) 通到卡片左右两边，压在毛玻璃上
+     又硬又脏（用户："分隔线太丑了"）。改成 **1px 两端渐隐的发丝线**：用背景渐变画
+     （不是 border），两端各留 10% 淡出、颜色压到 13% 透明 —— 跟玻璃面板一个调子。
+     调法：想更弱把 .13 调小（.08 几乎看不见）/ 想更清楚调大（.2 偏明显）；
+     想彻底不要线就说一声，把 background-image 整行去掉即可（靠行距区分）。 */
+  background-image:linear-gradient(90deg,
+      rgba(120,85,30,0) 0%,
+      rgba(120,85,30,.11) 8%,
+      rgba(120,85,30,.11) 92%,
+      rgba(120,85,30,0) 100%);
+  background-size:100% 1px;
+  background-repeat:no-repeat;
+  background-position:left top;
+}
+.tasklist .mrow:first-child,.mrow:first-child{border-top:0;background-image:none}
+/* 任务分组标题（日常轮巡 / 任务顺序）：小字 + 一条极淡的发丝线 */
+.tghd{display:flex;align-items:center;gap:calc(var(--u)*6);
+      padding:calc(var(--u)*9) calc(var(--u)*2) calc(var(--u)*3);
+      font-size:calc(var(--u)*9.5);font-weight:600;color:var(--sub)}
+.tghd:first-child{padding-top:calc(var(--u)*2)}
+.tghd i{flex:1;height:1px;background:currentColor;opacity:.16}
+.tghint{font-weight:400;font-size:calc(var(--u)*9);opacity:.72;white-space:nowrap}
+/* 拖动中的任务行：抬高 + 阴影、跟手；拖拽期间列表禁掉滚动手势 */
+.mrow.dragging{position:relative;z-index:9;opacity:.94;border-radius:calc(var(--u)*10);
+               box-shadow:0 8px 22px rgba(0,0,0,.22)}
+#taskList.dragging-list{touch-action:none;-webkit-user-select:none;user-select:none}
+#torderToast{position:fixed;left:50%;bottom:calc(var(--u)*40);transform:translate(-50%,10px);
+  background:rgba(0,0,0,.82);color:#fff;font-size:calc(var(--u)*12);
+  padding:calc(var(--u)*8) calc(var(--u)*15);border-radius:calc(var(--u)*18);
+  opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;z-index:99}
+#torderToast.on{opacity:1;transform:translate(-50%,0)}
+.mcb{
+  width:calc(var(--u) * 19);height:calc(var(--u) * 19);
+  border-radius:calc(var(--u) * 6);background:rgba(0,0,0,.10);
+  flex:none;cursor:pointer;position:relative;user-select:none;
+  /* 不用再写 margin-left：行内已有 gap，之前 gap+margins 双份间距白吃 14u 宽度
+     （对象名"喵帕斯～"就差这 3u 被省略号截掉） */
+}
+.mcb.on{background:var(--accent)}
+.mcb.on::after{
+  content:"✓";position:absolute;inset:0;display:flex;align-items:center;
+  justify-content:center;color:#fff;font-size:13px;font-weight:700;
+}
+/* 任务名：字号/字重跟着 u 走；禁用态只用"灰 + 常规字重"，**不再划删除线**
+   （line-through 压在毛玻璃上又脏又像报错，用户实报"排版和样式有点丑"）。 */
+.mname{font-weight:600;font-size:calc(var(--u) * 12.5);color:var(--strong);white-space:nowrap}
+/* 选中/进行中的箭头：跟在任务名后（比名字小一号、橙色），不再占用右侧那一列 */
+.marrow{
+  flex:none;margin-left:calc(var(--u) * 5);
+  color:var(--accent);font-size:calc(var(--u) * 10);line-height:1;
+}
+/* 行右侧一簇：对象名 + 状态文字，整体贴右（与勾选框之间留 gap）。
+   auto 边距放这里而不是 .mdet，是为了"有对象名"的行也能右对齐 */
+.mright{
+  margin-left:auto;display:flex;align-items:center;
+  gap:calc(var(--u) * 6);min-width:0;flex:0 1 auto;
+}
+/* 任务名的"对象"小字（好友护理 → 喵帕斯～、雇佣好友 → 柠檬..）：
+   浅色、小一号、超长省略 */
+.msub{
+  font-size:calc(var(--u) * 10.5);color:var(--sub);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  min-width:calc(var(--u) * 33);   /* 再怎么挤也留 3 个字的位置，别缩成"喵…" */
+}
+.mname.off{color:var(--sub);font-weight:400}
+/* 行右侧状态：只显示**有意义**的几种（执行中 / 等待 HH:MM / 今日完成 / 今日结束 / 已禁用），
+   正常"可执行"不写字，免得每行尾巴都挂个词显得吵。 */
+.mdet{
+  flex:none;
+  font-size:calc(var(--u) * 10);color:var(--sub);
+  font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap;
+}
+.mdet .run{color:var(--accent);font-weight:600}
+.mdet .done{color:var(--ok);font-weight:600}
+.mdet .off-t{color:#b6a488}
+.ttag{
+  font-size:9px;padding:1px 5px;border-radius:4px;
+  border:1px solid var(--line);color:var(--sub);flex:none;margin-left:2px;
+}
+/* 行态：活跃行（执行中/进行中）统一淡橙底 + 橙色名字。**上下留 1.5u 间隙**：
+   否则两条相邻的高亮（例如"学习 进行中" + "好友护理 执行中"）橙色底直接贴在一起，
+   看着像一整块（用户实报）。不要再加深浅分级 —— 用户明确说不需要。 */
+.mrow.run{
+  /* 高亮药丸由 **::before 伪元素**画（见下）：不再动盒模型，行高和普通行完全一致。
+     走过的两条弯路（都别再回去）：
+       ① background-size/position 内缩 —— 背景层仍被元素自身的 border-radius 裁切，
+          药丸上下沿撞上"属于整行"的圆角弧，圆角看着很奇怪（用户实报）；
+       ② 上下透明边框 + background-clip:padding-box —— 形状是对了，但浏览器把
+          `calc(var(--u)*2)` 的边框宽度取整成 2px（应为 2.78px），高亮行比普通行矮 1.1u。
+     **不要在这里写 background-image:none**（那会抹掉本行头顶的分隔线）。 */
+  background-color:transparent;
+}
+.tasklist .mrow{position:relative;z-index:0}   /* 给 ::before 定位 + 独立层叠上下文 */
+.mrow.run::before{
+  content:"";position:absolute;z-index:-1;     /* 在行背景之上、文字之下 */
+  left:0;right:0;
+  /* 顶部要多让 1px：本行的分隔线画在行顶部那 1px 里，不让的话上缝只剩 2u-1px，
+     手机 u=1 时就是"上缝 1px / 下缝 2px"——一眼就看出上下不对称（用户三次实报）。
+     让出 1px 后：橙色到上面那条线的**下沿** = 2u、到下一条线的**上沿** = 2u。 */
+  top:calc(var(--u) * 2 + 1px);bottom:calc(var(--u) * 2);
+  background:rgba(255,153,15,.14);
+  border-radius:calc(var(--u) * 8);            /* 自己的圆角，自洽 */
+}
+.mrow.run .mname{color:var(--accent);font-weight:650}
+.mrow.done,.mrow.dead{opacity:.72}
+.mrow.done .mname,.mrow.dead .mname{color:var(--sub);font-weight:400}
+.mrow.off{opacity:.62}
+.tasklist .row{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:8px 0;border-top:1px dashed var(--line);font-size:14px;
+}
+.tasklist .row:first-child{border-top:0}
+.tasklist .t{display:flex;gap:8px;align-items:center}
+.tasklist .nx{font-size:12px;color:var(--sub);font-variant-numeric:tabular-nums}
+.tasklist .qgrp+.row{border-top:0}
+.tasklist .row.run .t>span:first-child{font-weight:650;color:var(--accent)}
+.chip{
+  font-size:11px;padding:2px 8px;border-radius:999px;
+  background:rgba(255,255,255,.6);color:var(--sub);flex:none;
+}
+.chip.ready{background:rgba(100,201,0,.18);color:#3F7A00}
+.chip.wait{background:rgba(255,153,15,.2);color:#9A5B00}
+.chip.run{background:var(--accent);color:#fff;font-weight:600}
+.chip.off{background:rgba(0,0,0,.06);color:#a89478}
+.chip.done{background:rgba(0,0,0,.05);color:#8A7A62}
+
+/* ---------- 8. 实时画面页 ---------- */
+.shotpage{display:flex;flex-direction:column;gap:10px}
+/* 实时直播卡（scrcpy-server + ffmpeg HLS）：iOS 原生 HLS / 桌面 MSE */
+/* 直播卡按手机竖屏比例占位：未开播的占位框 = 开播后的画面区尺寸，避免"先横条后撑满"的跳变。
+   宽度取「占满可用宽」与「按可视高度换算」的较小值（同一加设备 GUI 的 _fit_screen_card 思路），
+   所以矮屏/横屏也不会顶出视口。设备比例与 9:20 略有差异时由 JS 用 status 的尺寸校正（见 liveStart）。 */
+.shotpage .livecard{--live-ar-w:9;--live-ar-h:20;position:relative;display:flex;align-items:center;justify-content:center;background:#000;overflow:hidden;align-self:center;aspect-ratio:var(--live-ar-w)/var(--live-ar-h);width:min(100%,calc((100vh - 210px) * var(--live-ar-w) / var(--live-ar-h)));width:min(100%,calc((100dvh - 210px) * var(--live-ar-w) / var(--live-ar-h)))}
+.shotpage #liveVideo{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;display:block;touch-action:manipulation}
+.shotpage .livehint{position:absolute;left:12px;right:12px;bottom:10px;color:#cbd5e1;font-size:12px;line-height:1.5;text-align:center;pointer-events:none}
+/* 点击接收层（盖在 video 上）与操作反馈气泡：注入结果一律给反馈，
+   否则"点了没反应"分不清是没接管、没开播、还是被服务端拒绝 */
+.shotpage .livetap{position:absolute;inset:0;z-index:1;cursor:crosshair}
+.shotpage .livetoast{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);z-index:3;max-width:92%;padding:5px 14px;border-radius:999px;font-size:12px;color:#fff;background:rgba(0,0,0,.72);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0;transition:opacity .18s;pointer-events:none}
+.shotpage .livetoast.on{opacity:1}
+.shotpage #btnTakeover.on{background:#16a34a;color:#fff;border-color:#16a34a}
+.shotpage #liveMeta{font-size:12px;color:#64748b;align-self:center}
+.scenecard{position:relative;display:block;border-radius:var(--r-xl);overflow:hidden}
+.shotpage .scenecard{background:#0e0f12;box-shadow:var(--sh-2)}
+.shotpage-ctl{display:flex;gap:8px;flex:none;justify-content:center}
+.shotpage-ctl .savebtn{text-decoration:none;display:inline-block;text-align:center}
+/* 静态截图卡相关样式（#shotLink / #phoneShot / .shotmeta / .duoshot / .shoterr / 加载提示）
+   已随该区域一并移除 —— 本页只剩实时直播 */
+
+/* ---------- 9. 表单与控件（照 QQ 宠物设置页：浅灰底 + 白卡分组） ---------- */
+/* 分组容器 = 一张白色圆角卡片；组标题（.fsect）在卡片【外】上方 */
+.form .fgrp{margin:calc(var(--u) * 14) 0 0}
+.form .fgrp:first-child{margin-top:calc(var(--u) * 8)}
+/* 卡片外的小标题（QQ 宠物设置页风格：灰色小字，在卡片上方） */
+.form .fsect{
+  font-size:calc(var(--u) * 11.5);
+  color:#8A8A8E;
+  padding:0 calc(var(--u) * 16) calc(var(--u) * 6);
+  user-select:none;
+}
+.form .fsect::before{content:none}
+/* 白色圆角卡片 */
+.form .fsec{
+  background:#fff;
+  border-radius:calc(var(--u) * 12);
+  margin:0 calc(var(--u) * 12);
+  overflow:hidden;
+  box-shadow:0 1px 2px rgba(0,0,0,.04);
+}
+.form .frow{
+  display:flex;justify-content:space-between;align-items:center;
+  gap:calc(var(--u) * 10);
+  min-height:calc(var(--u) * 50);
+  padding:calc(var(--u) * 10) calc(var(--u) * 16);
+  border-top:1px solid #F0F0F2;
+  font-size:calc(var(--u) * 14);
+}
+.form .frow:first-child{border-top:0}
+.form .k{color:#1C1C1E;font-size:calc(var(--u) * 14);flex:none}
+.form .u{color:#8A8A8E;font-size:calc(var(--u) * 12);margin-left:calc(var(--u) * 3)}
+/* 卡片内的迷你说明表（2 列：条件 → 结果），用于「合计停止点」这种"到几小时会怎样"
+   的机制说明。比整段灰字好扫，一行一件事（用户要求：别写「当前设置/收益档/说明」
+   那种长段落）。行本身仍是 .frow（display:block 撑满整行），表内不吃 .frow 的
+   space-between，所以 colgroup 不用管宽度，第一列 nowrap 即可。 */
+.form .mintbl{
+  width:100%;border-collapse:collapse;
+  font-size:calc(var(--u) * 12);color:var(--sub);
+}
+.form .mintbl th{
+  font-weight:500;text-align:left;color:var(--sub);
+  padding:0 calc(var(--u) * 4) calc(var(--u) * 6);
+}
+.form .mintbl th:first-child{white-space:nowrap;width:1%}
+.form .mintbl td{
+  padding:calc(var(--u) * 6) calc(var(--u) * 4);
+  border-top:1px solid #F0F0F2;vertical-align:top;
+}
+.form .mintbl td:first-child{white-space:nowrap;color:#1C1C1E}
+.form select,.form input[type=number],.form input[type=text]{
+  border:0;background:transparent;color:#8A8A8E;
+  font-size:calc(var(--u) * 14);text-align:right;
+  padding:calc(var(--u) * 4) 0;max-width:58%;
+}
+.form input[type=number]{width:calc(var(--u) * 70)}
+.form input[type=text]{width:calc(var(--u) * 140)}
+.form .two{display:flex;gap:calc(var(--u) * 6)}
+.form .two input{width:calc(var(--u) * 56)}
+/* 行内右侧控件组：状态文字在左、按钮靠右（与开关行的右对齐一致）。
+   不加 .ctrl 时按钮会被 frow 的 space-between 摊到中间（通知页"测试"行实测） */
+.form .ctrl{display:flex;align-items:center;gap:calc(var(--u) * 8);min-width:0}
+.form .ctrl #notifyTestMsg{
+  color:var(--sub);font-size:calc(var(--u) * 12);
+  text-align:right;overflow-wrap:anywhere;
+}
+/* 说明条目：标签左、正文右，两列对齐（原来是整段灰字墙，三段糊在一起） */
+.form .noterow{
+  display:flex;gap:calc(var(--u) * 12);
+  padding:calc(var(--u) * 10) calc(var(--u) * 16);
+  border-top:1px solid #F0F0F2;
+}
+.form .noterow:first-child{border-top:0}
+.form .noterow .nt{
+  color:#1C1C1E;font-size:calc(var(--u) * 13);font-weight:500;
+  flex:none;width:calc(var(--u) * 62);
+}
+.form .noterow .nb{
+  color:var(--sub);font-size:calc(var(--u) * 12.5);line-height:1.65;
+  flex:1;min-width:0;
+}
+.form .noterow .nb b{color:#1C1C1E;font-weight:600}
+
+/* 开关 */
+.sw{
+  position:relative;width:46px;height:26px;border-radius:13px;
+  background:#d9dce3;border:none;transition:.2s;flex:none;cursor:pointer;
+}
+.sw.on{background:var(--accent)}
+.sw::after{
+  content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;
+  border-radius:50%;background:#fff;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.25);
+}
+.sw.on::after{left:23px}
+
+/* 按钮 */
+.savebtn{
+  width:100%;margin-top:12px;border:none;border-radius:var(--r-md);
+  background:var(--accent);color:#fff;font-size:15px;font-weight:600;
+  padding:11px;letter-spacing:.02em;
+}
+.savebtn:disabled{opacity:.55}
+.savebtn.ghost{background:transparent;color:var(--accent);border:1.5px solid var(--accent)}
+.btnrow2{display:flex;gap:8px;margin-top:10px}
+.btnrow2 .savebtn{margin-top:0}
+.minibtn{
+  border:1px solid var(--line);background:#FFFDF8;border-radius:var(--r-sm);
+  padding:2px 8px;font-size:11px;color:var(--sub);
+}
+.minibtn.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.saveMsg{font-size:12px;text-align:center;margin-top:6px;min-height:16px;color:var(--ok)}
+.saveMsg.err{color:#b45309}
+
+/* 运行信息（只读） */
+.cfg .row{
+  display:flex;justify-content:space-between;gap:calc(var(--u) * 10);
+  /* 左右内距与 .form .frow 一致（16dp）：.form .fsec 卡片本身没有 padding，
+     靠行自带内距撑开。原来写 padding:7px 0 时内容贴到卡片边缘（实测踩坑）。 */
+  padding:calc(var(--u) * 9) calc(var(--u) * 16);
+  border-top:1px solid #F0F0F2;font-size:calc(var(--u) * 14);
+}
+.cfg .row:first-child{border-top:0}
+.cfg .k{color:#1C1C1E;flex:none}
+.cfg .v{text-align:right;color:#8A8A8E;word-break:break-word}
+
+/* ---------- 10. 日志 ---------- */
+.logctl{display:flex;gap:calc(var(--u) * 8);align-items:center;flex-wrap:wrap}
+
+
+/* 工具栏控件：浅灰底、圆角，聚焦描边（与设置页控件观感一致） */
+.logctl input{
+  flex:1;min-width:calc(var(--u) * 110);
+  border:1px solid #E8E8EC;border-radius:calc(var(--u) * 9);
+  padding:calc(var(--u) * 7) calc(var(--u) * 11);
+  font-size:calc(var(--u) * 13);background:#F7F7F9;color:#1C1C1E;
+  -webkit-appearance:none;
+}
+.logctl input:focus{outline:none;border-color:var(--accent);background:#fff}
+.logctl button{
+  border:1px solid #E8E8EC;background:#fff;border-radius:calc(var(--u) * 9);
+  padding:calc(var(--u) * 7) calc(var(--u) * 13);
+  font-size:calc(var(--u) * 12.5);color:#4A4A4F;cursor:pointer;
+}
+.logctl button:active{background:#F0F0F3}
+.logctl button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+/* 日志元信息（当天日志文件名 + 当前行数）：放在「输出」白卡内、日志框下方。
+   **不要挂回顶栏 .navmeta** —— .navtitle 是 position:absolute;left:50% 绝对居中，
+   .navmeta 是 margin-left:auto 贴右，390px 下两者必然重叠（实测标题压住 meta 开头，
+   糊成「实时日志2026-09-20.log · 250 行」）。日志框自带 --u*14 左右内距，
+   这里用同样的内距让注脚与日志文字左右对齐；字号走 --u 随宽度缩放。
+   注：截图验证须走 iframe 承载（headless Chrome 最小视口 500px，
+   直接 --window-size=390 是按 500px 排版后裁右侧，见
+   qqpet_assets/web/INTEGRATION.md 5.1）。 */
+.logfoot{
+  padding:0 calc(var(--u) * 14);
+  text-align:right;
+  font-size:calc(var(--u) * 11.5);color:#8A8A8E;
+  font-variant-numeric:tabular-nums;
+}
+.logfoot:empty{display:none}
+pre#logbox{
+  /* 白底深字（用户要求）—— 对比度约 15:1；等宽字体便于对齐时间戳 */
+  /* 高度按可视区减去页头等固定占用；同样要扣掉顶部安全区（body 的 padding-top
+     已经吃掉一块），否则日志框底部会伸到折叠线以下。顺序 vh 在前、dvh 在后。 */
+  height:calc(100vh - 320px - env(safe-area-inset-top, 0px));
+  height:calc(100dvh - 320px - env(safe-area-inset-top, 0px));
+  min-height:calc(var(--u) * 220);
+  overflow:auto;background:transparent;color:#1C1C1E;
+  font:calc(var(--u) * 12.5)/1.75 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  padding:calc(var(--u) * 12) calc(var(--u) * 14);
+  white-space:pre-wrap;word-break:break-all;margin:0;
+  /* 内层滚动区同样不回弹（原为 contain —— contain 只是不往父级传递，自身照弹） */
+  overscroll-behavior:none;
+}
+/* 日志页顶部多了切换条（10u 上边距 + 按钮 ≈ 46px）：日志框高度要把它扣掉，
+   否则最下面「异常截图」那张卡被挤到折叠线以下、标题只露半行（实测截图可见）。
+   320px 是切换条之前调好的固定占用，这里 -366px = 320 + 46。 */
+#logIndex pre#logbox{
+  height:calc(100vh - 366px - env(safe-area-inset-top, 0px));
+  height:calc(100dvh - 366px - env(safe-area-inset-top, 0px));
+}
+/* 异常截图缩略图 */
+.thumbs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.thumbs a{display:block;border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden;position:relative}
+.thumbs img{width:100%;display:block}
+.thumbs .cap{
+  position:absolute;left:0;right:0;bottom:0;height:auto;
+  background:rgba(33,29,24,.72);color:#fff;font-size:10px;
+  padding:2px 6px;text-align:center;
+}
+
+/* ---------- 10.1 日志页·收益记录子页 ---------- */
+/* 切换条（实时日志 / 收益记录）：复用 .logctl 的控件观感，常驻在两个子页上方。
+   **左右必须跟卡片一样内缩 12u**：内页 section 自身水平 padding 是 0，全靠
+   `.pgsec-c{margin:0 12u}` 撑出内缩，裸放会让切换条贴到屏幕边缘、跟下面所有
+   卡片错开一整条 12u（实测截图一眼就看出来）。上方留 10u（同 `.pgsec:first-of-type`），
+   否则紧贴导航栏底边。 */
+#logSubtabs{margin:calc(var(--u) * 10) calc(var(--u) * 12) 0}
+/* 统计范围：选择器在左、口径说明贴右同一行（不再写第二遍"统计范围"） */
+.rwscope{width:100%;flex-wrap:nowrap}
+.rwscope #rwDateRow{flex:none;display:flex;align-items:center;gap:calc(var(--u) * 6)}
+.rwscope #rwDateRow select{
+  border:1px solid #E8E8EC;border-radius:calc(var(--u) * 9);
+  padding:calc(var(--u) * 6) calc(var(--u) * 10);
+  font-size:calc(var(--u) * 13);background:#F7F7F9;color:#1C1C1E;
+  /* **不要 appearance:none** —— 去掉原生下拉箭头后它看着就是个普通输入框，
+     看不出能点（冒险页的选择器保留原生外观，这里保持一致） */
+}
+/* meta 单行省略：范围选"全部"时文案会变长，宁可省字也不折行把卡片撑高 */
+.rwscope #rwMeta{margin-left:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+
+/* 汇总块：两行大字（学习 / 打工）+ 一行疲惫提示 */
+.rwsum{font-variant-numeric:tabular-nums}
+.rwsum .rwline{
+  display:flex;align-items:baseline;gap:calc(var(--u) * 8);
+  padding:calc(var(--u) * 7) 0;border-top:1px dashed var(--line);
+}
+.rwsum .rwline:first-child{border-top:0}
+/* 首/末行去掉自身内距：上下留白就都等于卡片 padding（12u），视觉对称；
+   行间距仍是 7u + 7u（虚线两侧） */
+.rwsum .rwline:first-child{padding-top:0}
+.rwsum .rwline:last-child{padding-bottom:0}
+.rwsum .rwico{width:calc(var(--u) * 18);height:calc(var(--u) * 18);flex:none;align-self:center}
+/* 没图标的那行（疲惫提示）用同宽占位，标签列才跟上面两行对齐 —— 少了它整行往左错 18u+8u */
+.rwsum .rwphs{width:calc(var(--u) * 18);flex:none}
+.rwsum .rwk{color:var(--sub);font-size:calc(var(--u) * 12);flex:none;width:calc(var(--u) * 52)}
+.rwsum .rwv{font-weight:650;font-size:calc(var(--u) * 14.5);color:var(--text);white-space:nowrap}
+.rwsum .rwd{
+  color:var(--sub);font-size:calc(var(--u) * 11.5);margin-left:auto;text-align:right;
+  /* 右侧明细单行省略：宁可省字也别折行把三行汇总撑成五行 */
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;
+}
+.rwsum .rwv .gold{color:var(--gold)}
+.rwsum .rwv .accent{color:var(--accent)}
+.rwsum .rwv .tired{color:#C0392B;font-weight:600}
+/* 按次记录：复用冒险页 .advlist/.arow 的观感，左侧放类型图标 */
+#rwList .arow{gap:calc(var(--u) * 6)}
+#rwList .ai{width:calc(var(--u) * 96);display:flex;align-items:center;gap:calc(var(--u) * 5)}
+#rwList .ai img{width:calc(var(--u) * 15);height:calc(var(--u) * 15);flex:none}
+#rwList .ai .rk{color:var(--text);font-weight:600}
+#rwList .ag{text-align:left}
+#rwList .tired{color:#C0392B}
+#rwList .empty{padding:calc(var(--u) * 14);text-align:center;color:var(--sub);font-size:calc(var(--u) * 12.5)}
+
+/* ---------- 11. 冒险页 ---------- */
+.advchart{
+  width:100%;height:auto;display:block;margin:6px 0 0;
+  border:1px solid var(--line);border-radius:var(--r-sm);
+  background:#FFFDF8;cursor:crosshair;touch-action:pan-y;
+}
+.advcap{font-size:11px;color:var(--sub);margin:8px 0 0;letter-spacing:.03em}
+.advtip{
+  font-size:12.5px;color:var(--text);background:#FFFDF8;
+  border:1px solid var(--line);border-radius:var(--r-sm);
+  padding:7px 10px;margin-top:8px;font-variant-numeric:tabular-nums;min-height:18px;
+}
+.advchips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.advlist{
+  max-height:44vh;overflow:auto;margin-top:6px;
+  border:1px solid var(--line);border-radius:var(--r-sm);
+  background:#FFFDF8;overscroll-behavior:none;
+}
+.advlist .arow{
+  display:flex;justify-content:space-between;align-items:baseline;gap:8px;
+  padding:7px 10px;border-top:1px dashed var(--line);font-size:13px;
+  font-variant-numeric:tabular-nums;
+}
+.advlist .arow:first-child{border-top:0}
+.advlist .ai{
+  color:var(--sub);font-size:12px;flex:none;width:112px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.advlist .ag{
+  color:var(--sub);font-size:11.5px;flex:1;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right;
+}
+.advlist .av{font-weight:650;flex:none;min-width:44px;text-align:right}
+.advlist .pos{color:var(--gold)}
+.advlist .neg{color:#C0392B}
+.advlist .zero{color:#a89478}
+
+/* ---------- 12. 职业页 ---------- */
+.planbars .pb{margin-top:10px}
+.planbars .pb .t{
+  display:flex;justify-content:space-between;font-size:12px;
+  color:var(--sub);margin-bottom:3px;font-variant-numeric:tabular-nums;
+}
+.planbars .bar{margin-top:0}
+.plansteps .st{
+  display:flex;justify-content:space-between;gap:8px;padding:7px 0;
+  border-top:1px dashed var(--line);font-size:13px;align-items:baseline;
+}
+.plansteps .st:first-child{border-top:0}
+.plansteps .dot2{flex:none;font-size:12px}
+.plansteps .tx{flex:1;min-width:0}
+.plansteps .pr{color:var(--sub);font-size:11.5px;flex:none;font-variant-numeric:tabular-nums}
+.plansteps .st.done .tx{color:var(--sub)}
+.plansteps .st.done .pr{color:#a89478}
+.plansteps .st.cur{background:rgba(255,153,15,.12);border-radius:var(--r-sm);padding-left:6px;padding-right:6px}
+.plannote{font-size:11px;color:var(--sub);margin-top:6px;line-height:1.5}
+.watchbox .wrow{
+  display:flex;justify-content:space-between;gap:8px;font-size:12.5px;
+  padding:6px 0;border-top:1px dashed var(--line);align-items:baseline;
+}
+.watchbox .wrow:first-child{border-top:0}
+.watchbox .wstate{font-size:12px;color:var(--sub);padding:2px 0 4px}
+.watchbox .wbadge{color:var(--ok);font-weight:600}
+.planlines{display:grid;grid-template-columns:1fr 1fr;gap:6px 8px}
+.planlines .ln{
+  display:flex;justify-content:space-between;align-items:center;
+  font-size:12.5px;padding:5px 8px;border:1px solid var(--line);border-radius:var(--r-sm);
+}
+.planlines .chipx{
+  font-size:10.5px;padding:1px 6px;border-radius:999px;
+  background:rgba(0,0,0,.06);color:#a89478;margin-left:4px;
+}
+.planlines .chipx.ok{background:rgba(100,201,0,.18);color:#3F7A00}
+.plinedit{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.plinedit label{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--sub)}
+.plinedit input{
+  border:1px solid var(--line);border-radius:var(--r-sm);padding:6px;
+  font-size:14px;text-align:center;background:#FFFDF8;color:var(--text);width:100%;
+}
+.planeditrow{
+  grid-column:span 3;display:flex;gap:10px;align-items:center;
+  flex-wrap:wrap;font-size:12.5px;margin-top:2px;
+}
+
+/* ---------- 13. 页脚 ---------- */
+
+/* ---------- 14. 响应式 ---------- */
+/* 窄屏（≤639px）：侧栏仍保留，收紧尺寸 */
+@media(max-width:639px){
+  /* 这里原来把任务行的内距/勾选框/字号覆盖成一套**写死的 px**（padding:8px 0 等），
+     而手机正好都 ≤639px ⇒ 覆盖永远生效：行内距变成 0、勾选框 18px、字号 13px，
+     跟卡片其它地方那套 --u 尺寸对不上（用户："排版很一般"）。现在尺寸统一走 u
+     （u 本身 = clientWidth/360，窄屏自然变小），这里只留"窄屏才需要"的两条。 */
+  .ttag{display:none}
+}
+/* 小屏（≤360px）：进一步收紧 */
+@media(max-width:360px){
+  .card{padding:10px 11px;border-radius:var(--r-lg)}
+  .workline .big{font-size:20px}
+  .tile .v{font-size:17px}
+  .grid{gap:6px}
+  /* 顶部三块间距一起收紧（仍保持三处等距）。
+     不要再写成 .caps{gap:6px} —— 那只改胶囊两行的间距，
+     资料卡→胶囊、胶囊→面板仍是 12，三处又不相等了。 */
+  :root{--gap-top:10}
+  .cap{padding:0 8px}
+  .cap .cval{font-size:12.5px}
+  .advlist .ai{width:96px}
+  .form select,.form input[type=number],.form input[type=text]{max-width:52%}
+  .form input[type=text]{width:126px}
+}
+/* 平板/中窗（≥640px）：多列 */
+@media(min-width:640px){
+  .grid{grid-template-columns:repeat(6,minmax(0,1fr))}
+  .thumbs{grid-template-columns:repeat(4,minmax(0,1fr))}
+}
+/* 桌面（≥920px）：加宽版心 */
+@media(min-width:920px){
+  .grid{grid-template-columns:repeat(6,minmax(0,1fr))}
+  .thumbs{grid-template-columns:repeat(4,minmax(0,1fr))}
+  pre#logbox{height:58vh}
+}
+
+/* ---------- 15. 深色模式 ---------- */
+/* 官方【没有独立深色主题】—— 深色下只是把房间背景换成偏暗的版本，
+   组件（胶囊/圆钮/资料卡/文字）颜色**完全不变**。
+   所以这里只切背景图，不改任何 token，保证与官方一致。 */
+@media(prefers-color-scheme:dark){
+  :root{
+    /* 只替换背景图；其余 token 一律沿用浅色值 */
+    --qp-room-main:url('/qp-icons/bg/room-main-dark.jpg?v=5');
+    --qp-room-feed:url('/qp-icons/bg/room-feed-dark.jpg?v=5');
+    --qp-room-shower:url('/qp-icons/bg/room-shower-dark.jpg?v=5');
+    --qp-room-record:url('/qp-icons/bg/room-record-dark.jpg?v=5');
+    --qp-room-store:url('/qp-icons/bg/room-store-dark.jpg?v=5');
+    /* 状态栏采样色是唯一例外：它要跟背景图走（深色房间顶部明显更暗），
+       否则深色模式下状态栏还是浅色那条，比背景亮一截。取各 -dark 图顶部实测色。 */
+    --qp-sb-main:#A9722D;
+    --qp-sb-feed:#C39145;
+    --qp-sb-shower:#A3651D;
+    --qp-sb-record:#C18C3A;
+    --qp-sb-store:#2A2E38;
+  }
+}
+
+/* 房间背景由 JS 按 `html[data-scene]` 内联写到 html 上（见 setSceneAttr）：
+   键 = SCENE_INFO 的键（5 套场景 room-* + 15 款官方家居背景 home-*）。
+   注意：**必须写在 html 上** —— 背景图作用在 html 元素，而 CSS 变量只向下继承，
+   写在 body 上的覆写对父级 html 无效（曾踩坑：data-scene 变了但背景不动）。
+   下面这 4 条只是"JS 还没跑"的首帧兜底（早期版本靠它们切换）；
+   JS 一旦跑起来，内联的 --qp-room/--qp-statusbar 优先级更高、覆盖它们。
+   15 款家居背景 + 8 个职业/毕业主题都有官方夜间版（--qp-room-* 的深色值在
+   @media(prefers-color-scheme:dark) 里换成 *-dark 图，见 SCENE_INFO 的 dark 字段）。 */
+html[data-scene="feed"]{--qp-room:var(--qp-room-feed);--qp-statusbar:var(--qp-sb-feed)}
+html[data-scene="shower"]{--qp-room:var(--qp-room-shower);--qp-statusbar:var(--qp-sb-shower)}
+html[data-scene="record"]{--qp-room:var(--qp-room-record);--qp-statusbar:var(--qp-sb-record)}
+html[data-scene="store"]{--qp-room:var(--qp-room-store);--qp-statusbar:var(--qp-sb-store)}
+
+/* 内页（非总览）把 html 背景换成白色。
+   原因：body 的 padding-top 给状态栏留了安全区，露出的是 html 的底色 ——
+   总览页露出房间暖色图是对的，但内页顶栏是白的，露出暖色就很突兀
+   （真机 PWA 全屏实测：通知页顶部一条暖黄）。内页统一白底与顶栏衔接。 */
+html[data-page]:not([data-page="main"]){background-image:none;background-color:#fff}
+
+/* ---------- 设置页：照 QQ 宠物设置页（iOS 风格浅灰底 + 白卡分组） ---------- */
+section[data-page="set"]{
+  background:#F2F2F7;
+  /* 必须减掉顶部安全区：body 已经为状态栏加了 padding-top，
+     这里若用裸 100dvh，两者相加就比可视区高出一个安全区（要往下滑才见底）。
+     与 .home 同一套写法，顺序同样是 vh 在前、dvh 在后。 */
+  min-height:calc(100vh - env(safe-area-inset-top, 0px));
+  min-height:calc(100dvh - env(safe-area-inset-top, 0px));
+  margin:0;padding:0 0 calc(var(--u) * 20);
+  border:0;border-radius:0;box-shadow:none;
+}
+section[data-page="set"] > h2{
+  display:none;   /* 原「设置 保存后下一轮调度生效」标题移除（改用分组标题） */
+}
+
+
+
+/* ---------- 设置页（照 QQ 宠物：顶栏 + 分组卡片） ---------- */
+/* 顶部导航栏：白底、返回箭头在左、标题居中 */
+.navhead{
+  position:relative;
+  display:flex;align-items:center;
+  height:calc(var(--u) * 48);
+  background:#fff;
+  border-bottom:1px solid #EDEDF0;
+  padding:0 calc(var(--u) * 12);
+}
+.navhead .backbtn{
+  width:calc(var(--u) * 34);height:calc(var(--u) * 34);
+  border:0;background:transparent;padding:0;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;flex:none;
+}
+.navhead .backbtn img{width:62%;height:62%;object-fit:contain}
+.navhead .backbtn:active{opacity:.55}
+.navhead .navtitle{
+  position:absolute;left:50%;transform:translateX(-50%);
+  font-size:calc(var(--u) * 17);font-weight:600;color:#1C1C1E;
+  white-space:nowrap;
+}
+/* 一级列表：小节（标题在卡外 + 白卡内多行） */
+.msec{margin-top:calc(var(--u) * 16)}
+.msec:first-child{margin-top:calc(var(--u) * 10)}
+.menurow{cursor:pointer}
+.menurow:active{background:#F5F5F7}
+.menurow .chev{
+  color:#C7C7CC;font-size:calc(var(--u) * 18);line-height:1;
+  margin-left:auto;padding-left:calc(var(--u) * 6);
+}
+
+/* 顶栏右侧的附加信息（如日志的条数、冒险的场次） */
+.navhead .navmeta{
+  margin-left:auto;
+  font-size:calc(var(--u) * 11);
+  color:#8A8A8E;font-weight:400;
+  white-space:nowrap;
+  padding-right:calc(var(--u) * 4);
+}
+
+/* ---------- 内页统一排版（照设置页：浅灰底 + 白卡分节） ---------- */
+main > section[data-page]:not([data-page="main"]){
+  background:#F2F2F7;
+  /* 同 section[data-page="set"]：减掉顶部安全区，避免比可视区高出一截 */
+  min-height:calc(100vh - env(safe-area-inset-top, 0px));
+  min-height:calc(100dvh - env(safe-area-inset-top, 0px));
+  margin:0;padding:0 0 calc(var(--u) * 24);
+  border:0;border-radius:0;box-shadow:none;
+}
+/* 分节：小标题（卡外） + 白卡（卡内） */
+.pgsec{margin-top:calc(var(--u) * 14)}
+.pgsec:first-of-type{margin-top:calc(var(--u) * 10)}
+.pgsec > .pgsec-t{
+  font-size:calc(var(--u) * 11.5);color:#8A8A8E;
+  padding:0 calc(var(--u) * 16) calc(var(--u) * 6);
+}
+.pgsec > .pgsec-c{
+  background:#fff;
+  border-radius:calc(var(--u) * 12);
+  margin:0 calc(var(--u) * 12);
+  padding:calc(var(--u) * 12) calc(var(--u) * 14);
+  box-shadow:0 1px 2px rgba(0,0,0,.04);
+  overflow:hidden;
+}
+/* 卡内的标题/图表不再自带边框与底色 */
+.pgsec-c .advchart,.pgsec-c .advlist,.pgsec-c .advtip{background:transparent;border:0}
+.pgsec-c .advcap:first-child{margin-top:0}
+.pgsec-t + .pgsec-c > .advcap:first-child{margin-top:0}
+/* 内页里原橙色竖条小节标题 -> 灰色小字 */
+main > section[data-page]:not([data-page="main"]) .subh{
+  font-size:calc(var(--u) * 11.5);color:#8A8A8E;letter-spacing:0;
+  margin:calc(var(--u) * 14) calc(var(--u) * 16) calc(var(--u) * 2);padding:0;
+}
+/* 内页按钮/提示与卡片对齐 */
+main > section[data-page]:not([data-page="main"]) > .savebtn,
+main > section[data-page]:not([data-page="main"]) > .btnrow2,
+main > section[data-page]:not([data-page="main"]) > .saveMsg,
+main > section[data-page]:not([data-page="main"]) > .plannote{
+  margin-left:calc(var(--u) * 12);margin-right:calc(var(--u) * 12);
+}
+
+/* ---------- 好友名选择器（下拉 + 手输兜底） ---------- */
+.fpick{display:flex;align-items:center;justify-content:flex-end;gap:calc(var(--u) * 6);
+  flex:1;min-width:0;max-width:62%}
+.fpsel{
+  border:0;background:transparent;color:#8A8A8E;
+  font-size:calc(var(--u) * 14);text-align:right;
+  padding:calc(var(--u) * 4) 0;max-width:100%;min-width:0;
+  -webkit-appearance:none;appearance:none;   /* 去掉 iOS 默认箭头，保持简洁 */
+  text-align-last:right;
+}
+.fpinput{
+  border:0;background:transparent;color:#8A8A8E;
+  font-size:calc(var(--u) * 14);text-align:right;
+  padding:calc(var(--u) * 4) 0;width:calc(var(--u) * 140);
+}
+.fpinput.hide{display:none}

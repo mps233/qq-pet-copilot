@@ -9,6 +9,15 @@ export interface Data {
   status: PetStatus
   progress: Record<string, TaskProgress>
   config: ConfigSnapshot
+  /** 今日学习/打工时长与效率档（分钟） */
+  today_duration?: TodayDuration
+  /** 进行中的活动（kind = 上课/打工/冒险，remaining = 剩余秒） */
+  work_eta?: WorkEta
+  /** 设置页可编辑项的快照（含 stop_total_hours 等） */
+  editable?: Record<string, unknown>
+  shots?: Shot[]
+  friends?: string[]
+  last_line?: string
 }
 
 export interface SchedulerInfo {
@@ -17,12 +26,31 @@ export interface SchedulerInfo {
   uptime: string
 }
 
+export interface TodayDuration {
+  learn_min: number
+  work_min: number
+  eff_pct: number
+  total_min: number
+  next_pct: number
+  next_in_min: number
+}
+
+export interface WorkEta {
+  eta_clock: string
+  remaining: number
+  /** 中文活动名：上课 / 打工 / 冒险 */
+  kind: string
+}
+
+export interface Shot {
+  name: string
+  mtime: string
+}
+
 export interface QueueTaskState {
   state: string
   next?: string
   next_ts?: number
-  /** 任务对象名（好友护理 → 喵帕斯～） */
-  sub?: string
 }
 
 export interface QueueInfo {
@@ -44,15 +72,18 @@ export interface PetStatus {
   coins: number
   updated: string
   pet_name: string
-  energy: number
-  clean: number
-  mood: number
+  energy: number | null
+  clean: number | null
+  mood: number | null
 }
 
 export interface TaskProgress {
-  today?: number
-  total?: number
-  history?: Record<string, number>
+  date?: string
+  learned?: number
+  done?: boolean
+  study_secs?: number
+  work_secs?: number
+  duration?: string
   [k: string]: unknown
 }
 
@@ -83,10 +114,9 @@ export const TASK_NAME: Record<string, string> = {
   visit: '踩踩',
   pk: 'PK',
   work: '打工',
-  employed: '被雇佣',
 }
 
-/** 任务分组：「循环」= 日常轮巡（顺序固定，不参与拖动）；其余可拖动排序 */
+/** 任务类型标签：「循环」= 按间隔巡检；「每日」= 每天定时；「主线」= 主任务组互斥 */
 export const TASK_GROUP: Record<string, '循环' | '每日' | '主线'> = {
   care: '循环',
   friend_care: '循环',
@@ -99,6 +129,7 @@ export const TASK_GROUP: Record<string, '循环' | '每日' | '主线'> = {
   hire_friend: '主线',
 }
 
+/** 日常轮巡组（顺序固定，不参与拖动排序） */
 export const isLoopTask = (k: string): boolean => TASK_GROUP[k] === '循环'
 
 async function getJSON<T>(url: string): Promise<T> {
@@ -127,3 +158,7 @@ export async function saveSettings(
   if (!r.ok) throw new Error(`保存失败 HTTP ${r.status}`)
   return (await r.json()) as SettingsResult
 }
+
+/** 调度器启停（功能栏的两个按钮） */
+export const runnerStart = () => fetch('/api/runner/start', { method: 'POST' })
+export const runnerStop = () => fetch('/api/runner/stop', { method: 'POST' })
