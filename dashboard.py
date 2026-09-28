@@ -2308,10 +2308,10 @@ body{
 /* 任务分组标题（日常轮巡 / 任务顺序）：小字 + 一条极淡的发丝线 */
 .tghd{display:flex;align-items:center;gap:calc(var(--u)*6);
       padding:calc(var(--u)*9) calc(var(--u)*2) calc(var(--u)*3);
-      font-size:calc(var(--u)*10.5);font-weight:600;color:var(--sub)}
+      font-size:calc(var(--u)*9.5);font-weight:600;color:var(--sub)}
 .tghd:first-child{padding-top:calc(var(--u)*2)}
 .tghd i{flex:1;height:1px;background:currentColor;opacity:.16}
-.tghint{font-weight:400;font-size:calc(var(--u)*10);opacity:.72;white-space:nowrap}
+.tghint{font-weight:400;font-size:calc(var(--u)*9);opacity:.72;white-space:nowrap}
 /* 拖动中的任务行：抬高 + 阴影、跟手；拖拽期间列表禁掉滚动手势 */
 .mrow.dragging{position:relative;z-index:9;opacity:.94;border-radius:calc(var(--u)*10);
                box-shadow:0 8px 22px rgba(0,0,0,.22)}
@@ -2335,11 +2335,11 @@ body{
 }
 /* 任务名：字号/字重跟着 u 走；禁用态只用"灰 + 常规字重"，**不再划删除线**
    （line-through 压在毛玻璃上又脏又像报错，用户实报"排版和样式有点丑"）。 */
-.mname{font-weight:600;font-size:calc(var(--u) * 13.5);color:var(--strong);white-space:nowrap}
+.mname{font-weight:600;font-size:calc(var(--u) * 12.5);color:var(--strong);white-space:nowrap}
 /* 选中/进行中的箭头：跟在任务名后（比名字小一号、橙色），不再占用右侧那一列 */
 .marrow{
   flex:none;margin-left:calc(var(--u) * 5);
-  color:var(--accent);font-size:calc(var(--u) * 11);line-height:1;
+  color:var(--accent);font-size:calc(var(--u) * 10);line-height:1;
 }
 /* 行右侧一簇：对象名 + 状态文字，整体贴右（与勾选框之间留 gap）。
    auto 边距放这里而不是 .mdet，是为了"有对象名"的行也能右对齐 */
@@ -2350,23 +2350,23 @@ body{
 /* 任务名的"对象"小字（好友护理 → 喵帕斯～、雇佣好友 → 柠檬..）：
    浅色、小一号、超长省略 */
 .msub{
-  font-size:calc(var(--u) * 11.5);color:var(--sub);
+  font-size:calc(var(--u) * 10.5);color:var(--sub);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  min-width:calc(var(--u) * 36);   /* 再怎么挤也留 3 个字的位置，别缩成"喵…" */
+  min-width:calc(var(--u) * 33);   /* 再怎么挤也留 3 个字的位置，别缩成"喵…" */
 }
 .mname.off{color:var(--sub);font-weight:400}
 /* 行右侧状态：只显示**有意义**的几种（执行中 / 等待 HH:MM / 今日完成 / 今日结束 / 已禁用），
    正常"可执行"不写字，免得每行尾巴都挂个词显得吵。 */
 .mdet{
   flex:none;
-  font-size:calc(var(--u) * 11);color:var(--sub);
+  font-size:calc(var(--u) * 10);color:var(--sub);
   font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap;
 }
 .mdet .run{color:var(--accent);font-weight:600}
 .mdet .done{color:var(--ok);font-weight:600}
 .mdet .off-t{color:#b6a488}
 .ttag{
-  font-size:9.5px;padding:1px 5px;border-radius:4px;
+  font-size:9px;padding:1px 5px;border-radius:4px;
   border:1px solid var(--line);color:var(--sub);flex:none;margin-left:2px;
 }
 /* 行态：活跃行（执行中/进行中）统一淡橙底 + 橙色名字。**上下留 1.5u 间隙**：
