@@ -329,3 +329,34 @@ export interface AdvData {
 
 export const fetchAdventure = (date?: string): Promise<AdvData> =>
   getJSON<AdvData>(`/api/adventure${date ? `?date=${encodeURIComponent(date)}` : ''}`)
+
+/** 实时画面（设备端 scrcpy-server + 本机 ffmpeg 转 HLS）的状态 */
+export interface StreamStatus {
+  running: boolean
+  error?: string
+  /** 服务端从 init.mp4 的 avcC box 解析出的真实 codec（MSE 必须用它，写错会静默黑屏） */
+  codec?: string
+  /** "720x1280" 形式的视频尺寸 / 设备尺寸（点击换算要用） */
+  video?: string
+  device?: string
+  uptime?: number
+  scheduler_alive?: boolean
+  /** 调度器已让路（接管生效） */
+  scheduler_paused?: boolean
+}
+
+export const streamStatus = (): Promise<StreamStatus> => getJSON<StreamStatus>('/api/stream/status')
+
+/** 接管：请调度器让路（原地等待，不退出进程、不丢进度） */
+export async function runnerPause(): Promise<{ ok: boolean; msg?: string }> {
+  const r = await fetch('/api/runner/pause', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  return (await r.json()) as { ok: boolean; msg?: string }
+}
+
+/** 交还控制权，调度器从原处继续 */
+export async function runnerResume(): Promise<{ ok: boolean; msg?: string }> {
+  const r = await fetch('/api/runner/resume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  return (await r.json()) as { ok: boolean; msg?: string }
+}

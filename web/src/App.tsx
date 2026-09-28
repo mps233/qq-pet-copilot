@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react'
 import { TASK_GROUP, TASK_NAME, isLoopTask, runnerStart, runnerStop, saveSettings } from './api'
 import { Overview, type PageKey } from './components/Overview'
 import { AdvPage } from './components/AdvPage'
+import { LivePage } from './components/LivePage'
 import { LogPage } from './components/LogPage'
 import { NavHead } from './components/NavHead'
 import { NotifyPage } from './components/NotifyPage'
@@ -125,6 +126,11 @@ export default function App() {
           <section className="card" data-page="log">
             <NavHead title="日志" onBack={() => setPage('main')} />
             <LogPage shots={data.shots ?? []} />
+          </section>
+        ) : page === 'shot' ? (
+          <section className="shotpage" data-page="shot">
+            <NavHead title="实时画面" onBack={() => setPage('main')} />
+            <LivePage />
           </section>
         ) : page === 'adv' ? (
           <section className="card" data-page="adv">
