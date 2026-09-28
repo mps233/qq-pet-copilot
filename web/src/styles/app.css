@@ -718,10 +718,16 @@ body{
 }
 .drawer{
   /* 底部信息：坐在 .deck 弧形面板上，水平居中、贴近弧顶（官方图标在弧顶下方）。
-     deck 高 135dp（669~804），图标中心约在 700dp -> 距 deck 顶 31dp。 */
+     deck 高 135dp（669~804），图标中心约在 700dp -> 距 deck 顶 31dp。
+
+     top 从 22u 收到 19u：实测 .drawer 内容高 159.4px（图标 64 + 文字列 93 + 间距），
+     而 .deck 给的可用高只有 157px（= 187.5 - 22u×1.389）→ 底部溢出 **2.5px**，
+     于是 .home 多出一点点可滚高度（用户实报"底栏最下面有一块很细很细的区域，
+     导致可以滚动一点点"）。收 3u 后留出余量；图标离弧顶近了不到 4px，看不出来。
+     注意别去改 .deck 的 135u —— 那是官方底栏的形。 */
   left:50%;
   transform:translateX(-50%);
-  top:calc(var(--u) * 22);
+  top:calc(var(--u) * 19);
   width:calc(var(--u) * 62);
   display:flex;flex-direction:column;align-items:center;
   gap:calc(var(--u) * 2);
