@@ -162,3 +162,71 @@ export async function saveSettings(
 /** 调度器启停（功能栏的两个按钮） */
 export const runnerStart = () => fetch('/api/runner/start', { method: 'POST' })
 export const runnerStop = () => fetch('/api/runner/stop', { method: 'POST' })
+
+/** GET /api/logs —— 当天日志（尾部 N 行） */
+export interface LogsData {
+  name: string
+  total: number
+  lines: string[]
+}
+export const fetchLogs = (): Promise<LogsData> => getJSON<LogsData>('/api/logs')
+
+/** 收益汇总的一个桶（学习 / 打工各一份，另有 today_* 两份） */
+export interface RewardBucket {
+  sessions: number
+  credits: number
+  coins: number
+  tired: number
+  /** 解析出数值的条数 —— 前端据此区分"没收益"与"没解析出来"，不拿 +0 冒充 */
+  credits_n: number
+  coins_n: number
+  workpoints: number
+  workpoints_n: number
+  /** 看视频加成（结算页「看视频获得 N 金币」），独立一笔、不计进 coins */
+  ad_coins: number
+  ad_coins_n: number
+  attrs: Record<string, number>
+}
+
+/** 按次记录的一行：[时间, kind, 标题, 学分, 属性, 金币, 疲惫, 工分, 工资构成] */
+export type RewardRow = [
+  string,
+  string,
+  string,
+  number | null,
+  string,
+  number | null,
+  number,
+  number | null,
+  string,
+]
+
+export interface RewardsData {
+  ok: boolean
+  date: string
+  dates: string[]
+  date_n: Record<string, number>
+  today: string
+  yesterday: string
+  all_n: number
+  n: number
+  school: RewardBucket
+  work: RewardBucket
+  today_school: RewardBucket
+  today_work: RewardBucket
+  recent: RewardRow[]
+  /** 结算页头部解析出来的宠物名 / 主人名（换宠物时一眼看出这份数据是谁的） */
+  pet: string
+  owner: string
+  updated: string
+}
+
+export const fetchRewards = (date?: string): Promise<RewardsData> =>
+  getJSON<RewardsData>(`/api/rewards${date ? `?date=${encodeURIComponent(date)}` : ''}`)
+
+/** 发送一条测试通知（通知页的"发送测试"按钮） */
+export async function testNotify(): Promise<{ ok: boolean; msg?: string }> {
+  const r = await fetch('/api/notify/test', { method: 'POST' })
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  return (await r.json()) as { ok: boolean; msg?: string }
+}

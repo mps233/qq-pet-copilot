@@ -1,6 +1,8 @@
 import { useCallback, useState } from 'react'
 import { TASK_GROUP, TASK_NAME, isLoopTask, runnerStart, runnerStop, saveSettings } from './api'
 import { Overview, type PageKey } from './components/Overview'
+import { LogPage } from './components/LogPage'
+import { NavHead } from './components/NavHead'
 import { useData } from './lib/useData'
 import { useScene } from './lib/useScene'
 
@@ -98,6 +100,11 @@ export default function App() {
             onStop={() => void stop()}
             onReorder={(o) => void onReorder(o)}
           />
+        ) : page === 'log' ? (
+          <section className="card" data-page="log">
+            <NavHead title="日志" onBack={() => setPage('main')} />
+            <LogPage shots={data.shots ?? []} />
+          </section>
         ) : (
           // 其余页面还没搬完：先给占位 + 回总览入口（旧界面 / 上功能是全的）
           <section className="card" data-page={page}>
