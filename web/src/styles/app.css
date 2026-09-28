@@ -1310,7 +1310,11 @@ pre#logbox{
 }
 .advlist .arow:first-child{border-top:0}
 .advlist .ai{
-  color:var(--sub);font-size:12px;flex:none;width:112px;
+  /* 宽度 112 → 126px：改用 .pgsec 骨架后白卡内容区比原来的 .card 窄了 24px
+     （.pgsec-c 是 12u margin + 14u padding，内容距屏幕边 26u；旧版 .card 只有 14px），
+     112px 装不下 `#276 09-29 00:00`（16 字符 × 12px 字号 ≈ 106px + 余量）会被省略号截断。
+     16 字符约 106px，留 20px 余量。 */
+  color:var(--sub);font-size:12px;flex:none;width:126px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
 .advlist .ag{
