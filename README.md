@@ -1,12 +1,16 @@
-# QQ 宠物自动化助手 · macOS 版
+# QQ 宠物自动化助手
 
-用 macOS 挂着 Android 手机，让 QQ 宠物自己上课、打工、冒险、被好友雇佣。
-**手机浏览器打开就能看、能改、能接手操作**——不用装 GUI，也不用守在电脑前。
+用电脑挂着 Android 手机，让 QQ 宠物自己上课、打工、冒险、被好友雇佣。
+**手机浏览器打开就能看、能改、能接手操作**——不用装桌面 GUI，也不用守在电脑前。
 
-> 本仓库是 [490720818/qq-pet-copilot](https://github.com/490720818/qq-pet-copilot)（GPL-3.0）的
-> **macOS 适配版**：上游面向 Windows（PyQt6 桌面 GUI + scrcpy 窗口嵌入），本版改成
-> **命令行调度器 + 手机浏览器仪表盘**，在 macOS 上源码直跑。技术定位不做展开，
-> 与上游的差异清单见 [MAC-PORT.md](MAC-PORT.md)。
+核心是 Python + adb + uiautomator2，不依赖某个系统：**macOS 与 Windows 的平台差异
+代码里都已适配**（Windows 那套继承自上游，本版主要做了 macOS 适配与这套浏览器界面）。
+本版的调度器与仪表盘主要在 macOS 上验证，Windows / Linux 未实测。
+
+> 项目源自 [490720818/qq-pet-copilot](https://github.com/490720818/qq-pet-copilot)（GPL-3.0）。
+> 上游是 Windows 桌面版（PyQt6 GUI + scrcpy 窗口嵌入）；本仓库在它基础上做了
+> **macOS 适配**，并把操作界面换成了**手机浏览器仪表盘**（两种系统通用）。
+> 差异清单与上游同步方式见 [MAC-PORT.md](MAC-PORT.md)。
 
 ![仪表盘总览页](docs/overview-annotated.png)
 
@@ -19,7 +23,7 @@
 - **照顾宠物**：体力/清洁低于阈值自动喂食、洗澡；也支持一键护理。
 - **福袋**：自动逛好友家领系绳福袋。
 - **出问题自己救**：页面错乱先回主页重进，仍失败就重启游戏/重启模拟器再回宠物页；
-  连续失败发通知（macOS 桌面通知 + Bark/飞书/Telegram 等）并附手机截图。
+  连续失败发通知（桌面通知 + Bark/飞书/Telegram 等）并附手机截图。
 
 任务顺序、开关、时间窗、每日次数都在仪表盘上改，**保存即生效**，不用重启。
 
@@ -45,6 +49,10 @@ cp config.example.yaml config.yaml
 # 3) 起服务
 ./run.sh          # 调度器（Ctrl+C 停止；后台常驻见下）
 ./dashboard.sh    # 手机仪表盘（默认 8787，后台常驻）
+
+# Windows：上面两个脚本用 Git Bash 跑；或者直接执行等价命令
+#   .venv\Scripts\python scenarios\runner.py
+#   .venv\Scripts\python dashboard.py --port 8787
 ```
 
 然后在同一个 Wi-Fi 下，手机浏览器打开 **`http://<Mac 的局域网 IP>:8787`**，
@@ -126,7 +134,7 @@ cp config.example.yaml config.yaml
 | `hire_friend.*` / `employed.*` | 雇佣好友、被雇佣检查的时间段与召回策略 |
 | `tasks.failure_interval` | 所有任务统一的失败重试间隔 |
 | `recover.method` | 异常恢复方式：`重启游戏` / `重启设备`（真机有锁屏密码时用前者） |
-| `notify.*` | 告警渠道（macOS 通知 + Bark/PushPlus/ServerChan/飞书/Telegram/SMTP/webhook） |
+| `notify.*` | 告警渠道（桌面通知 + Bark/PushPlus/ServerChan/飞书/Telegram/SMTP/webhook） |
 
 ## 自检与排查
 
@@ -142,9 +150,12 @@ cp config.example.yaml config.yaml
 ## 与上游的关系
 
 调度器、各场景实现、UI 定位注册表、OCR 封装等核心能力来自
-[上游项目](https://github.com/490720818/qq-pet-copilot)。本版在其基础上做了 macOS 运行链路、
-手机仪表盘、实时画面与接管、以及一批适配新版 QQ 界面的修复，差异清单见 [MAC-PORT.md](MAC-PORT.md)。
-上游的 PyQt6 桌面 GUI 与 Windows 打包链路在本版**不维护**，需要的话看上游 README。
+[上游项目](https://github.com/490720818/qq-pet-copilot)（Windows 桌面版）。
+本版在它基础上做了 **macOS 运行链路适配**、把界面换成**手机浏览器仪表盘**（两种系统通用）、
+加上实时画面与接管，以及一批适配新版 QQ 界面与文案的修复；差异清单见 [MAC-PORT.md](MAC-PORT.md)。
+
+上游的 PyQt6 桌面 GUI（`main.py`）与 PyInstaller 打包链路本版**不维护**——
+本版走"源码运行 + 浏览器界面"，两种系统都不需要装桌面 GUI。
 
 ## 致谢
 
