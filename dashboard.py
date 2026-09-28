@@ -5750,7 +5750,7 @@ class Handler(BaseHTTPRequestHandler):
                 # 新版前端（React + TS）的构建产物：web/dist/
                 # 迁移期与旧界面并存——旧版仍在 '/'，新版挂 /next/，两套都能开，
                 # 全部页面迁完再把 '/' 切过来、删掉上面的 HTML 常量。
-                # 构建：cd web && ./build.sh（esbuild 单文件打包，不需要 vite/rollup）。
+                # 构建：cd web && ./build.sh（Vite；需要用户自己装的 node）。
                 rel = path[len('/next'):].lstrip('/') or 'index.html'
                 fp = (BASE / 'web' / 'dist' / rel).resolve()
                 root = (BASE / 'web' / 'dist').resolve()
