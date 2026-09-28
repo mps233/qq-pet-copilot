@@ -73,9 +73,10 @@ cp config.example.yaml config.yaml
 | 桌面通知 | Windows Toast | `osascript` 通知 |
 | 实时画面取源 | 项目自带 `resources/scrcpy-win64/scrcpy-server` | Homebrew 的 `scrcpy-server` |
 
-本版**没有** Windows 桌面 GUI：上游那套 PyQt6 界面把 scrcpy 窗口用 Win32 的
+本版**不含** Windows 桌面 GUI：上游那套 PyQt6 界面把 scrcpy 窗口用 Win32 的
 `SetParent` 嵌进自己窗口，这是 Windows 专有 API，macOS 上做不了——所以本版干脆两端
-统一走浏览器界面（顺带还能远程看）。
+统一走浏览器界面（顺带还能远程看）。上游的 GUI、打包脚本与它那份 Windows CI 工作流
+已从本仓库移除。
 
 ## 手机仪表盘
 
@@ -178,8 +179,11 @@ cp config.example.yaml config.yaml
 本版在它基础上做了 **macOS 运行链路适配**、把界面换成**手机浏览器仪表盘**（两种系统通用）、
 加上实时画面与接管，以及一批适配新版 QQ 界面与文案的修复；差异清单见 [MAC-PORT.md](MAC-PORT.md)。
 
-上游的 PyQt6 桌面 GUI（`main.py`）与 PyInstaller 打包链路本版**不维护**——
-本版走"源码运行 + 浏览器界面"，两种系统都不需要装桌面 GUI。
+上游的 PyQt6 桌面 GUI（`main.py`）、PyInstaller 打包链路与它那份 Windows 打包 CI
+（`release.yml`）**已从本仓库移除**——本版走"源码运行 + 浏览器界面"，两种系统都不需要
+装桌面 GUI，`requirements.txt` 里也不再需要 PyQt6 那一套依赖。
+要用上游那套桌面版（含打包 exe 的说明），见
+[上游 README](https://github.com/490720818/qq-pet-copilot)。
 
 ## 致谢
 

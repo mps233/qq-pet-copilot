@@ -2,10 +2,18 @@
 
 给 AI 代理的项目说明：结构、约定、常用命令。
 
+> ⚠️ **本版已移除上游的 Windows 桌面 GUI 与打包链路**：`main.py`、`src/stats_chart.py`、
+> `build.py`、`QQPetCopilot.spec`、`tools/pyi_rth_preload_onnxruntime.py`、
+> `.github/workflows/release.yml` 都已删除，`requirements.txt` 里也摘掉了
+> PyQt6 / PyQt6-Fluent-Widgets / pyinstaller / pywin32（这四个只有它们用）。
+> **下文涉及这些文件的描述仅作历史参考**：本版没有桌面 GUI，界面是 `dashboard.py`
+> （手机浏览器仪表盘），调度入口是 `scenarios/runner.py`（`./run.sh`）。
+> 另外 `adventure.type`（冒险类型）在仪表盘设置页里可改，别再写"只有 GUI 能改"。
+
 ## 项目概述
 
 QQ 宠物自动化托管脚本。技术栈：Python 3 + uiautomator2（画面、输入与控件定位）+
-RapidOCR（文字/数字识别）+ PyQt6（GUI）。UI 定位分辨率无关：
+RapidOCR（文字/数字识别）。UI 定位分辨率无关：
 优先 u2 控件选择器，游戏内 canvas 自绘按钮靠 OCR 文字（`src/locators.py` 注册表）。
 平台：Windows（Git Bash 环境），目标设备：Android 手机（竖屏）。
 
