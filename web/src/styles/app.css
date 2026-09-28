@@ -682,14 +682,14 @@ body{
      撑到页面底部，任务少时下方留大片空白（截图反馈）。
      顶 = --top-scene（= 胶囊区底 + --gap-top），与上面两处间距一致。
 
-     再加一条 max-height：**不许超过底栏上沿**。.scene 是绝对定位，它的下边界会
-     计入 .home 的滚动区 —— 任务多时下边界压出屏幕，总览页就多出一截只能滚出
-     空白的区域（用户实报「底栏最下面还有一块很细的区域，能滚一点点」）。
-     超出视口的任务改由 .tasklist 内部滚（见下面那条规则），功能不丢。 */
+     高度就该按内容自适应 —— **不要**再给它加 max-height 去"锁"。
+     曾经加过 `max-height: calc(100% - top-scene - 135u)`，想让任务多时不压出底栏；
+     但那是朝错误的方向修：真正压出底边的是 .drawer（已修，见它的注释），
+     而这条 maxHeight 实测**根本没触发**（360 宽下 .scene 高 403、上限却是 509），
+     属于"加了没用、还容易被当成结论"的锁。 */
   left:calc(var(--u) * 74);
   width:calc(var(--u) * 207);
   top:calc(var(--u) * var(--top-scene));
-  max-height:calc(100% - calc(var(--u) * var(--top-scene)) - calc(var(--u) * 135));
   display:flex;flex-direction:column;
   overflow:hidden;
 }
@@ -782,14 +782,17 @@ body{
   /* 底部信息：坐在 .deck 弧形面板上，水平居中、贴近弧顶（官方图标在弧顶下方）。
      deck 高 135dp（669~804），图标中心约在 700dp -> 距 deck 顶 31dp。
 
-     top 从 22u 收到 19u：实测 .drawer 内容高 159.4px（图标 64 + 文字列 93 + 间距），
-     而 .deck 给的可用高只有 157px（= 187.5 - 22u×1.389）→ 底部溢出 **2.5px**，
+     top 从 22u 一路收到 12u：**窄屏下 .drawer 的内容更高**（文字换行多），360px 视口
+     实测内容高 121px，而 .deck 只给 135u - 19u = 116px → 溢出 5px，总览页因此能往上
+     滑一点点、最底部露出一条细边。收到 12u 后可用 123px，够用且留 2px 余量。
+     （之前按 430px 视口调到 19u —— 那只是把我当时的测量环境调对了，真机是 360。）
+     原记录：
      于是 .home 多出一点点可滚高度（用户实报"底栏最下面有一块很细很细的区域，
      导致可以滚动一点点"）。收 3u 后留出余量；图标离弧顶近了不到 4px，看不出来。
      注意别去改 .deck 的 135u —— 那是官方底栏的形。 */
   left:50%;
   transform:translateX(-50%);
-  top:calc(var(--u) * 19);
+  top:calc(var(--u) * 12);
   width:calc(var(--u) * 62);
   display:flex;flex-direction:column;align-items:center;
   gap:calc(var(--u) * 2);
@@ -893,11 +896,9 @@ body{
 /* 任务列表：任务多时**自己滚**，不再撑高 .scene（内层滚动区按既有约定用
    overscroll-behavior:none 防 iOS 回弹）。min-height:0 是让它在 flex 列里
    能收缩到内容高度以下 —— 不给的话滚动条永远出不来。 */
-.tasklist{
-  overflow-y:auto;
-  overscroll-behavior:none;
-  min-height:0;
-}
+/* 曾经给 .tasklist 加过 `overflow-y:auto` + `min-height:0`（想让它内部滚、不撑高
+   .scene），同样是多余的锁 —— 实测 360 宽下任务列表根本不超出，而真正把 .home
+   顶出底边的是 .drawer（见那条的注释）。别再靠锁容器来"修"滚动。 */
 .tasklist .mrow{
   display:flex;gap:calc(var(--u) * 6);
   padding:calc(var(--u) * 7.5) calc(var(--u) * 8);   /* 左右 8u：与标题行同一左缘（标题那侧也跟着调） */
