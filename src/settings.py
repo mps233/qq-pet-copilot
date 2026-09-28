@@ -35,7 +35,9 @@ DEFAULTS = {
     'work.hire_name': '',
     'work.hire_wait': False,
     'schedule.coin_threshold': 2000,
-    'schedule.daily_hour_limit': 8,
+    # 合计停止点：设置页只暴露一个「合计满则停止」，保存时三键写同一个值
+    # （dashboard.py 的 apply_settings → stop_total_keys），默认 = 合计满 12 小时全停
+    'schedule.daily_hour_limit': 12,
     'schedule.work_stop_hours': 12,
     'schedule.study_quota_hours': 8,
     'schedule.work_quota_hours': 8,
@@ -59,7 +61,9 @@ DEFAULTS = {
     'pk.helper_names': '',
     'pk.helper_fallback': False,
     'friend_care.enabled': False,
-    'friend_care.time_range': '14:00-19:30',
+    # 时间段 HH:MM-HH:MM；起止相同（00:00-00:00）= 跨零点 = 全天
+    'friend_care.time_range': '00:00-00:00',
+    'gift_bag.time_range': '00:00-00:00',
     'friend_care.friend_name': '',
     'friend_care.method': 'ocr检测',
     'friend_care.interval_seconds': 60,
@@ -131,7 +135,9 @@ def validate_field(key: str, value):
         if value in ('等到25/75（小于45min）', '等到25/75', '立刻召回', '让利雇主（不召回）'):
             return True, value
         return False, default
-    if key in ('friend_care.time_range', 'employed.time_range', 'hire_friend.time_range'):
+    if key in ('friend_care.time_range', 'gift_bag.time_range',
+               'employed.time_range', 'hire_friend.time_range'):
+        # 时间段 HH:MM-HH:MM；起止相同 = 跨零点 = 全天
         try:
             start_s, end_s = str(value).split('-', 1)
             datetime.strptime(start_s.strip(), '%H:%M')

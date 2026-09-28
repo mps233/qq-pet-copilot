@@ -125,23 +125,28 @@ class WorkConfig:
 class ScheduleConfig:
     # 金币阈值：金币 >= 该值优先学习，低于则先打工赚够再学习
     coin_threshold: int = 2000
-    # 学习工作时长上限（小时）：学习/打工按学园/打工时长结算累计，
-    # 累计时长 >= 上限后今天不再学习只打工；0 = 不限
-    daily_hour_limit: int = 8
-    # 打工停止时长（小时）：学习+打工合计 >= 该值后今天不再打工。
-    # 游戏机制：合计 >8 小时收益效率降到 25%，>12 小时降到 10%——
-    # 默认 12 避开 10% 档；想连 25% 档（>8h）也避开可改 8；想一直打改 0；0 = 不限
+    # ===== 合计停止点（学习+打工合计满则停）=====
+    # 三个键都在 runner 里各判一处，且都按"学习+打工合计"计（不区分是哪一项）：
+    #   daily_hour_limit       合计满则停学习（仍可打工，直到 work_stop_hours）
+    #   work_stop_hours        合计满则停打工
+    #   efficiency_tier2_hours 合计满则两项全停（转冒险）
+    # 仪表盘设置页只暴露**一个**「合计满则停止」，保存时三键写同一个值
+    #（dashboard.py 的 stop_total_hours / apply_settings）；手改 config.yaml 仍可
+    # 分开设（例如 8/12/12 = "学满 8h 后继续吃 25% 档打工到 12h"）。0 = 不限。
+    daily_hour_limit: int = 12
     work_stop_hours: int = 12
     # 今日学习/打工配额（小时，0 = 今天不做该项）——当天想怎么花掉共享的总预算：
     #   study_quota=8, work_quota=0 → 只学习；0/8 → 只打工；4/4 → 各 4 小时自动切换。
-    # 与总预算（daily_hour_limit / work_stop_hours，都按"学习+打工合计"计）是 AND 关系：
-    # 配额先到就切另一项，总预算到点则两项一起停（转冒险）。
-    # 默认 8/8 = 两项都不额外限制（等价于只看总预算，兼容旧配置）。
+    # 与合计停止点（daily_hour_limit / work_stop_hours，都按"学习+打工合计"计）是
+    # AND 关系：配额先到就切另一项，合计到点则两项一起停（转冒险）。
+    # 默认 8/8 = 两项都不额外限制（等价于只看合计停止点，兼容旧配置）。
     study_quota_hours: int = 8
     work_quota_hours: int = 8
     # 收益效率档门槛（小时，游戏机制，用户实测确认）：学习+打工合计达到门槛后
     # 当日收益效率降档——>8h 降到 25%、>12h 降到 10%。仅用于界面/日志展示当前档位
-    # 与"距下一档还有多久"，不影响是否继续跑（跑不跑由配额与停止时长决定）。
+    # 与"距下一档还有多久"，不影响是否继续跑（跑不跑由配额与合计停止点决定）。
+    # **不是设置项**：仪表盘设置页只在卡片里把这两个数写成说明文字，不给输入框
+    #（tier2 还会被「合计满则停止」写同一个值，见 dashboard.apply_settings）。
     efficiency_tier1_hours: int = 8
     efficiency_tier2_hours: int = 12
     # 旧版字段（仅兼容老 config.yaml + 首次运行迁移用，不再参与调度、不进设置页）：
@@ -219,8 +224,9 @@ class PkConfig:
 class FriendCareConfig:
     # 启用好友护理开关
     enabled: bool = False
-    # 好友护理时间段（HH:MM-HH:MM）：到达开始时间后访问指定好友家护理，到结束时间退出场景
-    time_range: str = "14:00-19:30"
+    # 好友护理时间段（HH:MM-HH:MM，支持跨零点）：**默认 00:00-00:00 = 全天**
+    #（起止相同视为跨零点，覆盖含 23:59:59 的每一秒；写 08:00-23:59 会漏掉最后一分钟）
+    time_range: str = "00:00-00:00"
     # 护理好友名称（好友列表 content-desc "好友 xxx" 里匹配）
     friend_name: str = ""
     # 护理好友方式：ocr检测（读好友状态面板，体力/清洁护理到 90）/ 一键护理（点好友页的一键护理按钮）
@@ -247,8 +253,8 @@ class HireFriendConfig:
 class GiftBagConfig:
     # 福袋开关：遍历好友家，领取系着绳结的福袋（敞口/无袋跳过；非好友不领）
     enabled: bool = True
-    # 扫描时间段（HH:MM-HH:MM，支持跨零点）
-    time_range: str = "08:00-23:59"
+    # 扫描时间段（HH:MM-HH:MM，支持跨零点）：**默认 00:00-00:00 = 全天**
+    time_range: str = "00:00-00:00"
     # 扫描间隔（秒）：距上次扫描完成至少间隔这么久才再次扫描
     interval_seconds: int = 1800
 
