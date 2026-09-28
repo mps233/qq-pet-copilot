@@ -76,7 +76,6 @@ function Field({ f, editable, onSave }: {
   return (
     <FRow k={f.label} tip={f.tip}>
       <span className="ctrl">
-        {f.unit ? <span className="u">{f.unit}</span> : null}
         <input
           type={f.kind === 'int' ? 'number' : 'text'}
           value={local}
@@ -90,6 +89,9 @@ function Field({ f, editable, onSave }: {
             if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
           }}
         />
+        {/* 单位跟在**输入框后面**（legacy 的写法：`<input ...><span class="u">小时</span>`，
+            CSS 的 .form .u 也是 margin-left —— 放前面会变成「秒 [60]」） */}
+        {f.unit ? <span className="u">{f.unit}</span> : null}
       </span>
     </FRow>
   )
