@@ -5746,6 +5746,25 @@ class Handler(BaseHTTPRequestHandler):
                            MANIFEST_JSON.encode('utf-8'))
             elif path == '/sw.js':
                 self._send(200, 'application/javascript', SW_JS.encode('utf-8'))
+            elif path == '/next' or path.startswith('/next/'):
+                # 新版前端（React + TS）的构建产物：web/dist/
+                # 迁移期与旧界面并存——旧版仍在 '/'，新版挂 /next/，两套都能开，
+                # 全部页面迁完再把 '/' 切过来、删掉上面的 HTML 常量。
+                # 构建：cd web && ./build.sh（esbuild 单文件打包，不需要 vite/rollup）。
+                rel = path[len('/next'):].lstrip('/') or 'index.html'
+                fp = (BASE / 'web' / 'dist' / rel).resolve()
+                root = (BASE / 'web' / 'dist').resolve()
+                _NCT = {'.html': 'text/html; charset=utf-8',
+                        '.js': 'application/javascript',
+                        '.css': 'text/css', '.json': 'application/json',
+                        '.map': 'application/json', '.png': 'image/png',
+                        '.svg': 'image/svg+xml', '.woff2': 'font/woff2'}
+                # 与 /qp-icons 同样的归属校验：resolve 后必须仍在 web/dist 内
+                if fp.is_file() and fp.is_relative_to(root) and fp.suffix.lower() in _NCT:
+                    self._send(200, _NCT[fp.suffix.lower()], fp.read_bytes())
+                else:
+                    self._send(404, 'text/plain; charset=utf-8',
+                               b'not found (build first: cd web && ./build.sh)')
             elif path.startswith('/qp-icons/'):
                 # 路径归属校验：resolve 后必须仍在 static/qp-icons 内
                 # （不要用 `'qp-icons' in fp.parts` 那种写法——`/qp-icons/../x.png`

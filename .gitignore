@@ -36,3 +36,7 @@ runs/friends_cache.json
 
 # 临时会话文件（sqlite3 等工具在仓库根目录留下的 .ses）
 :memory:.ses
+
+# 前端工程（React + TS）构建产物
+web/node_modules/
+web/dist/

@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<!-- theme-color：iOS 独立 Web App（添加到主屏）下状态栏那条带的颜色。
+     取房间背景图最顶部实测色（room-main.jpg 顶部 #D5A758 / room-main-dark.jpg
+     顶部 #A9722D），与总览页暖色房间无缝。历史值 #f6f7f9/#111318 是暖色改版
+     **之前**的冷灰，改版时漏改（用户反馈"顶部安全区是白的"）。
+     注意 iOS 26 起 theme-color 支持被移除，状态栏改为采样页面背景色 ——
+     所以 html 的 background-color（见 --bg）必须一起对齐，两条腿都要有。
+     切内页时由 syncThemeColor() 改成顶栏白（见 JS）。 -->
+<meta name="theme-color" content="#D5A758" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#A9722D" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<!-- iOS 主屏图标：**必须换 URL 才会更新** —— iOS 按 URL 缓存 apple-touch-icon，
+     内容换了但 URL 不变时，重新"添加到主屏幕"仍是旧图标（实测踩坑）。
+     故用独立的 apple-touch-icon.png（180×180，iOS 标准尺寸）而不是复用 icon-192.png；
+     以后换图标同样要换文件名（如 -v2）。 -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="QQ宠物">
+<!-- **故意不写 apple-mobile-web-app-status-bar-style** ——
+     它的 `default` 值语义是"内容显示在状态栏下方"（Apple 官方文档
+     Safari HTML Reference / Supported Meta Tags），于是状态栏那条带完全由系统绘制
+     （浅色模式 = 白底黑字），网页既画不上去也改不了色，真机就是顶部一条白带。
+     而 `black-translucent` 已被 WebKit 废弃（语义上与深色模式冲突），
+     WebKit 工程师在 bug 317153 里明确答复："Please remove this key,
+     and the status bar should automatically appear in the same color as the webpage."
+     移除后状态栏改为采样网页背景色 —— 这正是我们要的效果，
+     配合下面的 theme-color 与 html 的 background-color（--qp-statusbar）一起生效。 -->
+<title>QQ宠物托管</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="app">
+<!-- 左侧竖列圆钮导航（QQ 宠物主页的左侧圆钮位）：图标取自 qqpet_assets，title 做无障碍 -->
+
+<main>
+
+  <section class="card" id="advCard" data-page="adv">
+    
+      <div class="navhead"><button class="backbtn" data-back="main" title="返回总览"><img src="/qp-icons/official/off_l1_back.png" alt=""></button><span class="navtitle">冒险记录</span><span class="navmeta"><span id="advMeta" style="font-weight:400;font-size:10.5px"></span></span></div>
+    <div class="advcap" id="advDateRow" style="margin:-2px 0 4px"></div>
+    <div class="workline"><span class="big" id="advNet">--</span><span class="hint" id="advNetHint"></span></div>
+    <div class="subline" id="advSub"></div>
+    <div class="advchips" id="advChips"></div>
+    <div class="advtip" id="advTip">点 / 拖动图表上的点或线，查看当次数据</div>
+    <div class="advcap">累计收益曲线（金币）</div>
+    <svg class="advchart" id="svgCum" viewBox="0 0 340 84"></svg>
+    <div class="advcap">单次收益散点（橙虚线=平均）</div>
+    <svg class="advchart" id="svgPts" viewBox="0 0 340 84"></svg>
+    <div class="advcap" id="capStats"><span style="color:#16a34a">体力</span> / <span style="color:#0891b2">清洁</span> / <span style="color:#d97706">心情</span>（红虚线=阈值<span id="capThr">--</span>，红竖线=护理）</div>
+    <svg class="advchart" id="svgStats" viewBox="0 0 340 84"></svg>
+    <div class="advcap">逐次明细（新→旧） <button class="minibtn on" id="btnAdvAll" style="float:right;margin-top:-2px">全部</button></div>
+    <div class="advlist" id="advList"></div>
+  </section>
+
+  <section class="card" id="planCard" data-page="plan">
+    
+      <div class="navhead"><button class="backbtn" data-back="main" title="返回总览"><img src="/qp-icons/official/off_l1_back.png" alt=""></button><span class="navtitle">职业解锁计划</span><span class="navmeta"><span id="planMeta" style="font-weight:400;font-size:10.5px"></span></span></div>
+    <div class="planbars" id="planBars"></div>
+    <div class="subh">隐藏职业哨兵 <span id="watchMeta" style="font-weight:400;font-size:10.5px"></span></div>
+    <div class="watchbox" id="watchBox"></div>
+    <div class="subh">进度录入（新号的当前数值，改完点保存）</div>
+    <div class="plinedit" id="planEdit"></div>
+    <div class="btnrow2"><button class="savebtn" id="btnPlanSave">保存进度</button><button class="savebtn ghost" id="btnPlanSync">🔄 自动识别</button></div>
+    <div class="saveMsg" id="planMsg"></div>
+    <div class="subh">阶梯路线</div>
+    <div class="plansteps" id="planSteps"></div>
+    <div class="plannote">隐藏线解锁有概率性：数值达标只进入候选，实际以职业树实测为准（哨兵每节课后检测）。</div>
+    <div class="subh">8 线解锁状态（见习 / 初级）<span id="planLinesMeta" style="font-weight:400;font-size:10.5px"></span></div>
+    <div class="planlines" id="planLines"></div>
+  </section>
+
+  <!-- ===== 总览：照 QQ 宠物首页 1:1 还原 =====
+       顶部资料卡（左返回钮 + 头像卡 + 右装扮钮）
+       胶囊条（图标 + 数值 + 细分进度）
+       中部场景（手机画面 = 我们的"宠物"）
+       底部抽屉（当前任务 + 倒计时）
+       右侧磨砂功能栏见 .funcbar（在 .app 内） -->
+  <section class="home" data-page="main">
+    <!-- ==================================================================
+         照 QQ 宠物首页 1:1：480dp 画布上的绝对定位浮动层
+         坐标逐项取自官方运行时 dump（web/UI_TREE_OFFICIAL.md）：
+
+         左列圆钮 x=20  y=28/86/146/206       (4 个：返回 设置 消息 日记)
+         右列圆钮 x=418 y=28/86/146           (3 个：装扮 会员 盲盒)
+         资料卡   x=74  y=26  207x46
+         胶囊     y=86 三颗：x=74/145/216 各 67x28
+                  y=126 两颗：x=74/160
+         右功能栏 x=414 y=335/405/495         (feed/shower/friend 各 50x70)
+         底部入口 x=215 y=728  50x54          (打工)
+         ================================================================== -->
+
+    <!-- 左列圆钮（官方 4 个：返回/设置/消息/日记，x=20 y=28/86/146/206）
+         第 1 个官方是"返回"，但本仪表盘的总览页就是根页面、没有上一级
+         （showTab 目标页 == 当前页会早退，点了永远没反应，曾是置灰死键）。
+         现改为「房间背景」= #btnScene：**点按 = 打开 #bgSheet 选择面板**
+         （21 张 = 自动 + 官方 5 套房间场景 + 官方「装扮→背景」15 款家居背景），
+         **长按 = 直接切下一张**。手动选择记 localStorage('qpet_scene')、
+         非自动时暂停"按当前任务换背景"，详见 JS 的 SCENE_INFO / selectScene / applyScene。
+         图标 = 官方黄衣 off_r1_tshirt（用户指定：官方素材里的黄色衣服图标）。
+         仍带 data-tab="main"：`#tabbar button` 那个 JS 契约（§INTEGRATION 1）不动，
+         只是绑定时按 id 特判（见 JS 的 setupSceneBtn）。 -->
+    <nav class="flt col-l" id="tabbar">
+      <button class="rbtn" id="btnScene" data-tab="main" title="房间背景"><img src="/qp-icons/official/off_l1_tshirt.png" alt=""></button>
+      <button class="rbtn" data-tab="set" title="设置"><img src="/qp-icons/official/off_l2_gear.png" alt=""></button>
+      <button class="rbtn" data-tab="log" title="日志"><img src="/qp-icons/official/off_l3_diary.png" alt=""></button>
+      <button class="rbtn" data-tab="notify" title="通知"><img src="/qp-icons/official/off_l4_bell.png" alt=""></button>
+    </nav>
+
+    <!-- 右列圆钮（官方 3 个：装扮/会员/盲盒，x=418 y=28/86/146） -->
+    <nav class="flt col-r" id="tabbar2">
+      <button class="rbtn r" data-tab="adv" title="冒险"><img src="/qp-icons/official/cap_compass.png" alt=""></button>
+      <button class="rbtn r" data-tab="plan" title="职业"><img src="/qp-icons/official/off_r2_briefcase.png" alt=""></button>
+      <!-- `?v=2` 是**换图后的缓存击穿**：/qp-icons/* 走 Cache-Control: max-age=3600，
+           不换 URL 的话浏览器会拿旧图渲染整整 1 小时（"改了没变化"就是这么来的）。
+           路由用 urlparse 只取 path，查询串被忽略，加 ?v=N 不影响取文件。
+           以后每次换这张图，把 N 加一即可。 -->
+      <button class="rbtn r" data-tab="shot" title="实时画面"><img src="/qp-icons/ctrl/phone.svg?v=2" alt=""></button>
+    </nav>
+
+    <!-- 资料卡（官方 x=74 y=26 207×46）。展开态见 CSS 的 .idcard.open：
+         点右侧状态环 → 卡片**原位向下展开**（官方交互，没有遮罩/弹窗），名字下面
+         出现 体力/清洁/心情 三行 + 进度条，底部 ^ 收起。 -->
+    <div class="flt idcard" id="idCard">
+      <div class="idtop">
+      <span class="avatar" id="schedDot"><img src="/qp-icons/official/mood_smile.png" alt=""></span>
+      <div class="idtxt">
+        <div class="idname">QQ宠物托管</div>
+        <div class="idsub" id="schedTxt">--</div>
+      </div>
+      <!-- 状态环（官方资料卡右侧那枚）：三层同心弧，外=体力(蓝)/中=清洁(绿)/内=心情(橙)，
+           每弧按 0~100 画（数据 = /api/data 的 status，见 renderPetStatus）。
+           点它 = 展开/收起下面的三行数值（官方点环展开的那套交互）。 -->
+      <button class="idring" id="idRing" type="button"
+              aria-label="宠物状态（体力/清洁/心情）" title="体力 / 清洁 / 心情">
+        <svg viewBox="0 0 40 40" aria-hidden="true">
+          <circle class="trk" cx="20" cy="20" r="18.1"/>
+          <circle class="arc e" id="arcEnergy" cx="20" cy="20" r="18.1"/>
+          <circle class="trk" cx="20" cy="20" r="12.5"/>
+          <circle class="arc c" id="arcClean" cx="20" cy="20" r="12.5"/>
+          <circle class="trk" cx="20" cy="20" r="7.05"/>
+          <circle class="arc m" id="arcMood" cx="20" cy="20" r="7.05"/>
+        </svg>
+      </button>
+      </div>
+      <!-- 展开区：高度由 CSS 从 0 动画长出来（.idrows），里面 = 三行数值 + 底部 ^ 收起。
+           收起箭头放这里面，才能跟着一起长出来而不是"啪"地弹出来。 -->
+      <div class="idrows">
+        <div id="petRows"></div>
+        <button class="idfold" id="idFold" type="button" aria-label="收起">
+          <svg viewBox="0 0 24 12" aria-hidden="true"><path d="M3 9.5 L12 2.5 L21 9.5"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- 胶囊（官方结构：图标在胶囊【外面】且比胶囊大 22.3 vs 19.7dp；文字在胶囊内居中）
+         第1行 = 金币/踩踩/PK   第2行 = 冒险/学习打工/经验
+         行内 4dp 间距，行间 40dp 步进（官方 y 94.3 -> 134.3）
+         图标 = 官方 pet_home 内联图（static/qp-icons/official/cap_*.png，96×96、内容占比 88%）。
+         官方首页胶囊只有「等级/踩踩/金币」三颗，PK 那颗是本仪表盘自加的，图标换过三版：
+         ① cap_coin_hand.png（item_coin_hand，手拿爪印金币）—— 与左侧金币胶囊撞脸；
+         ② cap_pk.png（pk_logo 拳击手套）—— 素材库里唯一的官方 PK 图标，但用户要的是「PK 字样」；
+         ③ **当前 cap_pk_words.png**：游戏内好友宠物页右侧功能栏那颗
+            「粉 P + 蓝 K」的 PK 字样图标（`src/locators.py` 里 content-desc="PK" 的那个按钮）。
+         全库 OCR 扫描确认素材库里**没有**这个字样图标的文件（ResourceCache 的
+         `1009999/9990002/39/9990002/` 里 pk_logo.png 只有拳击手套），它是引擎实时绘制的，
+         故从实机截图（runs 抓取，1080×2412）按色相 210-220°/330-340° 抠图 + 连通域去噪生成，
+         源图与抠图过程见 qqpet_assets/web/INTEGRATION.md。**换图必须换文件名**：
+         /qp-icons/* 带 max-age 缓存，同名覆盖浏览器仍显示旧图。 -->
+    <div class="flt caps">
+      <div class="caps-row">
+        <div class="cap" title="金币"><img class="cico" src="/qp-icons/official/cap_coin.png" alt=""><div class="capbody"><span class="cval" id="coins">--</span><span class="cunit" id="coinsAt"></span></div></div>
+        <div class="cap" title="今日踩踩"><img class="cico" src="/qp-icons/official/cap_paw.png" alt=""><div class="capbody"><span class="cval" id="visitTxt">--</span><div class="bar"><i id="visitBar"></i></div></div></div>
+        <div class="cap" title="今日PK"><img class="cico" src="/qp-icons/official/pk_words.png" alt=""><div class="capbody"><span class="cval" id="pkTxt">--</span><div class="bar"><i id="pkBar"></i></div></div></div>
+      </div>
+      <div class="caps-row">
+        <div class="cap" title="今日冒险"><img class="cico" src="/qp-icons/official/cap_compass.png" alt=""><div class="capbody"><span class="cval" id="advTxt">--</span></div></div>
+        <div class="cap" title="今日学习+打工合计" id="capSw"><img class="cico" src="/qp-icons/official/cap_cookie.png" alt=""><div class="capbody"><span class="cval" id="swTxt">--</span><div class="bar"><i id="swBarTotal"></i></div></div></div>
+        <div class="cap" title="经验日常"><img class="cico" src="/qp-icons/official/cap_diamond.png" alt=""><div class="capbody"><span class="cval" id="expTxt">--</span></div></div>
+      </div>
+    </div>
+
+    <!-- 中部场景层（官方是 3D 宠物；此处放任务队列） -->
+    <div class="flt scene">
+      <div class="qpanel">
+        <div class="qhead"><span class="qtitle">任务列表</span><span class="qpend" id="qPend"></span></div>
+        <div class="tasklist" id="taskList"></div>
+      </div>
+    </div>
+
+    <!-- 右功能栏（官方 x=414 y=335/405/495，各 50×70） -->
+    <div class="flt funcbar" aria-label="调度器控制">
+      <div class="fb-group">
+        <button class="fab" id="btnRunnerStart" title="启动调度器"><img class="fi" src="/qp-icons/ctrl/play.svg?v=5" alt=""><span class="ft">启动</span></button>
+        <button class="fab stop" id="btnRunnerStop" title="停止调度器"><img class="fi" src="/qp-icons/ctrl/stop.svg?v=5" alt=""><span class="ft">停止</span></button>
+      </div>
+      <div class="fb-group">
+        <button class="fab ghost" id="btnShot" title="实时画面"><img class="fi" src="/qp-icons/ctrl/refresh.svg?v=5" alt=""><span class="ft">画面</span></button>
+      </div>
+    </div>
+
+    <!-- 底部入口（官方 x=215 y=728 50×54） -->
+    <div class="flt deck">
+      <div class="flt drawer" id="runnerCard">
+      <img class="dico" id="runnerIcon" src="/qp-icons/official/cap_coin.png" alt="">
+      <div class="dcol">
+        <div class="dtitle"><span class="dot" id="runnerDot"></span><span id="runnerState">--</span><span class="dhint" id="runnerHint"></span></div>
+        <div class="dsub" id="workSub"></div>
+        <div class="dsub" id="runnerSub"></div>
+        <div class="saveMsg" id="runnerMsg"></div>
+      </div>
+        <span class="dmeta" id="runnerMeta"></span>
+        </div>
+      </div>
+
+    <!-- 切换房间背景的轻提示（样式 #sceneToast；文案由 JS sceneToast() 写） -->
+    <div id="sceneToast"></div>
+
+    <!-- 房间背景选择面板（点左上角黄衣圆钮打开；21 张缩略图，点一张即生效）。
+         绝对铺满视口（position:fixed，祖先没有 transform/filter 所以不会被 .home 收住），
+         只在总览页可见 —— 打开它的按钮本身也只在总览页。 -->
+    <div id="bgSheet" aria-hidden="true">
+      <div class="bgmask" data-bgclose></div>
+      <div class="bgpanel">
+        <div class="bghead"><span>房间背景</span><button type="button" data-bgclose>关闭</button></div>
+        <div class="bggrid" id="bgSheetGrid"></div>
+        <div class="bgtip">「自动」= 跟着当前任务换（喂食/洗澡/学习打工各一套）。长按左上角圆钮可直接切下一张。</div>
+      </div>
+    </div>
+
+  </section><!-- /.home -->
+
+
+
+  <!-- 实时画面（独立页）：手机画面单独一屏，便于放大看 / 点开原图 -->
+  <section class="shotpage" data-page="shot">
+    <div class="navhead">
+      <button class="backbtn" data-back="main" title="返回总览"><img src="/qp-icons/official/off_l1_back.png" alt=""></button>
+      <span class="navtitle">实时画面</span>
+    </div>
+    <!-- 实时直播：数据源是设备端 scrcpy-server（免 root）+ 本机 ffmpeg 转 HLS，
+         按需启停（无人观看 30 秒后服务端自动回收，挂机期间零编码开销）。
+         iOS Safari 走原生 HLS；桌面 Chrome 无原生 HLS，走 MSE 拉同一份 fMP4 分片。 -->
+    <div class="scenecard livecard">
+      <video id="liveVideo" playsinline webkit-playsinline muted></video>
+      <!-- 透明覆盖层接收点击：iOS Safari 里 <video> 自身会吞掉 click/touch -->
+      <div id="liveTap" class="livetap"></div>
+      <div id="liveHint" class="livehint">点「开始直播」看手机实时画面（首次启动约 3~7 秒；不看了点停止，服务端 30 秒无观众会自动回收）</div>
+      <div id="liveToast" class="livetoast"></div>
+    </div>
+    <div class="shotpage-ctl">
+      <button class="savebtn" id="btnLive">开始直播</button>
+      <button class="savebtn" id="btnTakeover">接管操作</button>
+      <span id="liveMeta"></span>
+    </div>
+    <!-- 静态截图卡已移除：本页只保留实时直播。
+         /api/screenshot 端点仍在（服务端兜底/调试用），页面不再轮询它 —— 顺带省掉每 15 秒
+         一次、每次约 1.8 秒的 adb screencap，不再跟调度器的 OCR 截图抢 adb 通道。 -->
+  </section>
+
+
+
+
+  <section class="card" data-page="notify">
+    
+      <div class="navhead"><button class="backbtn" data-back="main" title="返回总览"><img src="/qp-icons/official/off_l1_back.png" alt=""></button><span class="navtitle">通知</span></div>
+    <div class="form" id="notifyForm"></div>
+    <div class="saveMsg" id="notifySaveMsg"></div>
+  </section>
+
+  <section class="card" data-page="set">
+    <!-- 第一级：分类列表（点进某项 -> 第二级该分类的设置项） -->
+    <div id="setIndex">
+      <div class="navhead">
+        <button class="backbtn" data-back="main" title="返回总览"><img src="/qp-icons/official/off_l1_back.png" alt=""></button>
+        <span class="navtitle">设置</span>
+      </div>
+      <div class="form" id="setMenu"></div>
+      <!-- 小号工具人 + 运行信息：只在一级列表显示。
+           包在 .form 容器内 —— 卡片样式（.form .fgrp/.fsect/.fsec/.frow）
+           都要求 .form 祖先，否则样式全失效、内容贴到屏幕边缘（实测踩坑）。 -->
+      <div class="form">
+        <div class="fgrp">
+          <div class="fsect">小号工具人</div>
+          <div class="fsec">
+            <div class="frow"><span class="k">大号名称</span><input type="text" id="txtAltMain" placeholder="大号的主人昵称或宠物名（服务端匹配）"></div>
+            <div class="frow"><span class="k">一键配置小号</span><button class="minibtn" id="btnAltPreset">应用小号预设</button></div>
+          </div>
+        </div>
+        <div class="saveMsg" id="presetMsg"></div>
+        <div class="fgrp">
+          <div class="fsect">运行信息（只读）</div>
+          <div class="fsec"><div class="cfg" id="cfgList"></div></div>
+        </div>
+      </div>
+    </div>
+    <!-- 第二级：某个分类的设置项 -->
+    <div id="setDetail" class="hide">
+      <div class="navhead">
+        <button class="backbtn" id="btnSetBack" title="返回设置列表"><img src="/qp-icons/official/off_l1_back.png" alt=""></button>
+        <span class="navtitle" id="setDetailTitle">设置</span>
+      </div>
+      <div class="form" id="setForm"></div>
+      <div class="saveMsg" id="saveMsg"></div>
+    </div>
+</section>
+
+  <section class="card" data-page="log">
+    <div class="navhead">
+      <button class="backbtn" data-back="main" title="返回总览"><img src="/qp-icons/official/off_l1_back.png" alt=""></button>
+      <span class="navtitle" id="logTitle">实时日志</span>
+    </div>
+    <!-- 日志页两个子页：实时日志（全部输出）/ 收益记录（每次学习·打工结算的收益）。
+         切换条常驻（两个子页都看得见），点它 = 换页；历史模型与设置页二级一致：
+         进收益记录 pushState(层级 2)，点"实时日志" history.back() 退栈。 -->
+    <div class="logctl" id="logSubtabs">
+      <button data-lsub="index" class="on" title="调度器全部输出">实时日志</button>
+      <button data-lsub="reward" title="每次学习/打工结算拿到的学分·属性·金币">收益记录</button>
+    </div>
+    <div id="logIndex">
+    <div class="pgsec">
+      <div class="pgsec-t">工具栏</div>
+      <div class="pgsec-c">
+        <div class="logctl">
+          <button id="btnAuto" class="on">自动滚动</button>
+          <input id="logFilter" placeholder="过滤关键字…">
+        </div>
+      </div>
+    </div>
+    <div class="pgsec">
+      <div class="pgsec-t">输出</div>
+      <div class="pgsec-c">
+        <pre id="logbox">加载中…</pre>
+        <div class="logfoot" id="logMeta"></div>
+      </div>
+    </div>
+    <div class="pgsec" id="shotCard">
+      <div class="pgsec-t">异常截图（自动保存）</div>
+      <div class="pgsec-c">
+        <div class="thumbs" id="shots"></div>
+      </div>
+    </div>
+    </div><!-- /#logIndex -->
+
+    <div id="logReward" class="hide">
+      <div class="pgsec" id="rwScopeSec">
+        <div class="pgsec-t">统计范围</div>
+        <div class="pgsec-c">
+          <!-- 选择器 + 口径说明**同一行**（同冒险页"标题+说明同行"的做法）：
+               之前拆成两行、卡内又写一遍"统计范围"，跟上面的灰标题重复，
+               且控件行下面留一大块空白 -->
+          <div class="logctl rwscope">
+            <span id="rwDateRow"></span>
+            <span class="logfoot" id="rwMeta"></span>
+          </div>
+        </div>
+      </div>
+      <div class="pgsec" id="rwSumSec">
+        <div class="pgsec-t">收益汇总</div>
+        <div class="pgsec-c">
+          <div class="rwsum" id="rwSum"></div>
+        </div>
+      </div>
+      <div class="pgsec">
+        <div class="pgsec-t">按次记录</div>
+        <div class="pgsec-c">
+          <div class="advlist" id="rwList"></div>
+        </div>
+      </div>
+    </div><!-- /#logReward -->
+  </section>
+
+
+</main>
+
+</div><!-- /.app -->
+
+
+<script src="/app.js" defer></script>
+</body>
+</html>
