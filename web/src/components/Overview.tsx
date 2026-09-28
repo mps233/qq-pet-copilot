@@ -106,6 +106,7 @@ export function Overview({
       <FuncBar
         alive={sch.alive}
         busy={busy}
+        placeKey={Object.keys(data.queue.tasks || {}).join(',')}
         onStart={onStart}
         onStop={onStop}
         onShot={() => onNav('shot')}
