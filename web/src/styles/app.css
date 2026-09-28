@@ -1396,7 +1396,9 @@ pre#logbox{
   :root{--gap-top:10}
   .cap{padding:0 8px}
   .cap .cval{font-size:12.5px}
-  .advlist .ai{width:96px}
+  /* 96 → 112px：`#276 09-29 00:00` 实测文本宽 105px（12px 字号），96 装不下会被
+     省略号截断（用户真机正好命中这个 ≤360 分支）。改基规则的宽度没用，这里是另一份。 */
+  .advlist .ai{width:112px}
   .form select,.form input[type=number],.form input[type=text]{max-width:52%}
   .form input[type=text]{width:126px}
 }
