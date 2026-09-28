@@ -2,6 +2,12 @@
 
 给 AI 代理的项目说明：结构、约定、常用命令。
 
+> ⚠️ **改 `web/`（React 前端）之前，必须先读 [`web/FRONTEND_PITFALLS.md`](web/FRONTEND_PITFALLS.md)**
+> —— 那里记录了这个前端迁移中**反复**踩的坑：高度链断裂 ×3、headless 最小视口 500px 导致的
+> 误判 ×2、iOS 手势被滚动容器吃掉 ×3、直系子选择器被"多包一层"整条打断、迁移时漏掉的
+> JS 副作用清单（历史栈 / syncThemeColor / html[data-page] / place() / 勾选框 click 委托）等。
+> 每条都写明"改了 X 就必须验 Y"。**别不看就动手。**
+
 > ⚠️ **本版已移除上游的 Windows 桌面 GUI 与打包链路**：`main.py`、`src/stats_chart.py`、
 > `build.py`、`QQPetCopilot.spec`、`tools/pyi_rth_preload_onnxruntime.py`、
 > `.github/workflows/release.yml` 都已删除，`requirements.txt` 里也摘掉了
