@@ -36,6 +36,22 @@ REWARD_FILE = BASE / 'runs' / 'session_rewards.jsonl'
 
 # (锚点, 归属, 用在哪儿) —— 归属决定怎么监控：client 能在官方包里验证，server 只能看数据
 ANCHORS = [
+    # —— 页面按钮（改版最容易动的地方：按钮文案变了 xpath 就整条失效）——
+    # 2026-09-28 实发：冒险面板底部按钮「开始」→「出发」，旧 xpath 永远命中不到，
+    # 调度器每轮白跑一趟（导航重试 10 次 → 回主页面重试 → 走恢复链路）。
+    ('出发', 'client', '冒险面板开始按钮（adventure_start，9.3.65 起）'),
+    ('开始', 'client', '旧版冒险开始按钮（保留兼容）'),
+    ('分享', 'client', '结算页结束标志（adventure_end / school_end / work_end）'),
+    ('确认召回', 'client', '冒险召回确认弹窗'),
+    ('出门', 'client', '主页面出门按钮'),
+    # —— 进行中状态（xxx_in 系列，整屏 OCR 判定）——
+    ('正在冒险', 'client', 'adventure_in'),
+    ('冒险中', 'client', 'adventure_in 备选'),
+    ('正在学习', 'client', 'school_in'),
+    ('学习中', 'client', 'school_in 备选'),
+    ('正在打工', 'client', 'work_in'),
+    ('打工中', 'client', 'work_in 备选'),
+    ('被雇佣中', 'client', 'employed_in'),
     # —— 学习结算页 ——
     ('课程', 'client', 'parse_session_reward：课程名'),
     ('成绩', 'client', 'parse_session_reward：成绩等级'),

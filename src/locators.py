@@ -204,13 +204,25 @@ LOCATORS: dict[str, dict] = {
     # ---- 冒险 ----
     'adventure': {
         'cache': True,
+        # ⚠️ 官方 9.3.65 改版后这条深层 xpath 已失效（不再命中），现在真正生效的是
+        # 下面的整屏 OCR「冒险」——地图页下方那颗白胶囊标签，实测 score 1.00、
+        # 点它就是打开冒险面板（2026-09-28 在真机逐点验证过：(474,1782) 点开面板）。
+        # xpath 保留只为兼容旧版结构；新版取不到 uiautomator idle state（dump 报
+        # "could not get idle state"），没法重建路径，所以不硬写新路径。
         'xpath': ['//*[@content-desc="map_blank"]/android.widget.FrameLayout[3]/android.widget.FrameLayout[1]']
                ,'ocr': ['冒险']},
     'adventure_start': {
         # 不能加 cache：连跑衔接里要靠它判断是否真的进了冒险准备页，
         # 缓存会让 see() 在还没进准备页时也返回旧坐标（误报"已出现 adventure_start"，
         # 随后在出门页面傻点"开始"、adventure_in 永远不出现）
-        'xpath': ['//*[@content-desc="开始"]']},
+        # **官方 9.3.65 改版**（2026-09-28 实发）：冒险面板底部按钮文案「开始」→「出发」，
+        # 旧 xpath 永远命中不到 → 导航重试 10 次失败 → 回主页面重试 → 最后走恢复链路，
+        # 每轮都白跑一趟。保留「开始」兼容旧版；再挂 OCR「出发」兜底
+        # （万一按钮是引擎自绘、没有 content-desc）。
+        # 依据：新面板截图 runs/error_retry2_20260928_180542.png，
+        # 且「出发」在官方包 ai_pet_play_2850（新版）里命中、「附近走走/诗和远方」是服务端下发的。
+        'xpath': ['//*[@content-desc="出发"]', '//*[@content-desc="开始"]'],
+        'ocr': ['出发']},
     'adventure_in': {'ocr': ['正在冒险', '冒险中']},
     'adventure_end': {'xpath': ['//*[@content-desc="分享"]']},
     # 冒险详情框（"天色不对"检测）不再用 xpath 裁剪：游戏更新会改控件层级导致
