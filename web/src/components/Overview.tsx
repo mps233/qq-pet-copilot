@@ -36,7 +36,13 @@ export function Overview({
 
   // 左上角圆钮：**点按 = 开背景选择面板**、**长按 500ms = 直接切下一张**。
   // 官方那个位置是"返回"，但总览页就是根页面（点了永远早退，曾是置灰死键），
-  // 所以改成换背景。长按用定时器实现：500ms 内抬手算点击。
+  // 所以改成换背景。
+  //
+  // ⚠️ 开面板走 **onClick 而不是 onPointerUp**：`.home` 本身是个滚动容器，iOS 在
+  // 触摸起手时会先判定"这是滚动还是点击"，判定为滚动就发 `pointercancel`、
+  // **不会发 `pointerup`** —— 那样面板永远开不出来（真机表现就是"点了没反应"，
+  // 而 headless 里程序化派发 PointerEvent 一切正常，所以只有真机能暴露）。
+  // click 事件不依赖这套判定，可靠得多。
   const holdTimer = useRef<number>()
   const longPressed = useRef(false)
   const sceneBtnHandlers = {
@@ -47,9 +53,11 @@ export function Overview({
         scene.cycle()
       }, 500)
     },
-    onPointerUp: () => {
+    onClick: () => {
+      // 短按时必须把长按定时器撤掉 —— 否则 500ms 后它还会再切一次背景
       window.clearTimeout(holdTimer.current)
       if (!longPressed.current) setBgOpen(true)
+      longPressed.current = false
     },
     onPointerLeave: () => window.clearTimeout(holdTimer.current),
     onPointerCancel: () => window.clearTimeout(holdTimer.current),
