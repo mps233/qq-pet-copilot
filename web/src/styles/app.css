@@ -174,22 +174,27 @@ body{
 .app,
 .app > main{height:100%}
 
-/* 页面切换的滑入动画（用户要求加的；旧版没有 —— showTab 只切 display）。
-   方向规则：
-     - 进内页（总览 → 任意内页）以及内页之间互切 → 从**右**滑入
-     - 回总览（任意内页 → 总览）           → 从**左**滑入
-   由 App.tsx 按"目标页是不是 main"选 class（main 上的 key={page} 保证切页时重新挂载、
-   动画能重播）。
-   注意：动画期间 main 上有 transform，会让内部的 position:fixed 子孙暂时相对它定位
-   （而不是视口）。因为动画只在切页那 240ms 内存在、期间不会去开面板，所以没有影响；
-   但**别把这套动画挂到常驻容器上**，那会永久改掉 fixed 的参照系（#bgSheet / #liveToast
-   都是 fixed）。 */
-@keyframes qp-slide-in-right{from{transform:translateX(100%);opacity:.55}to{transform:translateX(0);opacity:1}}
-@keyframes qp-slide-in-left{from{transform:translateX(-100%);opacity:.55}to{transform:translateX(0);opacity:1}}
-.app > main.page-fwd{animation:qp-slide-in-right 240ms cubic-bezier(.22,.61,.36,1)}
-.app > main.page-back{animation:qp-slide-in-left 240ms cubic-bezier(.22,.61,.36,1)}
+/* ---- 页面级转场：iOS 那种（前后两页同时在场，旧页往左让、新页从右推入）----
+   不是单页滑入 —— 单页那种旧页会瞬间消失，看着不像原生。
+   四个 keyframes = 进入/离开 × 前进/返回：前进时新页从右进、旧页往左退 30%；
+   返回时反过来。缓动 cubic-bezier(.32,.72,0,1) 是 iOS 转场的味道。
+   注意：动画期间容器上有 transform，会让内部的 position:fixed 子孙（#bgSheet、
+   #liveToast）暂时相对它定位 —— 只在切页那 320ms 内存在，期间不会去开面板，
+   所以没影响；但别把这套挂到常驻容器上。 */
+.app > main{position:relative;overflow:hidden}
+.page-slot{position:absolute;inset:0;overflow:hidden;will-change:transform}
+.page-enter{position:relative;z-index:2}
+.page-leave{z-index:1}
+@keyframes qp-enter-fwd{from{transform:translateX(100%)}to{transform:translateX(0)}}
+@keyframes qp-leave-fwd{from{transform:translateX(0)}to{transform:translateX(-30%)}}
+@keyframes qp-enter-back{from{transform:translateX(-30%)}to{transform:translateX(0)}}
+@keyframes qp-leave-back{from{transform:translateX(0)}to{transform:translateX(100%)}}
+.page-enter-fwd{animation:qp-enter-fwd 320ms cubic-bezier(.32,.72,0,1)}
+.page-leave-fwd{animation:qp-leave-fwd 320ms cubic-bezier(.32,.72,0,1)}
+.page-enter-back{animation:qp-enter-back 320ms cubic-bezier(.32,.72,0,1)}
+.page-leave-back{animation:qp-leave-back 320ms cubic-bezier(.32,.72,0,1)}
 @media (prefers-reduced-motion: reduce){
-  .app > main.page-fwd,.app > main.page-back{animation:none}
+  .page-enter-fwd,.page-leave-fwd,.page-enter-back,.page-leave-back{animation:none}
 }
 
 .home{

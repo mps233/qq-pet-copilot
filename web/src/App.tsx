@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { TASK_GROUP, TASK_NAME, isLoopTask, runnerStart, runnerStop, saveSettings } from './api'
+import { TASK_GROUP, TASK_NAME, isLoopTask, runnerStart, runnerStop, saveSettings, type Data } from './api'
 import { Overview, type PageKey } from './components/Overview'
 import { AdvPage } from './components/AdvPage'
 import { LivePage } from './components/LivePage'
@@ -95,19 +95,33 @@ export default function App() {
       /* 忽略 */
     }
   }, [])
+
   const [orderMsg, setOrderMsg] = useState('')
-  /** 切页滑入动画：只记"方向"这个 class，播完清掉（清掉才能在下一次切页重播）。
-   *  首次加载不播 —— 用 ref 记上一页、为 null 就跳过（不能用 state 判断，第一次
-   *  数据到达时的重渲染会把它冲掉；也不能给 main 加 key，那会重建整个页面子树）。 */
+
+  // ---- iOS 式转场：前后两页同时在场（旧页左让 / 新页右入，返回时反过来）----
+  // leaving = 正在退场的那一页（只活 320ms，动画结束就卸载）；dir 决定方向。
+  const [leaving, setLeaving] = useState<PageKey | null>(null)
+  const [dir, setDir] = useState<'fwd' | 'back'>('fwd')
+  const [transiting, setTransiting] = useState(false)
   const prevPage = useRef<PageKey | null>(null)
-  const [anim, setAnim] = useState('')
+  const leaveTimer = useRef<number>()
+
+  /** page 一变就起转场。放在 effect 里而不是塞进 go()，是为了不受函数定义顺序约束
+   *  （go 定义在前、会引用尚未初始化的 switchTo）。首次渲染不触发 —— 那时 prevPage
+   *  还是 null。回总览算 back（新页从左进），进内页/内页互切算 fwd（新页从右进）。
+   *  go()/popstate 两条路径都只 setPage，这里统一兜住。 */
   useEffect(() => {
-    const prev = prevPage.current
+    const from = prevPage.current
     prevPage.current = page
-    if (prev === null || prev === page) return // 首次渲染 / 同页 → 不播
-    setAnim(page === 'main' ? 'page-back' : 'page-fwd')
-    const t = window.setTimeout(() => setAnim(''), 300)
-    return () => window.clearTimeout(t)
+    if (!from || from === page) return
+    setDir(page === 'main' ? 'back' : 'fwd')
+    setLeaving(from)
+    setTransiting(true)
+    window.clearTimeout(leaveTimer.current)
+    leaveTimer.current = window.setTimeout(() => {
+      setLeaving(null)
+      setTransiting(false)
+    }, 340)
   }, [page])
 
   // 自动换背景要跟着「当前任务 + 进行中的活动」走
@@ -224,88 +238,87 @@ export default function App() {
     )
   }
 
+  /** 按页面键渲染。抽成函数是为了让"正在退场的那一页"也能被渲染 —— iOS 式转场
+   *  需要前后两页同时在场（单页滑入那种是旧页瞬间消失，不像原生）。
+   *  第二参数显式传数据，避免依赖闭包里的类型窄化。 */
+  const renderPage = (p: PageKey, d: Data) => {
+    if (p === 'main') {
+      return (
+        <Overview
+          data={d}
+          busy={busy}
+          scene={scene}
+          onNav={go}
+          onStart={() => void start()}
+          onStop={() => void stop()}
+          onReorder={(o) => void onReorder(o)}
+        />
+      )
+    }
+    if (p === 'log') {
+      return (
+        <section className="card" data-page="log">
+          <NavHead title="日志" onBack={() => go('main')} />
+          <LogPage shots={d.shots ?? []} />
+        </section>
+      )
+    }
+    if (p === 'shot') {
+      return (
+        <section className="shotpage" data-page="shot">
+          <NavHead title="实时画面" onBack={() => go('main')} />
+          <LivePage />
+        </section>
+      )
+    }
+    if (p === 'adv') {
+      return (
+        <section className="card" data-page="adv">
+          <NavHead title="冒险记录" onBack={() => go('main')} />
+          <AdvPage />
+        </section>
+      )
+    }
+    if (p === 'plan') {
+      return (
+        <section className="card" data-page="plan">
+          <NavHead title="职业解锁计划" onBack={() => go('main')} />
+          <PlanPage />
+        </section>
+      )
+    }
+    if (p === 'notify') {
+      return (
+        <section className="card" data-page="notify">
+          <NavHead title="通知" onBack={() => go('main')} />
+          <NotifyPage editable={d.editable ?? {}} onSave={saveOne} />
+        </section>
+      )
+    }
+    if (p === 'set') {
+      return (
+        <section className="card" data-page="set">
+          <SettingsPage editable={d.editable ?? {}} onSave={saveOne} onExit={() => go('main')} />
+        </section>
+      )
+    }
+    return null
+  }
+
   return (
     <div className="app">
       {/* className 带的方向 class 变化即触发滑入动画（不需要给 main 加 key，
           key 会重建整棵子树、把内页状态和滚动位置一起清掉）。 */}
-      <main className={anim}>
-        {page === 'main' ? (
-          <Overview
-            data={data}
-            busy={busy}
-            scene={scene}
-            onNav={go}
-            onStart={() => void start()}
-            onStop={() => void stop()}
-            onReorder={(o) => void onReorder(o)}
-          />
-        ) : page === 'log' ? (
-          <section className="card" data-page="log">
-            <NavHead title="日志" onBack={() => go('main')} />
-            <LogPage shots={data.shots ?? []} />
-          </section>
-        ) : page === 'shot' ? (
-          <section className="shotpage" data-page="shot">
-            <NavHead title="实时画面" onBack={() => go('main')} />
-            <LivePage />
-          </section>
-        ) : page === 'adv' ? (
-          <section className="card" data-page="adv">
-            <NavHead title="冒险记录" onBack={() => go('main')} />
-            <AdvPage />
-          </section>
-        ) : page === 'plan' ? (
-          <section className="card" data-page="plan">
-            <NavHead title="职业解锁计划" onBack={() => go('main')} />
-            <PlanPage />
-          </section>
-        ) : page === 'notify' ? (
-          <section className="card" data-page="notify">
-            <NavHead title="通知" onBack={() => go('main')} />
-            <NotifyPage editable={data.editable ?? {}} onSave={saveOne} />
-          </section>
-        ) : page === 'set' ? (
-          <section className="card" data-page="set">
-            <SettingsPage
-              editable={data.editable ?? {}}
-              onSave={saveOne}
-              onExit={() => setPage('main')}
-            />
-          </section>
-        ) : (
-          // 其余页面还没搬完：先给占位 + 回总览入口（旧界面 / 上功能是全的）
-          <section className="card" data-page={page}>
-            <div className="navhead">
-              <button
-                className="backbtn"
-                data-back="main"
-                title="返回总览"
-                onClick={() => setPage('main')}
-              >
-                <img src="/qp-icons/official/off_l1_back.png" alt="" />
-              </button>
-              <span className="navtitle">
-                {(
-                  {
-                    adv: '冒险记录',
-                    plan: '职业解锁计划',
-                    log: '日志',
-                    notify: '通知',
-                    set: '设置',
-                    shot: '实时画面',
-                  } as Record<string, string>
-                )[page] ?? page}
-              </span>
-            </div>
-            <div style={{ padding: 'calc(var(--u) * 20)', opacity: 0.72, lineHeight: 1.9 }}>
-              这一页还在迁移中。功能完整的旧界面在{' '}
-              <a href="/" style={{ color: '#c2410c' }}>
-                这里
-              </a>
-              。
-            </div>
-          </section>
-        )}
+      <main>
+        {/* iOS 式转场：退场的那一页还在（往左/右让开），新页从另一侧推入 */}
+        {leaving ? (
+          <div className={'page-slot page-leave-' + dir} aria-hidden="true">
+            {renderPage(leaving, data)}
+          </div>
+        ) : null}
+        <div className={'page-slot page-enter' + (transiting ? ' page-enter-' + dir : '')}>
+          {renderPage(page, data)}
+        </div>
       </main>
 
       {/* 拖拽保存结果的轻提示（复用 #torderToast 的样式，与 legacy 一致） */}
