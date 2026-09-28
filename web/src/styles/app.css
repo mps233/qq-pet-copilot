@@ -180,16 +180,19 @@ body{
   overflow-x:hidden;
   /* 官方画布 853dp；用 --u 乘出来即可。
      注意不要写 calc(100% * N) —— 百分比在 min-height 里会被当相对高度算。 */
-  /* 高度 = 一屏 - 顶部安全区。
-     **两条的顺序不能反**：同优先级声明后写的胜出，所以 dvh 必须写在 vh 后面。
-     历史版本写成了「dvh 在前、vh 在后」，等于 dvh 是死代码，所有浏览器
-     实际都走 vh —— iOS 独立 Web App（添加到主屏）里 vh = 物理整屏高
-     （含顶部状态栏那条带），而 dvh = 该带以下的可见高度，于是 .home 比可视区
-     整整高出一条状态栏，底部 .deck（弧形面板/任务抽屉）被顶到折叠线以下，
-     真机表现就是「下面显示不全、要往下滑才看得全」。
-     （WebKit 相关 bug：254868 / 301994） */
+  /* 高度：**body 已经有 padding-top: env(safe-area-inset-top)**，
+     所以这里只要"填满 body 的内容区"就行 → `100%`。
+
+     别再写 calc(100dvh - env(safe-area-inset-top))：那样会**多减一次**。
+     iOS 独立 Web App 里 100dvh 已经排除了底部安全区，再减 safe-top 会让 .home 比
+     内容区矮，屏幕最底下露出约一个 safe-bottom 的背景（用户实报「最底部还有一块」，
+     截图逐行采样实测 .deck 底边停在距屏幕底 95px/DPR3 ≈ 31.7 逻辑像素处，
+     正好对得上 iPhone 的 safe-area-inset-bottom 34px）。
+     `100vh - safe-top` 那行留着作兜底（PWA 里 vh = 物理整屏高，含状态栏那条带；
+     历史坑：曾经把 dvh 写在 vh 前面，等于 dvh 是死代码，.home 比可视区高出一条
+     状态栏，底栏被顶到折叠线以下 —— WebKit bug 254868 / 301994）。 */
   min-height:calc(100vh - env(safe-area-inset-top, 0px));
-  min-height:calc(100dvh - env(safe-area-inset-top, 0px));
+  min-height:100%;
   margin:0;padding:0;
 }
 /* 浮动元素通用：position:absolute；坐标由各具体类给出（写死 dp 字面量，
