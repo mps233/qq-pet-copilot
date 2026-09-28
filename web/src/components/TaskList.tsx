@@ -1,6 +1,7 @@
 import {
   DndContext,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   closestCenter,
   useSensor,
   useSensors,
@@ -8,6 +9,7 @@ import {
 } from '@dnd-kit/core'
 import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifiers'
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { useEffect, useState } from 'react'
 import { TASK_GROUP, TASK_NAME, isLoopTask, type Data, type QueueTaskState } from '../api'
 
 /** 行右侧状态文字（与 legacy 的 rowOf 一致：只给"有信息量"的几种写字） */
@@ -32,6 +34,7 @@ function RowBody({
   pendingKey,
   nowDate,
   onToggle,
+  on,
 }: {
   k: string
   t: QueueTaskState | undefined
@@ -39,9 +42,9 @@ function RowBody({
   nowDate: string
   /** 点勾选框切换该任务启用状态（写回 `<k>_enabled`） */
   onToggle: (k: string, on: boolean) => void
+  /** 当前是否启用 —— 由 TaskList 算好（含"刚点下去、请求还没回来"的乐观值） */
+  on: boolean
 }) {
-  const st = t?.state ?? ''
-  const on = st !== 'disabled'
   const isPend = !!pendingKey && k === pendingKey
   const det = statusText(t, nowDate)
   const tag = TASK_GROUP[k] ? <span className="ttag">{TASK_GROUP[k]}</span> : null
@@ -92,6 +95,7 @@ function SortableRow(props: {
   pendingKey: string
   nowDate: string
   onToggle: (k: string, on: boolean) => void
+  on: boolean
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: props.k,
@@ -122,6 +126,7 @@ function StaticRow(props: {
   pendingKey: string
   nowDate: string
   onToggle: (k: string, on: boolean) => void
+  on: boolean
 }) {
   return (
     <div className={rowClass(props.k, props.t, props.pendingKey)} data-k={props.k}>
@@ -149,10 +154,40 @@ export function TaskList({
   const loop = keys.filter(isLoopTask)
   const rest = keys.filter((k) => !isLoopTask(k))
 
-  // 长按 220ms 才进入拖拽：既保住「点勾选框切启用」，也不跟页面滚动抢手势
+  // **触摸用 TouchSensor、鼠标用 MouseSensor**（dnd-kit 官方推荐的组合）。
+  // 原来只用 PointerSensor —— iOS 上它在滚动容器（.page-slot / .home）里会被浏览器的
+  // 手势判定截断，按住不动也收不到 move，拖拽完全没反应（用户实报"拖动逼用没有"）。
+  // TouchSensor 走 touchstart/touchmove，不经过那套 pointer 判定；长按 220ms 激活，
+  // 短按仍是普通点击（勾选框照常）。MouseSensor 给桌面用，移动 6px 激活。
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { delay: 220, tolerance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 220, tolerance: 8 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
   )
+
+  // **乐观更新**：点勾选框立即翻转，不等 6 秒轮询。
+  // 之前点一下要等很久才看到勾变化（用户实报"隔几十秒才出现勾"）——因为界面完全
+  // 依赖 /api/data 轮询回来才知道新状态；后端本身只要 10ms（实测），慢在刷新链路。
+  // 这里本地先翻转，等 data 里该任务的状态与之一致后自动清掉覆盖。
+  const [optim, setOptim] = useState<Record<string, boolean>>({})
+  const serverOn = (k: string) => (qt[k]?.state ?? '') !== 'disabled'
+  useEffect(() => {
+    setOptim((prev) => {
+      const next: Record<string, boolean> = {}
+      let dropped = false
+      for (const k of Object.keys(prev)) {
+        if (serverOn(k) === prev[k]) dropped = true
+        else next[k] = prev[k]!
+      }
+      return dropped ? next : prev
+    })
+    // serverOn 依赖 qt，qt 每次 data 更新都会换引用；这里只在"已一致"时清理
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qt])
+  const effectiveOn = (k: string) => optim[k] ?? serverOn(k)
+  const handleToggle = (k: string, on: boolean) => {
+    setOptim((p) => ({ ...p, [k]: on }))
+    onToggle(k, on)
+  }
 
   const handleDragEnd = (e: DragEndEvent) => {
     const { active, over } = e
@@ -180,7 +215,15 @@ export function TaskList({
               <span className="tghint">按间隔巡检 · 顺序固定</span>
             </div>
             {loop.map((k) => (
-              <StaticRow key={k} k={k} t={qt[k]} pendingKey={pendingKey} nowDate={nowDate} onToggle={onToggle} />
+              <StaticRow
+                key={k}
+                k={k}
+                t={qt[k]}
+                pendingKey={pendingKey}
+                nowDate={nowDate}
+                onToggle={handleToggle}
+                on={effectiveOn(k)}
+              />
             ))}
           </>
         ) : null}
@@ -200,7 +243,15 @@ export function TaskList({
             >
               <SortableContext items={rest} strategy={verticalListSortingStrategy}>
                 {rest.map((k) => (
-                  <SortableRow key={k} k={k} t={qt[k]} pendingKey={pendingKey} nowDate={nowDate} onToggle={onToggle} />
+                  <SortableRow
+                    key={k}
+                    k={k}
+                    t={qt[k]}
+                    pendingKey={pendingKey}
+                    nowDate={nowDate}
+                    onToggle={handleToggle}
+                    on={effectiveOn(k)}
+                  />
                 ))}
               </SortableContext>
             </DndContext>
