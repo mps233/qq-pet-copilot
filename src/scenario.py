@@ -62,6 +62,158 @@ def record_adventure_live(texts) -> None:
         pass
 
 
+# ---- 学习/打工结算收益记录（仪表盘"收益记录"页数据源） ----
+SESSION_REWARD_FILE = os.path.join(os.path.dirname(HIRE_FRIEND_PROGRESS_FILE),
+                                   'session_rewards.jsonl')
+# 结算页自带的日期时间（= 这次活动的开始时间，每条结算唯一，天然适合当去重签名）。
+# 打工页实测是 `2026 / 09 /27 11:44`（斜杠两侧带空格），必须容忍空格——
+# 第一版写死 `\d{4}/\d{1,2}/\d{1,2}` 没匹配上，sig 退化成了内容 md5（实测踩坑）
+_REWARD_DATE_RE = re.compile(r'\d{4}\s*/\s*\d{1,2}\s*/\s*\d{1,2}\s+\d{1,2}\s*:\s*\d{2}')
+_REWARD_CREDIT_RE = re.compile(r'学分\s*[+＋]?\s*(\d{1,3})')
+# 行首的项目符号会被 OCR 读进 token（实测 '+课程障碍挑战课' '+学分+5'），
+# 所以允许开头有非文字符号，但**标签必须在开头**——不能用 search 乱找，
+# 否则结算页正文（"影响了课堂成绩。"）会被当成字段行
+_LEAD_JUNK = r'^[^\w\u4e00-\u9fff]*'
+_REWARD_ATTR_RE = re.compile(_LEAD_JUNK + r'(力量|智力|魅力)\s*[+＋]?\s*(\d{1,3})$')
+_REWARD_COURSE_RE = re.compile(_LEAD_JUNK + r'(课程|科目|地点)\s*[:：]?\s*(.+)$')
+# 打工结算页（实测结构，见 parse_session_reward docstring）
+_REWARD_COIN_RE = re.compile(r'(?:金币|工资|报酬|收入)\s*[+＋]?\s*(\d{1,6})')
+_REWARD_WP_RE = re.compile(r'工分\s*[+＋]?\s*(\d{1,4})')
+# 岗位行："武馆教学助理(10分钟)" → 岗位名 + 本次档位
+_REWARD_JOB_RE = re.compile(r'^(.+?)\s*[（(]\s*(\d+\s*分钟)\s*[)）]$')
+# 工资构成行："本金22，雇佣加成6"（说明这次有没有雇到人、加成多少）
+_REWARD_PAY_RE = re.compile(r'本金|加成')
+
+
+def parse_session_reward(kind: str, texts) -> dict:
+    """从结算页 OCR 文案里抽收益字段。
+
+    学习结算页（"教师评语"，实测）：
+        宠物成绩单 / 成绩 A+ / 姓名 / 主人 / 课程 障碍挑战课 / 学分 +5
+        两个徽章："学分+5" "力量+5" / "疲惫，收益减少" / 教师评语正文 / 分享·继续学习
+    打工结算页（"工资明细"+页面下方"打工总结"，实测 2026-09-27）：
+        武馆教学助理(10分钟) / 大字 +28 / 本金22，雇佣加成6 / 限时补贴 /
+        工分+3 / 金币+28 / 看视频+10 / 疲惫，收益减少 / 分享·继续打工
+      → 金币取**带"金币"标签的那个数**（页面上还有裸的 "+28" 和 "看视频+10"，
+        不能乱认数字）；工分另记；岗位名与档位、工资构成一起存下来。
+
+    只认"能确定"的字段，认不出一律留空/None，不猜。
+    """
+    toks = [str(t).strip() for t in texts]
+    out = {'credits': None, 'attrs': {}, 'course': '', 'grade': '',
+           'coins': None, 'tired': False,
+           'workpoints': None, 'job': '', 'job_duration': '', 'pay_detail': ''}
+    gi = next((i for i, t in enumerate(toks) if '成绩' in t), -1)
+    for i, t in enumerate(toks):
+        if not out['course']:
+            m = _REWARD_COURSE_RE.match(t)
+            if m:
+                out['course'] = m.group(2).strip()
+        if out['credits'] is None:
+            m = _REWARD_CREDIT_RE.search(t)
+            if m:
+                out['credits'] = int(m.group(1))
+        m = _REWARD_ATTR_RE.match(t)
+        if m:
+            out['attrs'][m.group(1)] = int(m.group(2))
+        if out['coins'] is None:
+            m = _REWARD_COIN_RE.search(t)
+            if m:
+                out['coins'] = int(m.group(1))
+        # 岗位 / 工分 / 工资构成是**打工页专有**字段：学习页只解析课程·学分·属性，
+        # 万一两页出现同形文案也不互相污染
+        if kind == 'work':
+            if out['workpoints'] is None:
+                m = _REWARD_WP_RE.search(t)
+                if m:
+                    out['workpoints'] = int(m.group(1))
+            if not out['job']:
+                m = _REWARD_JOB_RE.match(t)
+                if m:
+                    out['job'] = m.group(1).strip()
+                    out['job_duration'] = m.group(2).replace(' ', '')
+            if not out['pay_detail'] and _REWARD_PAY_RE.search(t):
+                out['pay_detail'] = t
+        if '疲惫' in t or '收益减少' in t:
+            out['tired'] = True
+    # 成绩等级：只在"成绩"那一行附近取（单字母 token 满地都是，不能全屏乱认）。
+    # 注意别用 \b 切中文——'绩A' 之间 \w 到 \w 没有词边界，实测切不出来。
+    if gi >= 0:
+        for t in toks[gi:gi + 3]:
+            s = t.replace('成绩', '').strip(' :：|')
+            m = re.fullmatch(r'([A-D][+＋]?)', s) if len(s) <= 3 else None
+            if m:
+                out['grade'] = m.group(1)
+                break
+    return out
+
+
+def _reward_sig_seen(sig: str) -> bool:
+    """sig 是否已在文件末尾出现过 —— 同一张结算页会被多条收尾路径（非阻塞收尾 /
+    阻塞等待 / 出门兜底检测）看到，靠它去重。只读文件尾部，文件长了也不慢。"""
+    try:
+        with open(SESSION_REWARD_FILE, 'rb') as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 16384))
+            tail = f.read().decode('utf-8', 'ignore').splitlines()
+    except OSError:
+        return False
+    for line in tail[-40:]:
+        try:
+            if json.loads(line).get('sig') == sig:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def record_session_reward(kind: str, texts, extra: dict | None = None) -> None:
+    """把一次学习/打工结算记入 runs/session_rewards.jsonl（仪表盘收益记录页的数据源）。
+
+    kind: 'school' / 'work'；extra 可放调用方已知的上下文（如打工地点）。
+    结算页标题互斥（教师评语=学习 / 打工总结=打工），标题对不上就整条丢弃——
+    调用方有的是靠"分享"按钮 xpath 判定的（不知类型），不能让打工页记成学习。
+    同一结算页重复检测按 sig 去重。记录失败仅忽略，绝不影响调度主流程。
+    """
+    try:
+        toks = [str(t).strip() for t in texts]
+        if kind == 'school' and any('打工总结' in t for t in toks):
+            return
+        if kind == 'work' and any('教师评语' in t for t in toks):
+            return
+        sig = next((t for t in toks if _REWARD_DATE_RE.search(t)), '')
+        if not sig:
+            sig = hashlib.md5('\n'.join(toks).encode('utf-8')).hexdigest()[:12]
+        if _reward_sig_seen(sig):
+            return
+        parsed = parse_session_reward(kind, toks)
+        rec = {'ts': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'kind': kind,
+               'sig': sig, 'tokens': toks, **(extra or {}), **parsed}
+        with open(SESSION_REWARD_FILE, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + '\n')
+        bits = []
+        if parsed['course']:
+            bits.append(parsed['course'])
+        if parsed['job']:
+            bits.append(parsed['job'] + (f"({parsed['job_duration']})"
+                                         if parsed['job_duration'] else ''))
+        if parsed['credits'] is not None:
+            bits.append(f"学分+{parsed['credits']}")
+        for k, v in parsed['attrs'].items():
+            bits.append(f'{k}+{v}')
+        if parsed['coins'] is not None:
+            bits.append(f"金币+{parsed['coins']}"
+                        + (f"（{parsed['pay_detail']}）" if parsed['pay_detail'] else ''))
+        if parsed['workpoints'] is not None:
+            bits.append(f"工分+{parsed['workpoints']}")
+        if parsed['tired']:
+            bits.append('疲惫(收益减少)')
+        log(f"{'学习' if kind == 'school' else '打工'}结算已记录: "
+            + ('、'.join(bits) or '未解析出收益字段（原始文案已存，待补规则）'))
+    except Exception:
+        pass
+
+
 # ---- 可调参数 ----
 CLICK_INTERVAL = 1.0       # 连续点击/重试间隔（秒）
 NAV_TIMEOUT = 10           # 单个阶段最多重试次数，超过认为卡死抛异常
@@ -445,6 +597,12 @@ class DeviceScenario:
             hit = self.see(end_name, screen, source)
             if hit:
                 log(f'检测到结束标志 {end_name} (score={hit[2]:.2f})')
+                # 阻塞等待路径也走结算页（school_end/work_end 都是"分享"按钮），
+                # 顺手记一次收益（与 finish_pending 同一条 jsonl，靠 sig 去重）
+                if end_name in ('school_end', 'work_end'):
+                    record_session_reward(
+                        'school' if end_name == 'school_end' else 'work',
+                        [t for t, *_ in ocr_screen(screen)])
                 break
             cur = self.see(in_name, screen, source)
             if cur:
@@ -714,6 +872,12 @@ class DeviceScenario:
                 log(f"{pend['desc']}: 检测到结算页 {pend['end_name']}，收尾")
                 if pend['end_name'] == 'adventure_end':
                     record_adventure_live([t for t, *_ in ocr_screen(screen)])
+                elif pend['end_name'] in ('school_end', 'work_end'):
+                    # 结算页就在屏幕上：顺手把这次收益记进收益记录页（页面自带
+                    # 时间戳去重，重复检测不会记两条）
+                    record_session_reward(
+                        'school' if pend['end_name'] == 'school_end' else 'work',
+                        [t for t, *_ in ocr_screen(screen)])
                 if pend.get('encourage'):
                     # 结算页实测没有鼓励按钮（快速 3 轮不中即放弃），仅作兜底
                     self._encourage_burst()
@@ -788,6 +952,7 @@ class DeviceScenario:
         results = ocr_screen(screen)
         texts = [t for t, *_ in results]
         if any('教师评语' in t for t in texts):
+            record_session_reward('school', texts)   # 顺手记一次收益（sig 去重）
             return 'school'
         if any('打工总结' in t for t in texts):
             hf_name = getattr(getattr(self.cfg, 'hire_friend', None), 'friend_name', '') or ''
@@ -796,6 +961,9 @@ class DeviceScenario:
                 # 打工总结含雇佣好友名称：同时计一次雇佣好友（打工次数由调用方计）
                 n = increment_progress(HIRE_FRIEND_PROGRESS_FILE)
                 log(f'打工总结含雇佣好友 {hf_name}，已计入雇佣好友次数（{n} 次）')
+            record_session_reward(
+                'work', texts,
+                {'location': getattr(getattr(self.cfg, 'work', None), 'location', '')})
             return 'work'
         if self.see('adventure_end', screen, source):
             record_adventure_live(texts)
