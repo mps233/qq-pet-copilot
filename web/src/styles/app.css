@@ -630,10 +630,16 @@ body{
 .scene{
   /* 内容区（74~281，与资料卡同宽）。高度按内容自适应 —— 原来用 bottom 固定
      撑到页面底部，任务少时下方留大片空白（截图反馈）。
-     顶 = --top-scene（= 胶囊区底 + --gap-top），与上面两处间距一致。 */
+     顶 = --top-scene（= 胶囊区底 + --gap-top），与上面两处间距一致。
+
+     再加一条 max-height：**不许超过底栏上沿**。.scene 是绝对定位，它的下边界会
+     计入 .home 的滚动区 —— 任务多时下边界压出屏幕，总览页就多出一截只能滚出
+     空白的区域（用户实报「底栏最下面还有一块很细的区域，能滚一点点」）。
+     超出视口的任务改由 .tasklist 内部滚（见下面那条规则），功能不丢。 */
   left:calc(var(--u) * 74);
   width:calc(var(--u) * 207);
   top:calc(var(--u) * var(--top-scene));
+  max-height:calc(100% - calc(var(--u) * var(--top-scene)) - calc(var(--u) * 135));
   display:flex;flex-direction:column;
   overflow:hidden;
 }
@@ -828,6 +834,14 @@ body{
 }
 .qpend .run{color:var(--accent);font-weight:600}
 .qgrp{font-size:10.5px;color:var(--sub);letter-spacing:.06em;margin:10px 0 2px}
+/* 任务列表：任务多时**自己滚**，不再撑高 .scene（内层滚动区按既有约定用
+   overscroll-behavior:none 防 iOS 回弹）。min-height:0 是让它在 flex 列里
+   能收缩到内容高度以下 —— 不给的话滚动条永远出不来。 */
+.tasklist{
+  overflow-y:auto;
+  overscroll-behavior:none;
+  min-height:0;
+}
 .tasklist .mrow{
   display:flex;gap:calc(var(--u) * 6);
   padding:calc(var(--u) * 7.5) calc(var(--u) * 8);   /* 左右 8u：与标题行同一左缘（标题那侧也跟着调） */
