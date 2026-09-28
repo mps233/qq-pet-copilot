@@ -181,12 +181,21 @@ body{
    注意：动画期间容器上有 transform，会让内部的 position:fixed 子孙（#bgSheet、
    #liveToast）暂时相对它定位 —— 只在切页那 320ms 内存在，期间不会去开面板，
    所以没影响；但别把这套挂到常驻容器上。 */
-.app > main{position:relative;overflow:hidden}
+.app > main{position:relative}
 /* 两个 slot 都必须是**绝对定位**、叠在 main 上。别给 .page-enter 加
    `position:relative` —— 那会让当前页变成"由内容撑高"，而 .home 里全是绝对定位的
    浮动层、撑不开它，`.home{min-height:100%}` 的百分比随之失效，整页塌成只剩背景
-   （实测踩过一次：加上 relative 之后立刻"什么都没有了只留背景"）。 */
-.page-slot{position:absolute;inset:0;overflow:hidden;will-change:transform}
+   （实测踩过一次：加上 relative 之后立刻"什么都没有了只留背景"）。
+
+   **滚动**：slot 是 absolute + inset:0，高度被锁成一屏，所以滚动必须由 slot 自己承担
+   （`overflow-y:auto`）—— 之前给它写 `overflow:hidden`、外加 main 上的 overflow:hidden，
+   结果内页内容超出就被裁掉、又滚不动（用户实报"每个页面都不能滑动了"）。
+   overscroll-behavior:none 是既有的防回弹约定。
+   main 上**不要**加 overflow:hidden：那会二阶裁切，且会让 slot 的滚动高度算不对。 */
+.page-slot{
+  position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;
+  overscroll-behavior:none;will-change:transform;
+}
 .page-enter{z-index:2}
 .page-leave{z-index:1}
 @keyframes qp-enter-fwd{from{transform:translateX(100%)}to{transform:translateX(0)}}
