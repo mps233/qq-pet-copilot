@@ -73,6 +73,15 @@ def reenter_pet(adb: Device, method: str = "重启设备",
     if method == "重启游戏":
         # 只重开 QQ，不重启设备（快；设备级卡死/u2 挂掉时治不了）
         log('异常恢复：重启 QQ 游戏（不重启设备）...')
+        # 先确认设备在线：无线 adb 掉线（device offline / device not found）时 adb 命令
+        # 会立刻失败，而 ensure_connected 能补一次 adb connect、必要时重启 adb server
+        # 自愈（目标端口内核直连可达说明是 server 网络栈坏了，见 src/adb/device.py 的
+        # _recover_unreachable）；不先修 adb 的话这里当场"恢复失败"→ 告警退出调度器
+        # （实测踩过：13:45 与 02:48 两次故障都是 adb 一 kill-server 就好）
+        try:
+            adb.ensure_connected()
+        except Exception as e:  # noqa: BLE001 - 设备真离线时留给后续步骤报错
+            log(f'恢复前设备不在线（{e}），继续尝试重启 QQ')
         adb.force_stop_app(QQ_PACKAGE)
         dev = _connect_u2(adb)
     elif use_opener and emulator_restart_cmd.strip():

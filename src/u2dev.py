@@ -159,7 +159,13 @@ class U2Device:
 
     def __init__(self, adb_path: str, serial: str = ""):
         self.adb = Device(adb_path, serial)
-        resolved = self.adb.ensure_connected()
+        # 启动时也走带等待的自愈路径 _wait_device_online()：无线 adb（host:port）会周期性
+        # 抖动掉线几秒~几十秒，原先直接 ensure_connected() 是一次性判定，设备恰好在那一瞬
+        # 不在线就当场抛 AdbError 退出——用户点"开始"只能干等，且退出后无人再重试
+        # （实测 09-21 18:24 / 09-22 23:06 / 09-23 00:14 反复"启动不了"）。
+        # 该函数内部先试一次 ensure_connected（含 kill-server 自愈），失败才轮询；
+        # USB 真机 / emulator-* 不含 ':'，仍是立即抛错走既有恢复链路，行为不变。
+        resolved = self._wait_device_online()
         log(f'设备在线: {resolved}，正在连接 uiautomator2（首次会自动部署 u2.jar 到 /data/local/tmp）...')
         import uiautomator2 as u2  # 重依赖，用到才加载
         _patch_u2_resource_lookup(u2)  # frozen 下随包资源（u2.jar）读取回退
@@ -219,11 +225,23 @@ class U2Device:
         except Exception:
             pass
         msg = str(e).lower()
-        return any(k in msg for k in (
+        if any(k in msg for k in (
             'unable to connect', 'connection', 'broken pipe',
             'reset by peer', 'refused', 'timeout', 'not ready',
             'socket',
-        ))
+            # adb 设备层掉线：无线 adb 的 5555 空闲长连接被 WiFi 省电/AP 掐断时，
+            # adb server 会把设备标成 offline（或整条 transport 消失、报 not found /
+            # no route to host）。这类故障 adb.ensure_connected() 能自愈（目标端口内核
+            # 直连可达时会自动重启 adb server，见 src/adb/device.py 的
+            # _recover_unreachable），必须算连接类异常，否则 _u2_op 直接抛出不重连，
+            # 一路走到"调度循环异常且恢复失败"告警退出（实测踩过）
+            'offline', 'no route to host', '不在线',
+        )):
+            return True
+        # transport 整条消失时消息形如 device '192.168.50.40:5555' not found
+        # （序列号夹在中间，匹配不到 'device not found'）；限定 adb/device 语境，
+        # 避免把业务层的 not found 误判成连接故障
+        return 'not found' in msg and ('device' in msg or 'adb' in msg)
 
     def _wait_device_online(self) -> str:
         """等 adb 设备回线（远程模拟器重启后 adb 会抖动几秒~几十秒）。
@@ -237,6 +255,7 @@ class U2Device:
         except Exception:
             if ':' not in self.adb.serial:
                 raise
+        log(f'设备 {self.adb.serial} 未就绪，等待回线（最多 {DEVICE_ONLINE_WAIT:.0f} 秒）...')
         deadline = time.monotonic() + DEVICE_ONLINE_WAIT
         while time.monotonic() < deadline:
             try:

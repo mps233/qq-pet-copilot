@@ -174,6 +174,32 @@ def _online_devices(adb: str) -> list[str]:
     return out
 
 
+# adb shell 是否本身就是 root：MuMu for Mac 的 adbd 常直接给 uid=0，而它自带的 su
+# 是个坏壳（`su -c id` 没输出、rc=1）——只认 su 会把"明明有 root"判成没有。
+_SHELL_ROOT_CACHE: dict[str, bool] = {}
+
+
+def _shell_is_root(adb: str, serial: str) -> bool:
+    key = f'{adb}|{serial}'
+    if key not in _SHELL_ROOT_CACHE:
+        proc = _adb_run(adb, serial, 'shell', 'id', check=False, timeout=30)
+        _SHELL_ROOT_CACHE[key] = 'uid=0' in (proc.stdout or '')
+    return _SHELL_ROOT_CACHE[key]
+
+
+def _root_shell(adb: str, serial: str, cmd: str, *, check: bool = True,
+                timeout: int = 30) -> subprocess.CompletedProcess:
+    """以 root 跑一条设备 shell 命令：adb shell 已是 root 就直接跑，否则套 `su -c`。
+
+    项目里所有"要 root 的设备操作"统一走这里（原先硬编码 `su -c '...'`，
+    在 MuMu for Mac 上必然失败——那台 adbd 本来就是 root、su 却是坏的）。
+    """
+    if _shell_is_root(adb, serial):
+        return _adb_run(adb, serial, 'shell', cmd, check=check, timeout=timeout)
+    return _adb_run(adb, serial, 'shell', f'su -c {shlex.quote(cmd)}',
+                    check=check, timeout=timeout)
+
+
 def _has_qq(adb: str, serial: str) -> bool:
     proc = _adb_run(adb, serial, 'shell', 'pm', 'path', QQ_PACKAGE, check=False, timeout=30)
     return proc.returncode == 0 and 'package:' in proc.stdout
@@ -199,7 +225,13 @@ def _choose_device(adb: str, serial: str | None) -> str:
 
 
 def _has_root(adb: str, serial: str) -> bool:
-    """模拟器是否开放 Root（软检查，不抛异常）。"""
+    """模拟器是否开放 Root（软检查，不抛异常）。
+
+    "adb shell 本身就是 root"（MuMu for Mac 的 adbd 直接给 uid=0）也算开放，
+    否则再试 `su -c id`（真机/MuMu Windows 那种需要 su 的情况）。
+    """
+    if _shell_is_root(adb, serial):
+        return True
     proc = _adb_run(adb, serial, 'shell', 'su', '-c', 'id', check=False, timeout=30)
     return proc.returncode == 0 and 'uid=0' in proc.stdout
 
@@ -242,8 +274,7 @@ def _fetch_frida_server(version: str, arch: str) -> bool:
 def _remote_pid(adb: str, serial: str) -> str:
     """设备上伪装名 server 的 pid（空串=没在跑）。pidof 按可执行名精确匹配，
     不用 pkill -f（pattern 会匹配到 su/sh 自己的命令行误杀自身）。"""
-    proc = _adb_run(adb, serial, 'shell', f"su -c 'pidof {REMOTE_SERVER_NAME}'",
-                    check=False, timeout=30)
+    proc = _root_shell(adb, serial, f'pidof {REMOTE_SERVER_NAME}', check=False, timeout=30)
     return proc.stdout.strip()
 
 
@@ -281,16 +312,16 @@ def _ensure_frida_server(adb: str, serial: str) -> int:
             shutil.copyfileobj(src, dst)
     # 已推送且大小一致则跳过重推（二进制几十 MB，adb push 有几秒开销）
     local_size = local_binary.stat().st_size
-    remote_size = _adb_run(
-        adb, serial, 'shell', f"su -c 'stat -c %s {REMOTE_SERVER_PATH}'",
+    remote_size = _root_shell(
+        adb, serial, f'stat -c %s {REMOTE_SERVER_PATH}',
         check=False, timeout=30).stdout.strip()
     if remote_size != str(local_size):
         log('推送 frida-server 到模拟器（伪装名部署）...')
         _adb_run(adb, serial, 'push', str(local_binary), REMOTE_SERVER_PATH, timeout=180)
         # 模拟器刚开机时 su 可能还没就绪（重启后第一次执行偶发失败），重试几次
         for _chmod_attempt in range(1, 4):
-            proc = _adb_run(adb, serial, 'shell', f"su -c 'chmod 755 {REMOTE_SERVER_PATH}'",
-                            check=False, timeout=30)
+            proc = _root_shell(adb, serial, f'chmod 755 {REMOTE_SERVER_PATH}',
+                               check=False, timeout=30)
             if proc.returncode == 0:
                 break
             if _chmod_attempt < 3:
@@ -299,13 +330,13 @@ def _ensure_frida_server(adb: str, serial: str) -> int:
     # 杀残留（上次异常退出留下的旧进程可能占着旧端口），换随机端口重启
     old_pid = _remote_pid(adb, serial)
     if old_pid:
-        _adb_run(adb, serial, 'shell', f"su -c 'kill {old_pid}'", check=False, timeout=30)
+        _root_shell(adb, serial, f'kill {old_pid}', check=False, timeout=30)
         time.sleep(0.5)
     port = random.randint(*FRIDA_PORT_RANGE)
     log(f'启动注入服务（127.0.0.1:{port}）...')
-    _adb_run(adb, serial, 'shell',
-             f"su -c 'nohup {REMOTE_SERVER_PATH} -l 127.0.0.1:{port} >/dev/null 2>&1 &'",
-             check=False, timeout=30)
+    _root_shell(adb, serial,
+                f'nohup {REMOTE_SERVER_PATH} -l 127.0.0.1:{port} >/dev/null 2>&1 &',
+                check=False, timeout=30)
     time.sleep(2)
     if not _remote_pid(adb, serial):
         raise OpenPetPageError('注入服务启动失败（伪装名 frida-server 未在运行）')
@@ -316,7 +347,7 @@ def _kill_frida_server(adb: str, serial: str, local_port: int | None) -> None:
     """init/捕获完成后收尾：杀设备上的 server 进程 + 移除本地 adb forward。"""
     pid = _remote_pid(adb, serial)
     if pid:
-        _adb_run(adb, serial, 'shell', f"su -c 'kill {pid}'", check=False, timeout=30)
+        _root_shell(adb, serial, f'kill {pid}', check=False, timeout=30)
     if local_port is not None:
         _adb_run(adb, serial, 'forward', '--remove', f'tcp:{local_port}',
                  check=False, timeout=15)
@@ -406,15 +437,13 @@ def _wait_qq_settle(adb: str, serial: str) -> None:
 def _mumu_prop_map_path(adb: str, serial: str) -> str | None:
     """找 MuMu app 级机型伪装映射表（app-device-prop-*.config，不同 Android
     版本文件名不同；多个匹配时取实际包含 QQ 映射行的那个）。"""
-    proc = _adb_run(adb, serial, 'shell',
-                    f"su -c 'ls {MUMU_PROP_DIR}/app-device-prop-*.config'",
-                    check=False, timeout=30)
+    proc = _root_shell(adb, serial, f'ls {MUMU_PROP_DIR}/app-device-prop-*.config',
+                       check=False, timeout=30)
     paths = [ln.strip() for ln in proc.stdout.splitlines()
              if ln.strip().startswith(MUMU_PROP_DIR) and ln.strip().endswith('.config')]
     for path in paths:
-        hit = _adb_run(adb, serial, 'shell',
-                       f"su -c 'grep -l mobileqq {path}'",
-                       check=False, timeout=30).stdout or ''
+        hit = _root_shell(adb, serial, f'grep -l mobileqq {path}',
+                          check=False, timeout=30).stdout or ''
         if hit.strip():
             return path
     return None
@@ -434,8 +463,8 @@ def ensure_device_spoof(adb: str, serial: str) -> bool:
     map_path = _mumu_prop_map_path(adb, serial)
     if not map_path:
         return False  # 非 MuMu
-    content = _adb_run(adb, serial, 'shell', f"su -c 'cat {map_path}'",
-                       check=False, timeout=30).stdout or ''
+    content = _root_shell(adb, serial, f'cat {map_path}',
+                          check=False, timeout=30).stdout or ''
     lines = content.splitlines()
     qq_idx = next((i for i, ln in enumerate(lines) if 'mobileqq' in ln), None)
     if qq_idx is None:
@@ -446,10 +475,10 @@ def ensure_device_spoof(adb: str, serial: str) -> bool:
     if parts[1].rsplit('/', 1)[-1] != MUMU_RAW_PROFILE:
         return True  # 已伪装（bind 还活着或本来就是别的 profile），无需重挂
     # 选一个真实手机 profile：必须含 ro.build.characteristics=default
-    candidates = _adb_run(
-        adb, serial, 'shell',
-        f"su -c 'grep -l ro.build.characteristics=default "
-        f"{MUMU_PROP_DIR}/device-prop-configs/*.config'",
+    candidates = _root_shell(
+        adb, serial,
+        f'grep -l ro.build.characteristics=default '
+        f'{MUMU_PROP_DIR}/device-prop-configs/*.config',
         check=False, timeout=30).stdout or ''
     choice = None
     for line in candidates.splitlines():
@@ -469,15 +498,14 @@ def ensure_device_spoof(adb: str, serial: str) -> bool:
     staging_local = writable_runtime() / 'qqpet_adp.config'
     staging_local.write_text('\n'.join(lines) + '\n', encoding='utf-8')
     _adb_run(adb, serial, 'push', str(staging_local), MUMU_SPOOF_STAGING, timeout=30)
-    proc = _adb_run(adb, serial, 'shell',
-                    f"su -c 'mount --bind {MUMU_SPOOF_STAGING} {map_path}'",
-                    check=False, timeout=30)
+    proc = _root_shell(adb, serial, f'mount --bind {MUMU_SPOOF_STAGING} {map_path}',
+                       check=False, timeout=30)
     if proc.returncode != 0:
         log(f'MuMu 机型伪装 bind-mount 失败: {(proc.stderr or proc.stdout).strip()}')
         return False
     # 校验生效（bind 后读到的应是新内容）
-    after = _adb_run(adb, serial, 'shell', f"su -c 'cat {map_path}'",
-                     check=False, timeout=30).stdout or ''
+    after = _root_shell(adb, serial, f'cat {map_path}',
+                        check=False, timeout=30).stdout or ''
     if choice not in after:
         log('MuMu 机型伪装 bind-mount 后校验失败（内容未变化）')
         return False
@@ -549,8 +577,8 @@ def _mmkv_encode_string_item(key: str, value: str) -> bytes:
 
 def _su_read_bytes(adb: str, serial: str, path: str) -> bytes | None:
     """root 读设备私有文件（base64 过 shell 防二进制损坏）。"""
-    proc = _adb_run(adb, serial, 'shell', f"su -c 'base64 {shlex.quote(path)}'",
-                    check=False, timeout=60)
+    proc = _root_shell(adb, serial, f'base64 {shlex.quote(path)}',
+                       check=False, timeout=60)
     if proc.returncode != 0 or not proc.stdout.strip():
         return None
     try:
@@ -561,7 +589,7 @@ def _su_read_bytes(adb: str, serial: str, path: str) -> bytes | None:
 
 def _account_uin(adb: str, serial: str) -> str | None:
     """从 MMKV 文件名发现当前登录账号（united_config_mmkv_<uin>，排除 000）。"""
-    proc = _adb_run(adb, serial, 'shell', f"su -c 'ls {MMKV_DIR}'", check=False, timeout=30)
+    proc = _root_shell(adb, serial, f'ls {MMKV_DIR}', check=False, timeout=30)
     for m in re.finditer(rf'{MMKV_PREFIX}(\d+)', proc.stdout or ''):
         if m.group(1) != '000':
             return m.group(1)
@@ -634,11 +662,11 @@ def _patch_gate_mmkv(adb: str, serial: str, uin: str) -> bool:
         local_crc.write_bytes(new_meta)
         _adb_run(adb, serial, 'push', str(local_dat), '/sdcard/qqpet_uc.dat', timeout=120)
         _adb_run(adb, serial, 'push', str(local_crc), '/sdcard/qqpet_uc.crc', timeout=60)
-    proc = _adb_run(
-        adb, serial, 'shell',
-        f"su -c 'cp /sdcard/qqpet_uc.dat {remote} && cp /sdcard/qqpet_uc.crc {remote}.crc"
-        f" && chmod 770 {remote} {remote}.crc"
-        f" && chown `stat -c %u:%g {MMKV_DIR}` {remote} {remote}.crc'",
+    proc = _root_shell(
+        adb, serial,
+        f'cp /sdcard/qqpet_uc.dat {remote} && cp /sdcard/qqpet_uc.crc {remote}.crc'
+        f' && chmod 770 {remote} {remote}.crc'
+        f' && chown `stat -c %u:%g {MMKV_DIR}` {remote} {remote}.crc',
         check=False, timeout=60)
     _adb_run(adb, serial, 'shell', 'rm -f /sdcard/qqpet_uc.dat /sdcard/qqpet_uc.crc',
              check=False, timeout=15)
@@ -933,7 +961,7 @@ def am_start_pet_page(adb: str, serial: str, uin: str, attrs: dict | None = None
     else:
         args += ['--es', 'pageData', '{}']
     am_cmd = ' '.join(shlex.quote(a) for a in args)
-    _adb_run(adb, serial, 'shell', f'su -c {shlex.quote(am_cmd)}', timeout=30)
+    _root_shell(adb, serial, am_cmd, timeout=30)
 
 
 def _screen_brightness(adb: str, serial: str) -> float | None:
