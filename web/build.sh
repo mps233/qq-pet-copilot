@@ -30,4 +30,4 @@ echo "node: $(node -v)"
 node node_modules/vite/bin/vite.js build
 
 SIZE=$(wc -c < dist/assets/*.js 2>/dev/null | tail -1 | tr -d ' ')
-echo "✓ 构建完成（bundle ${SIZE} 字节）→ 打开 http://<host>:8787/next/"
+echo "✓ 构建完成（bundle ${SIZE} 字节）→ 打开 http://<host>:8787/"

@@ -1,11 +1,11 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// 迁移策略：新版挂在 /next/ 下，和 dashboard.py 里的旧版界面并存，零回归风险。
-// 全部页面迁完后把 base 改成 '/'，再把旧 HTML 常量删掉。
+// 迁移已完成：新版就是 `/`，产物放 /assets/ 下。
+// '/next' 路由在 dashboard.py 里保留作兼容别名（老书签/主屏图标仍能用）。
 export default defineConfig({
   plugins: [react()],
-  base: '/next/',
+  base: '/',
   build: {
     outDir: 'dist',
     emptyOutDir: true,
