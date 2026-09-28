@@ -79,10 +79,32 @@ _REWARD_COURSE_RE = re.compile(_LEAD_JUNK + r'(课程|科目|地点)\s*[:：]?\s
 # 打工结算页（实测结构，见 parse_session_reward docstring）
 _REWARD_COIN_RE = re.compile(r'(?:金币|工资|报酬|收入)\s*[+＋]?\s*(\d{1,6})')
 _REWARD_WP_RE = re.compile(r'工分\s*[+＋]?\s*(\d{1,4})')
+# 广告加成金币：官方文案是「看视频获得N金币」（客户端 v5/g0.java 硬编码），
+# 实测 OCR 读成「看视频+10」。它是一笔**独立**收益，不带"金币"标签，
+# 所以 _REWARD_COIN_RE 不会命中它 —— 单列一个字段，别漏记也别混进 coins。
+# 证据：qqpet_assets/kuikly_analysis/FIELDS_REWARD.md
+_REWARD_AD_RE = re.compile(r'看视频[^0-9\n]{0,8}[+＋]?\s*(\d{1,6})')
 # 岗位行："武馆教学助理(10分钟)" → 岗位名 + 本次档位
 _REWARD_JOB_RE = re.compile(r'^(.+?)\s*[（(]\s*(\d+\s*分钟)\s*[)）]$')
 # 工资构成行："本金22，雇佣加成6"（说明这次有没有雇到人、加成多少）
 _REWARD_PAY_RE = re.compile(r'本金|加成')
+# 工资构成行的**兜底形态**：官方把这一行的标题「本金 / 限时补贴 / 基础工资…」由**服务端下发**
+# （`IncomeExpenseItem.title`，证据见 qqpet_assets/kuikly_analysis/FIELDS_REWARD.md），
+# 客户端不硬编码 —— 换词就失配（实测新版结算页已出现「基础工资36」，不含"本金/加成"）。
+# 所以具体词没命中时退一步：认「中文标签 + 数字」的整行，并排除已知的标签行与日期/岗位行。
+_REWARD_PAYGEN_RE = re.compile(
+    r'^(?!.*(?:金币|工分|学分|力量|智力|魅力|看视频|奖励|成绩|主人|姓名))'
+    r'[^\d:：/]{2,12}\d{1,6}$')
+# 结算页头部的宠物名 / 主人名（实测 token："姓名杨萌萌" "主人 Serena"）：
+# 姓名行无空格、主人行常有空格，冒号与空白都容忍，值必须非空（多宠/多号时区分归属）
+_REWARD_PET_RE = re.compile(_LEAD_JUNK + r'(?:姓名|宠物名|昵称)\s*[:：]?\s*(\S.*)$')
+_REWARD_OWNER_RE = re.compile(_LEAD_JUNK + r'主人\s*[:：]?\s*(\S.*)$')
+# "小提示"那段说明（疲惫等原因）的终止锚点：撞到已知标题就不再往下吃
+_REWARD_NOTE_STOP = ('教师评语', '打工总结', '分享', '继续学习', '继续打工', '继续冒险',
+                     '宠物成绩单', '工资明细', '小提示')
+# 结算页固定标题词：定位宠物名时不能把它们当成昵称
+_REWARD_TITLE_WORDS = ('成绩', '宠物成绩单', '工资明细', '打工总结', '教师评语',
+                       '小提示', '分享', '内容由AI生成')
 
 
 def parse_session_reward(kind: str, texts) -> dict:
@@ -102,7 +124,8 @@ def parse_session_reward(kind: str, texts) -> dict:
     toks = [str(t).strip() for t in texts]
     out = {'credits': None, 'attrs': {}, 'course': '', 'grade': '',
            'coins': None, 'tired': False,
-           'workpoints': None, 'job': '', 'job_duration': '', 'pay_detail': ''}
+           'workpoints': None, 'job': '', 'job_duration': '', 'pay_detail': '',
+           'pet': '', 'owner': '', 'note': '', 'ad_coins': None}
     gi = next((i for i, t in enumerate(toks) if '成绩' in t), -1)
     for i, t in enumerate(toks):
         if not out['course']:
@@ -134,6 +157,20 @@ def parse_session_reward(kind: str, texts) -> dict:
                     out['job_duration'] = m.group(2).replace(' ', '')
             if not out['pay_detail'] and _REWARD_PAY_RE.search(t):
                 out['pay_detail'] = t
+        # 广告加成金币（"看视频+10" / "看视频获得10金币"）：独立一笔，别混进 coins
+        if out['ad_coins'] is None:
+            m = _REWARD_AD_RE.search(t)
+            if m:
+                out['ad_coins'] = int(m.group(1))
+        # 宠物名 / 主人名（结算页头部；多宠或多号时用来区分这条记录归谁）
+        if not out['pet']:
+            m = _REWARD_PET_RE.match(t)
+            if m and 1 <= len(m.group(1).strip()) <= 16:
+                out['pet'] = m.group(1).strip()
+        if not out['owner']:
+            m = _REWARD_OWNER_RE.match(t)
+            if m and 1 <= len(m.group(1).strip()) <= 16:
+                out['owner'] = m.group(1).strip()
         if '疲惫' in t or '收益减少' in t:
             out['tired'] = True
     # 成绩等级：只在"成绩"那一行附近取（单字母 token 满地都是，不能全屏乱认）。
@@ -144,6 +181,37 @@ def parse_session_reward(kind: str, texts) -> dict:
             m = re.fullmatch(r'([A-D][+＋]?)', s) if len(s) <= 3 else None
             if m:
                 out['grade'] = m.group(1)
+                break
+    # "小提示"那段（疲惫等原因）：锚点之后连着吃几项，撞到已知标题就停。
+    # 这段比 tired 布尔值更能说明"为什么收益少"，原文入库便于回头核对。
+    ni = next((i for i, t in enumerate(toks) if t in ('小提示', '提示')), -1)
+    if ni >= 0:
+        parts = []
+        for t in toks[ni + 1:ni + 4]:
+            s = t.strip()
+            if not s or any(k in s for k in _REWARD_NOTE_STOP):
+                break
+            parts.append(s)
+        out['note'] = ''.join(parts)[:120]
+    # 打工页的宠物名**没有"姓名"标签**（实测结构：工资明细 / 日期 / 杨萌萌 / 主人: Serena /
+    # 岗位行 …），所以标签没命中时兜底取"日期行之后、主人行之前"的那一项；
+    # 只收短昵称形态并排除结算页固定标题词，防止把"成绩"这类标题当成宠物名。
+    if not out['pet']:
+        di = next((i for i, t in enumerate(toks) if _REWARD_DATE_RE.search(t)), -1)
+        oi = next((i for i, t in enumerate(toks) if _REWARD_OWNER_RE.match(t)), -1)
+        if 0 <= di < oi:
+            for t in toks[di + 1:oi]:
+                s = t.strip()
+                if (1 <= len(s) <= 16 and s not in _REWARD_TITLE_WORDS
+                        and not re.fullmatch(r'\d+', s)
+                        and re.fullmatch(r'[\w\u4e00-\u9fff·]+', s)):
+                    out['pet'] = s
+                    break
+    # 工资构成行兜底（只在具体词没命中时用）：认「标签+数字」整行，供服务端换标题时不至于全丢
+    if kind == 'work' and not out['pay_detail']:
+        for t in toks:
+            if _REWARD_PAYGEN_RE.match(t.strip()):
+                out['pay_detail'] = t.strip()
                 break
     return out
 
@@ -206,10 +274,14 @@ def record_session_reward(kind: str, texts, extra: dict | None = None) -> None:
                         + (f"（{parsed['pay_detail']}）" if parsed['pay_detail'] else ''))
         if parsed['workpoints'] is not None:
             bits.append(f"工分+{parsed['workpoints']}")
+        if parsed['ad_coins'] is not None:
+            bits.append(f"看视频+{parsed['ad_coins']}")
         if parsed['tired']:
             bits.append('疲惫(收益减少)')
+        who = parsed['pet'] + (f" / {parsed['owner']}" if parsed['owner'] else '')
         log(f"{'学习' if kind == 'school' else '打工'}结算已记录: "
-            + ('、'.join(bits) or '未解析出收益字段（原始文案已存，待补规则）'))
+            + ('、'.join(bits) or '未解析出收益字段（原始文案已存，待补规则）')
+            + (f"（{who}）" if who else ''))
     except Exception:
         pass
 
