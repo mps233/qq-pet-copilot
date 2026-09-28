@@ -4,10 +4,28 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <!-- theme-color：iOS 独立 Web App（添加到主屏）下状态栏那条带的颜色。
+         取房间背景图最顶部实测色（room-main.jpg 顶部 #D5A758 / room-main-dark.jpg
+         顶部 #A9722D）。切内页时由 App.tsx 里的 syncThemeColor 改成顶栏白。
+         注意 iOS 26 起 theme-color 支持被移除，状态栏改为采样页面背景色 ——
+         所以 html 的 background-color（--qp-statusbar）必须一起对齐，两条腿都要有。 -->
     <meta name="theme-color" content="#D5A758" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#A9722D" media="(prefers-color-scheme: dark)" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <title>QQ 宠物托管</title>
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" type="image/png" href="/icon-192.png" />
+    <!-- iOS 主屏图标：**必须换 URL 才会更新** —— iOS 按 URL 缓存 apple-touch-icon，
+         内容换了但 URL 不变时，重新"添加到主屏幕"仍是旧图标（实测踩坑）。
+         故用独立的 apple-touch-icon.png（180×180，iOS 标准尺寸）而不是复用 icon-192.png；
+         以后换图标同样要换文件名（如 -v2）。 -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-title" content="QQ宠物" />
+    <!-- **故意不写 apple-mobile-web-app-status-bar-style** ——
+         它的 `default` 值语义是"内容显示在状态栏下方"，于是状态栏那条带完全由系统绘制
+         （浅色模式 = 白底黑字），网页既画不上去也改不了色，真机就是顶部一条白带。
+         而 `black-translucent` 已被 WebKit 废弃。移除后状态栏改为采样网页背景色 ——
+         这正是我们要的效果，配合 theme-color 与 html 的 background-color 一起生效。 -->
+    <title>QQ宠物托管</title>
   </head>
   <body>
     <div id="root"></div>

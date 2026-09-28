@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { TASK_GROUP, TASK_NAME, isLoopTask, runnerStart, runnerStop, saveSettings } from './api'
 import { Overview, type PageKey } from './components/Overview'
 import { AdvPage } from './components/AdvPage'
@@ -23,6 +23,30 @@ export default function App() {
   const curKey = data?.queue.pending ? data.queue.pending_key || '' : data?.queue.current || ''
   const etaKind = data?.work_eta?.kind ?? ''
   const scene = useScene(curKey, etaKind)
+
+  // 切页/换背景时同步两件「旧版有、迁移时漏掉」的东西：
+  //
+  // 1) `html[data-page]` —— CSS 里 `html[data-page]:not([data-page="main"])` 靠它把内页的
+  //    底色与背景图切成白色顶栏。不设这个属性的话，进设置页后顶部的安全区**仍然显示总览页
+  //    的房间暖色**（旧版是 showTab() 里 setAttribute 的，见 legacy app.js:2096）。
+  // 2) `theme-color` meta —— iOS 18 及以前读它画状态栏那条带；iOS 26+ 改为采样 html 的
+  //    background-color（那条路靠 CSS 的 --qp-statusbar，本身已经对）。
+  useEffect(() => {
+    const root = document.documentElement
+    root.setAttribute('data-page', page)
+    const dark = !!window.matchMedia?.('(prefers-color-scheme: dark)').matches
+    let want = '#FFFFFF' // 内页顶栏是白的
+    if (page === 'main') {
+      const v = getComputedStyle(root).getPropertyValue('--qp-statusbar').trim()
+      want = v || (dark ? '#A9722D' : '#D5A758') // CSS 变量读不到时的兜底
+    }
+    document.querySelectorAll('meta[name="theme-color"]').forEach((m) => {
+      // 两组 meta 各带一个 media 查询，只改属于当前主题的那条 ——
+      // 两条都改的话，切系统主题时会把另一主题的值也覆盖成当前主题的色（串色）
+      const isDark = (m.getAttribute('media') || '').includes('dark')
+      if (isDark === dark) m.setAttribute('content', want)
+    })
+  }, [page, scene.scene, scene.dark])
 
   const start = async () => {
     setBusy('start')
