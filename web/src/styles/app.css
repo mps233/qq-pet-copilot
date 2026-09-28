@@ -182,8 +182,12 @@ body{
    #liveToast）暂时相对它定位 —— 只在切页那 320ms 内存在，期间不会去开面板，
    所以没影响；但别把这套挂到常驻容器上。 */
 .app > main{position:relative;overflow:hidden}
+/* 两个 slot 都必须是**绝对定位**、叠在 main 上。别给 .page-enter 加
+   `position:relative` —— 那会让当前页变成"由内容撑高"，而 .home 里全是绝对定位的
+   浮动层、撑不开它，`.home{min-height:100%}` 的百分比随之失效，整页塌成只剩背景
+   （实测踩过一次：加上 relative 之后立刻"什么都没有了只留背景"）。 */
 .page-slot{position:absolute;inset:0;overflow:hidden;will-change:transform}
-.page-enter{position:relative;z-index:2}
+.page-enter{z-index:2}
 .page-leave{z-index:1}
 @keyframes qp-enter-fwd{from{transform:translateX(100%)}to{transform:translateX(0)}}
 @keyframes qp-leave-fwd{from{transform:translateX(0)}to{transform:translateX(-30%)}}
