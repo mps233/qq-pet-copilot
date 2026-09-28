@@ -1,3 +1,13 @@
+import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifiers'
+import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { TASK_GROUP, TASK_NAME, isLoopTask, type Data, type QueueTaskState } from '../api'
 
 /** 行右侧状态文字（与 legacy 的 rowOf 一致：只给"有信息量"的几种写字） */
@@ -16,7 +26,7 @@ function statusText(t: QueueTaskState | undefined, nowDate: string) {
   return { cls: '', text: '' }
 }
 
-function TaskRow({
+function RowBody({
   k,
   t,
   pendingKey,
@@ -31,14 +41,10 @@ function TaskRow({
   const on = st !== 'disabled'
   const isPend = !!pendingKey && k === pendingKey
   const det = statusText(t, nowDate)
-  const done = st === 'done' || st === 'dead'
   const tag = TASK_GROUP[k] ? <span className="ttag">{TASK_GROUP[k]}</span> : null
 
   return (
-    <div
-      className={'mrow' + (done ? ' done' : '') + (isPend ? ' run' : '') + (on ? '' : ' off')}
-      data-k={k}
-    >
+    <>
       <span className={'mname' + (on ? '' : ' off')}>{TASK_NAME[k] ?? k}</span>
       {isPend ? (
         <span className="marrow" title="进行中（等收尾结算）">
@@ -47,37 +53,84 @@ function TaskRow({
       ) : null}
       {tag}
       <span className="mright">
-        {det.text ? <span className={'mdet' + (det.cls ? ` ${det.cls}` : '')}>{det.text}</span> : null}
+        {det.text ? (
+          <span className={'mdet' + (det.cls ? ` ${det.cls}` : '')}>{det.text}</span>
+        ) : null}
       </span>
       <span className={'mcb' + (on ? ' on' : '')} data-k={k} />
+    </>
+  )
+}
+
+function rowClass(k: string, t: QueueTaskState | undefined, pendingKey: string) {
+  const st = t?.state ?? ''
+  const done = st === 'done' || st === 'dead'
+  const isPend = !!pendingKey && k === pendingKey
+  return 'mrow' + (done ? ' done' : '') + (isPend ? ' run' : '') + (st === 'disabled' ? ' off' : '')
+}
+
+/** 「任务顺序」组里的一行：用 dnd-kit 的 useSortable 包一层。
+ *  listeners 绑在整行上，但传感器设了 220ms 长按门槛 —— 短按仍然是普通点击
+ *  （勾选框/行内按钮照常工作），长按才进入拖拽。这替掉了 legacy 那套手写的
+ *  pointerdown + 220ms 定时器实现。 */
+function SortableRow(props: {
+  k: string
+  t: QueueTaskState | undefined
+  pendingKey: string
+  nowDate: string
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: props.k,
+  })
+  return (
+    <div
+      ref={setNodeRef}
+      className={rowClass(props.k, props.t, props.pendingKey) + (isDragging ? ' dragging' : '')}
+      data-k={props.k}
+      style={{
+        transform: transform ? `translate3d(0, ${Math.round(transform.y)}px, 0)` : undefined,
+        transition,
+        zIndex: isDragging ? 9 : undefined,
+      }}
+      {...attributes}
+      {...listeners}
+    >
+      <RowBody {...props} />
     </div>
   )
 }
 
-/** 任务列表：分两组（日常轮巡 = 循环类、顺序固定；任务顺序 = 其余，可拖动）。
- *  ⚠️ `main > [data-page]` 与 `#tabbar button[data-tab]` 是旧版 JS 契约，
- *  这里已经全部由 React 接管，但仍保持 class/id 一致，方便对照旧实现。 */
-export function TaskList({ data }: { data: Data }) {
+function StaticRow(props: { k: string; t: QueueTaskState | undefined; pendingKey: string; nowDate: string }) {
+  return (
+    <div className={rowClass(props.k, props.t, props.pendingKey)} data-k={props.k}>
+      <RowBody {...props} />
+    </div>
+  )
+}
+
+/** 任务列表：分两组 —— 「日常轮巡」= 循环类，顺序固定不可拖；
+ *  「任务顺序」= 其余，长按拖动排序，松手写回 tasks.order / tasks.main_order。 */
+export function TaskList({ data, onReorder }: { data: Data; onReorder: (order: string[]) => void }) {
   const qt = data.queue.tasks || {}
   const nowDate = (data.now || '').slice(0, 10)
-  const pendingKey = data.queue.pending ? (data.queue.pending_key || '') : ''
+  const pendingKey = data.queue.pending ? data.queue.pending_key || '' : ''
   const keys = Object.keys(qt)
   const loop = keys.filter(isLoopTask)
   const rest = keys.filter((k) => !isLoopTask(k))
 
-  const group = (title: string, hint: string, ks: string[]) =>
-    ks.length ? (
-      <>
-        <div className="tghd">
-          <span>{title}</span>
-          <i />
-          <span className="tghint">{hint}</span>
-        </div>
-        {ks.map((k) => (
-          <TaskRow key={k} k={k} t={qt[k]} pendingKey={pendingKey} nowDate={nowDate} />
-        ))}
-      </>
-    ) : null
+  // 长按 220ms 才进入拖拽：既保住「点勾选框切启用」，也不跟页面滚动抢手势
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { delay: 220, tolerance: 8 } }),
+  )
+
+  const handleDragEnd = (e: DragEndEvent) => {
+    const { active, over } = e
+    if (!over || active.id === over.id) return
+    const from = rest.indexOf(String(active.id))
+    const to = rest.indexOf(String(over.id))
+    if (from < 0 || to < 0) return
+    onReorder(arrayMove(rest, from, to))
+  }
 
   return (
     <div className="qpanel">
@@ -88,8 +141,40 @@ export function TaskList({ data }: { data: Data }) {
         </span>
       </div>
       <div className="tasklist" id="taskList">
-        {group('日常轮巡', '按间隔巡检 · 顺序固定', loop)}
-        {group('任务顺序', '按住拖动排序', rest)}
+        {loop.length ? (
+          <>
+            <div className="tghd">
+              <span>日常轮巡</span>
+              <i />
+              <span className="tghint">按间隔巡检 · 顺序固定</span>
+            </div>
+            {loop.map((k) => (
+              <StaticRow key={k} k={k} t={qt[k]} pendingKey={pendingKey} nowDate={nowDate} />
+            ))}
+          </>
+        ) : null}
+
+        {rest.length ? (
+          <>
+            <div className="tghd">
+              <span>任务顺序</span>
+              <i />
+              <span className="tghint">按住拖动排序</span>
+            </div>
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext items={rest} strategy={verticalListSortingStrategy}>
+                {rest.map((k) => (
+                  <SortableRow key={k} k={k} t={qt[k]} pendingKey={pendingKey} nowDate={nowDate} />
+                ))}
+              </SortableContext>
+            </DndContext>
+          </>
+        ) : null}
       </div>
     </div>
   )
