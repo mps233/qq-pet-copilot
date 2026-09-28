@@ -1130,6 +1130,8 @@ def editable_snapshot() -> dict:
         'pk_helper': str(pk.get('helper_names') or ''),
         'pk_helper_fallback': bool(pk.get('helper_fallback', False)),
         'adventure_times': adv.get('times_per_day', 1),
+        # 冒险类型（2026-09 新增）：附近走走（约45秒，靠连跑刷次数）/ 诗和远方（约2小时）
+        'adventure_type': adv.get('type', '附近走走'),
         'care_energy': care.get('energy_threshold', 60),
         'care_clean': care.get('clean_threshold', 60),
         'care_method': care.get('method', '一键护理'),
@@ -1237,6 +1239,7 @@ def apply_settings(updates: dict) -> dict:
         'pk_helper': ('pk.helper_names', None),
         'pk_helper_fallback': ('pk.helper_fallback', 'bool'),
         'adventure_times': ('adventure.times_per_day', 'int'),
+        'adventure_type': ('adventure.type', None),
         'care_energy': ('care.energy_threshold', 'int'),
         'care_clean': ('care.clean_threshold', 'int'),
         'care_method': ('care.method', None),
@@ -4626,6 +4629,7 @@ function renderSettings(ed){
     ],'pk')+
     FG('冒险',[
     '<div class="frow"><span class="k">冒险次数/天</span><input type="number" id="numAdv" min="0" step="1" title="0=不冒险；主号策略设 999 ≈ 不限（疲劳后全冒险）" value="'+(ed.adventure_times??'')+'"></div>',
+    '<div class="frow"><span class="k" title="附近走走约 45 秒（靠连跑刷次数，配大次数用）/ 诗和远方约 2 小时（单次时间长）">冒险类型</span>'+sel('selAdvType', ['附近走走','诗和远方'], ed.adventure_type)+'</div>',
     ],'adventure')+
     FG('护理',[
     '<div class="frow"><span class="k" title="低于该值就喂食/洗澡（本项目的触发线）。官方「一键护理」的口径是「体力、清洁补至 100，心情同步提升」，点道具那档是补至 80">护理阈值（体力/清洁）</span><span class="two"><input type="number" id="numEnergy" min="0" max="100" value="'+(ed.care_energy??'')+'"><input type="number" id="numClean" min="0" max="100" value="'+(ed.care_clean??'')+'"></span></div>',
@@ -5044,6 +5048,7 @@ async function saveSettings(){
   // 收益档（efficiency_tier1/2_hours）不是设置项：只在卡片里当说明文字显示，
   // 不走表单提交（config.yaml 里仍可手改，引擎照读）
   num('#numVisit','visit_times'); num('#numPk','pk_times'); num('#numAdv','adventure_times');
+  selc('#selAdvType','adventure_type');
   txtc('#txtPkOnly','pk_only'); txtc('#txtPkSkip','pk_skip'); num('#numPkLv','pk_max_level'); txtc('#txtPkHelper','pk_helper');
   num('#numEnergy','care_energy'); num('#numClean','care_clean'); num('#numExchange','care_exchange'); num('#numGbInt','gift_bag_interval'); num('#numCareerInt','career_interval');
   txtc('#txtFCName','friend_care_name'); num('#numFCInt','friend_care_interval'); num('#numEmpInt','employed_interval');
