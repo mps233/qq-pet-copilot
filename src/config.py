@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -433,6 +434,26 @@ def find_adb(configured_path: str = "") -> str:
     )
 
 
+def _hire_friend_raw(raw: dict) -> dict:
+    """HireFriendConfig 的参数字典：把「优先雇佣」接进雇佣好友的目标列表。
+
+    work.hire_name（设置页「优先雇佣」）与 hire_friend.friend_name 语义一致 —— 都支持
+    宠物名/主人名部分匹配；而 friend_name 本身已支持逗号/顿号分隔的多个备选
+    （scenarios/hire_friend.py 的 run() 按序取第一个能找到的）。这里把 hire_name 排到
+    最前、其余项留作备选，于是"想雇谁"只需在设置页配一次「优先雇佣」，雇佣好友任务
+    自动跟随（实测踩过：优先雇佣配了喵帕斯～，雇佣好友却按 friend_name 去了柠檬..家，
+    而 friend_name 在仪表盘设置页没有入口，只能手改 config.yaml）。
+    """
+    hf = {k: v for k, v in (raw.get("hire_friend", {}) or {}).items()
+          if k in HireFriendConfig.__dataclass_fields__}
+    pref = str((raw.get("work", {}) or {}).get("hire_name") or "").strip()
+    if pref:
+        alts = [s.strip() for s in re.split(r'[，,、;；]',
+                                            str(hf.get("friend_name") or "")) if s.strip()]
+        hf["friend_name"] = "，".join([pref] + [a for a in alts if a != pref])
+    return hf
+
+
 def load_config(config_path: str | Path | None = None) -> Config:
     path = Path(config_path) if config_path else CONFIG_FILE
     if not path.is_file():
@@ -480,9 +501,7 @@ def load_config(config_path: str | Path | None = None) -> Config:
         pk=PkConfig(**raw.get("pk", {})),
         friend_care=FriendCareConfig(**raw.get("friend_care", {})),
         gift_bag=GiftBagConfig(**raw.get("gift_bag", {})),
-        hire_friend=HireFriendConfig(
-            **{k: v for k, v in (raw.get("hire_friend", {}) or {}).items()
-               if k in HireFriendConfig.__dataclass_fields__}),
+        hire_friend=HireFriendConfig(**_hire_friend_raw(raw)),
         employed=EmployedConfig(**raw.get("employed", {})),
         career=CareerConfig(**{k: v for k, v in (raw.get("career", {}) or {}).items()
                                if k in CareerConfig.__dataclass_fields__}),
