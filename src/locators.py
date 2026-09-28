@@ -78,6 +78,8 @@ def ocr_screen(screen: np.ndarray) -> list[tuple[str, int, int, float]]:
 # 进程内早已缓存的旧 bounds 掩盖了这个问题，直到调度器重启才暴露。
 # 现在头部两层仍用纯步进（解析快，且不会被页面下方其它 RecyclerView 抢中），
 # 只把中间层数放开为 // —— 实测新旧结构都能命中同一个卡片容器。
+# （上游同期把头部也放开成 '//RV//RV'；两种都能命中，这里保留头部步进版，
+#   因为头部步进能避开页面下方其它 RecyclerView 的抢中。）
 SELECT_BOX_XPATH = (
     '//androidx.recyclerview.widget.RecyclerView'
     '/android.widget.FrameLayout[1]/android.widget.FrameLayout[1]'
@@ -133,9 +135,8 @@ LOCATORS: dict[str, dict] = {
     # 容器 xpath 命中一次后 cache bounds，select_box_N 由它推导（免各自 dump）
     'select_box_container': {
         'cache': True,
-        # 锚定"外层 RecyclerView -> FL[1] -> FL[1] -> 内层 RecyclerView[1] -> FL[1]"
-        # 的卡片容器，不依赖 ckj 下会随 QQ 更新漂移的深层绝对路径（实测 2026-08-18
-        # 打工面板实际是 ckj/.../FrameLayout[3]/RecyclerView[7]/...，旧路径全链失效）。
+        # 锚定嵌套双层 RecyclerView 的内层卡片行容器（见 SELECT_BOX_XPATH 注释），
+        # 不依赖会随 QQ 更新漂移的深层绝对路径。
         'xpath': [SELECT_BOX_XPATH],
     },
     # 2:2:1 分割：左 2/5 中心=1/5 宽，中 2/5 中心=3/5 宽，右 1/5 中心=9/10 宽
@@ -144,8 +145,11 @@ LOCATORS: dict[str, dict] = {
     'select_box_3': {'from_bounds': 'select_box_container', 'split': (9, 10)},
 
     # ---- 学习 ----
+    # 出门地图入口：2026-09 起各建筑有专属 content-desc（study/work/adventure），
+    # 直接锚定；旧的 map_blank/FrameLayout[n] 序号路径随建筑增删漂移，仅作兜底
     'school': {
-        'xpath': ['//*[@content-desc="map_blank"]/android.widget.FrameLayout[2]/android.widget.FrameLayout[1]']
+        'xpath': ['//*[@content-desc="study"]',
+                  '//*[@content-desc="map_blank"]/android.widget.FrameLayout[2]/android.widget.FrameLayout[1]']
                ,'ocr': ['宠物学园']},
     'school_start': {
         'xpath': ['//*[@content-desc="去上课"]']
@@ -163,7 +167,8 @@ LOCATORS: dict[str, dict] = {
 
     # ---- 打工 ----
     'town': {
-        'xpath': ['//*[@content-desc="map_blank"]/android.widget.FrameLayout[4]/android.widget.FrameLayout[1]']
+        'xpath': ['//*[@content-desc="work"]',
+                  '//*[@content-desc="map_blank"]/android.widget.FrameLayout[4]/android.widget.FrameLayout[1]']
                ,'ocr': ['职业小镇']},
     'work_start': {'xpath': ['//*[@content-desc="去打工"]']},
     # work_start 被"去照顾一下"弹窗挡住时：点它进护理，一键护理+back 后回工作面板（work.py _recover_work_start）
@@ -204,12 +209,15 @@ LOCATORS: dict[str, dict] = {
     # ---- 冒险 ----
     'adventure': {
         'cache': True,
-        # ⚠️ 官方 9.3.65 改版后这条深层 xpath 已失效（不再命中），现在真正生效的是
-        # 下面的整屏 OCR「冒险」——地图页下方那颗白胶囊标签，实测 score 1.00、
-        # 点它就是打开冒险面板（2026-09-28 在真机逐点验证过：(474,1782) 点开面板）。
-        # xpath 保留只为兼容旧版结构；新版取不到 uiautomator idle state（dump 报
-        # "could not get idle state"），没法重建路径，所以不硬写新路径。
-        'xpath': ['//*[@content-desc="map_blank"]/android.widget.FrameLayout[3]/android.widget.FrameLayout[1]']
+        # 出门地图的冒险建筑入口：2026-09 起各建筑有专属 content-desc（`adventure`），
+        # 直接锚定最稳（上游真机验证命中）。下面那条 map_blank 深层路径是旧版结构，
+        # 官方 9.3.65 改版后已失效（不再命中），仅留作旧版兜底。
+        # 已失效时的实际表现：走下面的整屏 OCR「冒险」——地图页下方那颗白胶囊标签，
+        # 2026-09-28 在真机逐点验证过 (474,1782) 点它就是打开冒险面板。
+        # 新版取不到 uiautomator idle state（页面一直在动），重建不了控件路径，
+        # 所以不另写硬编码路径；有了 content-desc 这条也不再需要。
+        'xpath': ['//*[@content-desc="adventure"]',
+                  '//*[@content-desc="map_blank"]/android.widget.FrameLayout[3]/android.widget.FrameLayout[1]']
                ,'ocr': ['冒险']},
     'adventure_start': {
         # 不能加 cache：连跑衔接里要靠它判断是否真的进了冒险准备页，
@@ -217,12 +225,16 @@ LOCATORS: dict[str, dict] = {
         # 随后在出门页面傻点"开始"、adventure_in 永远不出现）
         # **官方 9.3.65 改版**（2026-09-28 实发）：冒险面板底部按钮文案「开始」→「出发」，
         # 旧 xpath 永远命中不到 → 导航重试 10 次失败 → 回主页面重试 → 最后走恢复链路，
-        # 每轮都白跑一趟。保留「开始」兼容旧版；再挂 OCR「出发」兜底
-        # （万一按钮是引擎自绘、没有 content-desc）。
-        # 依据：新面板截图 runs/error_retry2_20260928_180542.png，
-        # 且「出发」在官方包 ai_pet_play_2850（新版）里命中、「附近走走/诗和远方」是服务端下发的。
+        # 每轮都白跑一趟。保留「开始」兼容旧版；OCR 也把两个都挂上兜底
+        # （2026-09 更新同时新增了冒险类型卡：附近走走 / 诗和远方）。
+        # 依据：新面板截图 runs/error_retry2_20260928_180542.png；
+        # 且「出发」在官方包 ai_pet_play_2850 命中、「附近走走/诗和远方」是服务端下发的。
         'xpath': ['//*[@content-desc="出发"]', '//*[@content-desc="开始"]'],
-        'ocr': ['出发']},
+        'ocr': ['出发', '开始']},
+    # 冒险类型卡（2026-09 新增）：canvas 自绘，控件树不可见，只能 OCR 卡名定位；
+    # 选中卡有蓝色边框，选中态判断见 adventure.py 的 _card_selected
+    'adventure_type_near': {'ocr': ['附近走走']},
+    'adventure_type_far': {'ocr': ['诗和远方']},
     'adventure_in': {'ocr': ['正在冒险', '冒险中']},
     'adventure_end': {'xpath': ['//*[@content-desc="分享"]']},
     # 冒险详情框（"天色不对"检测）不再用 xpath 裁剪：游戏更新会改控件层级导致
