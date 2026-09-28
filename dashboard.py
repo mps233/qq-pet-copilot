@@ -682,6 +682,9 @@ def adventure_data(sel_date: str | None = None) -> dict:
         ts = str(r.get('ts') or '')
         c = int(r.get('coins') or 0)
         recent.append([i, ts[5:16] or ts[:5], c, ' '.join(gs), 0])
+    # 状态曲线上的阈值参考线用配置里的真实值（以前把 60 写死在说明文案里，
+    # 用户改了 care.energy_threshold 之后说明就跟实际不符）
+    _care_thr = editable_snapshot()
     return {
         'ok': True, 'n': n,
         'net': net, 'avg': round(net / n, 2) if n else 0,
@@ -692,6 +695,8 @@ def adventure_data(sel_date: str | None = None) -> dict:
         'date': sel, 'dates': dates, 'date_n': date_n,
         'today': today, 'yesterday': yesterday, 'all_n': len(rows),
         'updated': str(view[-1].get('ts') or '')[11:16] if view else '',
+        'care_energy': _care_thr.get('care_energy', 60),
+        'care_clean': _care_thr.get('care_clean', 60),
     }
 
 
@@ -707,6 +712,7 @@ def _reward_sum(items) -> dict:
     """
     out = {'sessions': 0, 'credits': 0, 'coins': 0, 'tired': 0,
            'credits_n': 0, 'coins_n': 0, 'workpoints': 0, 'workpoints_n': 0,
+           'ad_coins': 0, 'ad_coins_n': 0,
            'attrs': {k: 0 for k in _ATTR_KEYS}}
     for r in items:
         out['sessions'] += 1
@@ -719,6 +725,10 @@ def _reward_sum(items) -> dict:
         if r.get('workpoints') is not None:
             out['workpoints'] += int(r['workpoints'])
             out['workpoints_n'] += 1
+        # 广告加成金币（结算页「看视频获得 N 金币」）：独立一笔，不计进 coins
+        if r.get('ad_coins') is not None:
+            out['ad_coins'] += int(r['ad_coins'])
+            out['ad_coins_n'] += 1
         if r.get('tired'):
             out['tired'] += 1
         for k, v in (r.get('attrs') or {}).items():
@@ -785,12 +795,16 @@ def rewards_data(sel_date: str | None = None) -> dict:
                                 if r.get('kind') == 'school' and r['_day'] == today])
     today_work = _reward_sum([r for r in rows
                               if r.get('kind') == 'work' and r['_day'] == today])
+    # 宠物名 / 主人名（结算页头部，src/scenario.parse_session_reward 解析）：
+    # 取当前统计范围内最近一条有值的，用来标明这份数据属于哪只宠物 / 哪个号。
+    pet = next((str(r.get('pet')) for r in reversed(view) if r.get('pet')), '')
+    owner = next((str(r.get('owner')) for r in reversed(view) if r.get('owner')), '')
     return {
         'ok': True, 'date': sel, 'dates': dates, 'date_n': date_n,
         'today': today, 'yesterday': yesterday, 'all_n': len(rows),
         'n': len(view), 'school': school, 'work': work,
         'today_school': today_school, 'today_work': today_work,
-        'recent': recent,
+        'recent': recent, 'pet': pet, 'owner': owner,
         'updated': str(view[-1].get('ts') or '')[11:16] if view else '',
     }
 
@@ -2947,7 +2961,7 @@ main > section[data-page]:not([data-page="main"]) > .plannote{
     <svg class="advchart" id="svgCum" viewBox="0 0 340 84"></svg>
     <div class="advcap">单次收益散点（橙虚线=平均）</div>
     <svg class="advchart" id="svgPts" viewBox="0 0 340 84"></svg>
-    <div class="advcap" id="capStats"><span style="color:#16a34a">体力</span> / <span style="color:#0891b2">清洁</span> / <span style="color:#d97706">心情</span>（红虚线=阈值60，红竖线=护理）</div>
+    <div class="advcap" id="capStats"><span style="color:#16a34a">体力</span> / <span style="color:#0891b2">清洁</span> / <span style="color:#d97706">心情</span>（红虚线=阈值<span id="capThr">--</span>，红竖线=护理）</div>
     <svg class="advchart" id="svgStats" viewBox="0 0 340 84"></svg>
     <div class="advcap">逐次明细（新→旧） <button class="minibtn on" id="btnAdvAll" style="float:right;margin-top:-2px">全部</button></div>
     <div class="advlist" id="advList"></div>
@@ -3934,6 +3948,12 @@ function renderAdventure(d){
   const hasStats=!!((d.stats||[]).length);
   const sv=$('#svgStats'); if(sv) sv.style.display=hasStats?'':'none';
   const cp=$('#capStats'); if(cp) cp.style.display=hasStats?'':'none';
+  // 阈值文字用后端给的配置值（体力/清洁可能不同，两个都列）
+  const thr=$('#capThr');
+  if(thr){
+    const e=d.care_energy, c=d.care_clean;
+    thr.textContent=(e==null?'--':String(e))+(c!=null&&c!==e?('/'+c):'');
+  }
   drawAdv();
   renderAdvList(d);
 }
@@ -4214,6 +4234,8 @@ function renderRewards(d){
   const wc=(w.coins_n||0)>0?('金币 +'+(w.coins||0)+miss(w.coins_n,w.sessions))
                            :(w.sessions?'金币 —'+miss(0,w.sessions):'—');
   const wpc=(w.workpoints_n||0)>0?(' · 工分 +'+(w.workpoints||0)):'';
+  // 广告加成（结算页「看视频获得 N 金币」）：单独一笔，不计进上面的金币
+  const wad=(w.ad_coins_n||0)>0?(' · 看视频 +'+(w.ad_coins||0)):'';
   const sc=(s.credits_n||0)>0?(s.credits||0):null;
   let html='';
   html+=line(RW_ICON.school,'学习',(s.sessions||0)+' 节',
@@ -4221,7 +4243,7 @@ function renderRewards(d){
               :('学分 +'+sc+miss(s.credits_n,s.sessions)))
     +(rwAttrs(s.attrs)?(' · '+rwAttrs(s.attrs)):''),
     s.tired?'tired':'');
-  html+=line(RW_ICON.work,'打工',(w.sessions||0)+' 次', wc+wpc, w.tired?'tired':'');
+  html+=line(RW_ICON.work,'打工',(w.sessions||0)+' 次', wc+wpc+wad, w.tired?'tired':'');
   const tired=(s.tired||0)+(w.tired||0);
   if(tired){
     // 疲惫单独一行提示（"收益减少"是结算页原文，鼠标悬停看口径说明）。
@@ -4255,8 +4277,10 @@ function renderRewards(d){
     const scope=d.date==='all'?'全部历史':(d.date===d.today?'今天':d.date.slice(5).replace('-','/'));
     const tn='今日 学习 '+(d.today_school?.sessions||0)+' 节 / 打工 '
       +(d.today_work?.sessions||0)+' 次';
-    meta.textContent=scope+' · 共 '+(d.n||0)+' 次 · '+(d.date===d.today?'':tn+' · ')
-      +'更新 '+(d.updated||'');
+    // 宠物名/主人名（结算页头部解析出来的）放最前：换宠物或换号时一眼看出这份数据是谁的
+    const who=d.pet?(d.pet+(d.owner?(' · '+d.owner):'')):'';
+    meta.textContent=(who?who+' · ':'')+scope+' · 共 '+(d.n||0)+' 次 · '
+      +(d.date===d.today?'':tn+' · ')+'更新 '+(d.updated||'');
   }
 }
 document.addEventListener('change',function(e){
@@ -4482,8 +4506,8 @@ function renderSettings(ed){
     '<div class="frow"><span class="k">冒险次数/天</span><input type="number" id="numAdv" min="0" step="1" title="0=不冒险；主号策略设 999 ≈ 不限（疲劳后全冒险）" value="'+(ed.adventure_times??'')+'"></div>',
     ],'adventure')+
     FG('护理',[
-    '<div class="frow"><span class="k">护理阈值（体力/清洁）</span><span class="two"><input type="number" id="numEnergy" min="0" max="100" value="'+(ed.care_energy??'')+'"><input type="number" id="numClean" min="0" max="100" value="'+(ed.care_clean??'')+'"></span></div>',
-    '<div class="frow"><span class="k">护理方式</span>'+sel('selCare', ['一键护理','ocr检测'], ed.care_method)+'</div>',
+    '<div class="frow"><span class="k" title="低于该值就喂食/洗澡（本项目的触发线）。官方「一键护理」的口径是「体力、清洁补至 100，心情同步提升」，点道具那档是补至 80">护理阈值（体力/清洁）</span><span class="two"><input type="number" id="numEnergy" min="0" max="100" value="'+(ed.care_energy??'')+'"><input type="number" id="numClean" min="0" max="100" value="'+(ed.care_clean??'')+'"></span></div>',
+    '<div class="frow"><span class="k" title="一键护理=点主页的官方按钮（官方文案：体力、清洁补至 100，心情同步提升；点道具档补至 80），点完清空状态缓存；ocr检测=读状态面板，按上面的阈值手动喂食/洗澡">护理方式</span>'+sel('selCare', ['一键护理','ocr检测'], ed.care_method)+'</div>',
     '<div class="frow"><span class="k">补货数量（个）</span><input type="number" id="numExchange" min="1" max="99" step="1" title="饼干/香皂不足时一次金币买多少个" value="'+(ed.care_exchange??'')+'"></div>',
     '<div class="frow"><span class="k">检查间隔（秒）</span><input type="number" id="numCareInt" min="10" step="10" title="每隔这么久检查一次体力/清洁，不足则喂食/洗澡" value="'+(ed.care_interval??60)+'"></div>',
     ],'care')+
