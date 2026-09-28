@@ -467,7 +467,9 @@ class CareScenario(DeviceScenario):
         有就点并结束照顾流程；不读状态、不手动喂食/洗澡。
         按钮只在体力/清洁不足时出现：没有按钮视为状态正常，跳过护理。
         点击后若有"支付并护理"确认弹窗则一并点掉。
-        点完后体力/清洁/心情/饼干/香皂的缓存值不再可信，从状态缓存清空（GUI 显示回 -）。
+        点完后体力/清洁/心情/饼干/香皂的缓存值不再可信，从状态缓存清空（GUI 显示回 -；
+        随后 check_and_care 一键分支会调 refresh_status_cache() 把体力/清洁/心情补读回来，
+        供仪表盘资料卡的三层状态环显示）。
         返回是否点击了。"""
         hit = self.see('one_click_care')
         if not hit:
@@ -497,12 +499,48 @@ class CareScenario(DeviceScenario):
         self.click(hit[0], hit[1])
         time.sleep(CLICK_INTERVAL)
 
+    def refresh_status_cache(self) -> None:
+        """展开状态面板读一次体力/清洁/心情写缓存，再收起（失败只记日志，不影响护理）。
+
+        为什么要单独有这一步：仪表盘资料卡右侧的三层状态环（外=体力/中=清洁/内=心情）
+        和点环展开的面板读的都是 runs/status_cache.json，而"一键护理"这条路径
+        （check_and_care 的一键分支）本身不读状态、点完还会把这三个值清掉
+        （见 one_click_care）——不补读的话界面上三个环永远是灰的、面板永远显示 --。
+
+        面板可能已经是展开的（上次异常留下的）：先白嫖一屏 OCR，读得到体力就直接用，
+        免得先点一下反而把展开的面板收起来。只有自己点开的才负责收起。
+        """
+        opened_here = False
+        try:
+            status = self.read_status()
+            if status.get('体力') is None:
+                self.toggle_status()
+                opened_here = True
+                status = self.read_status_ready()
+            log(f'状态缓存刷新: 体力={status.get("体力")} '
+                f'清洁={status.get("清洁")} 心情={status.get("心情")}')
+            update_status(None,
+                          pet_name=status.get('宠物名称'),
+                          energy=status.get('体力'),
+                          clean=status.get('清洁'),
+                          mood=status.get('心情'))
+        except Exception as e:   # 展示用数据，绝不能影响护理流程
+            log(f'状态缓存刷新失败（不影响护理）: {e}')
+        finally:
+            if opened_here:
+                try:
+                    self.toggle_status()   # 收起，别把展开的面板留在主页面上
+                except Exception as e:
+                    log(f'收起状态面板失败（不影响护理）: {e}')
+
     def check_and_care(self) -> None:
         """检查一次体力/清洁，低于阈值则喂食/洗澡，最后收起状态面板。
-        护理方式为"一键护理"时不读状态：主页面有一键护理按钮就点，然后直接结束。"""
+        护理方式为"一键护理"时不读状态：主页面有一键护理按钮就点；点完补读一次
+        状态写缓存（只为了仪表盘的状态环/面板有数，不参与护理判断）。"""
         if self.method == '一键护理':
             self.ensure_main_page()
             self.one_click_care()
+            self.refresh_status_cache()
             return
         source = self.ensure_main_page()
         self.toggle_status(source)

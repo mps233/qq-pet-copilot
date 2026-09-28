@@ -39,6 +39,26 @@ except Exception as _stream_err:                            # noqa: BLE001
     print(f'[dashboard] 实时流模块不可用（/stream 与 /api/stream 将 503）：{_stream_err}',
           flush=True)
 RUNS = BASE / 'runs'
+RUNNER_PID = RUNS / 'runner.pid'      # 调度器自己写的单实例登记（见 src/instance.py）
+
+sys.path.insert(0, str(BASE))          # 让 `import src.instance` 在源码运行/打包都成立
+from src import instance  # noqa: E402  （判活工具：pidfile + os.kill(pid,0)，不依赖 ps）
+
+try:                                   # 队列状态的"已停止"标记（字段格式见 src/queue_status.py）
+    from src.queue_status import mark_stopped as mark_queue_stopped  # noqa: E402
+except Exception as _qs_err:           # 缺 ruamel/yaml 等极端环境：退化为本地写同一份格式
+    print(f'[dashboard] src.queue_status 不可用（停止时改本地写）：{_qs_err}', flush=True)
+
+    def mark_queue_stopped() -> None:
+        try:
+            (RUNS / 'queue_status.json').write_text(json.dumps({
+                'current': '', 'pending': '', 'next': '', 'next_at': '', 'next_ts': 0,
+                'ready': 0, 'waiting': 0, 'tasks': {}, 'stopped': True, 'pid': None,
+                'updated': datetime.now().strftime('%H:%M:%S')}, ensure_ascii=False),
+                encoding='utf-8')
+        except OSError:
+            pass
+
 LOGS = RUNS / 'logs'
 ADV_LIVE_FILE = RUNS / 'adventure_live.jsonl'   # 冒险统一记录（实验 300 把 + 日常实时）
 DEFAULT_PORT = 8787
@@ -142,37 +162,33 @@ def audit(msg: str) -> None:
 
 
 def scheduler_info() -> dict:
-    # 走 _runner_pids 的严格复核——裸 pgrep 会误配带 --test 参数的短暂进程，
-    # 曾导致 UI 误显示"运行中 PID xxxxx"（踩过坑），此函数已统一改走复核路径
     pids = _runner_pids()
     uptime = ''
     if pids:
-        try:
-            uptime = subprocess.run(['ps', '-o', 'etime=', '-p', str(pids[0])],
-                                    capture_output=True, text=True, timeout=5).stdout.strip()
-        except Exception:
-            pass
+        info = instance.read_pidfile(RUNNER_PID)
+        if info and info['pid'] == pids[0] and info.get('started'):
+            secs = max(0, int(time.time() - float(info['started'])))
+            uptime = f'{secs // 3600:02d}:{secs % 3600 // 60:02d}:{secs % 60:02d}'
+        else:
+            try:      # 没有 pidfile 的老进程：退回 ps（ps 不可用就算了，不显示运行时长）
+                uptime = subprocess.run(['ps', '-o', 'etime=', '-p', str(pids[0])],
+                                        capture_output=True, text=True, timeout=5).stdout.strip()
+            except Exception:
+                pass
     return {'alive': bool(pids), 'pid': pids[0] if pids else None, 'uptime': uptime}
 
 
 def _runner_pids() -> list[int]:
-    """调度器进程 PID 列表：pgrep 匹配 + 命令行复核（防 grep/pgrep 自身误配）。"""
-    try:
-        out = subprocess.run(['pgrep', '-f', 'scenarios/runner.py'],
-                             capture_output=True, text=True, timeout=5).stdout
-        pids = [int(x) for x in out.split() if x.strip().isdigit()]
-    except Exception:
-        return []
-    alive = []
-    for pid in pids:
-        try:
-            cmd = subprocess.run(['ps', '-p', str(pid), '-o', 'command='],
-                                 capture_output=True, text=True, timeout=5).stdout
-        except Exception:
-            cmd = ''
-        if 'runner.py' in cmd and 'python' in cmd.lower() and '--test' not in cmd:
-            alive.append(pid)
-    return alive
+    """调度器进程 PID 列表 —— **判活只信内核，不调 ps 读命令行**。
+
+    踩过的坑（2026-09-28）：原来用 `pgrep -f` 拿 pid、再 `ps -p <pid> -o command=` 复核，
+    可一旦 `ps` 不可用（受限沙箱/权限被拒），复核拿到的命令行是空串 → 所有 pid 被过滤掉 →
+    `alive` 恒为 False：① 「已在运行不重复启动」的守卫失效，点一次「启动」就多起一个调度器
+    （实测一口气 3 个，同时操作同一部手机）；② 「停止」也不认账（返回"本来就没有在运行"）。
+    现在统一走 src/instance.find_running：pidfile（调度器自己写的）+ 内核判活，
+    再补一遍 pgrep 兜底（覆盖旧版本起的进程，命令行做严格校验，防 shell 误配）。
+    """
+    return [r['pid'] for r in instance.find_running(RUNNER_PID)]
 
 
 def scheduler_start() -> dict:
@@ -252,6 +268,7 @@ def scheduler_stop() -> dict:
         pass
     pids = _runner_pids()
     if not pids:
+        mark_queue_stopped()   # 顺手把可能残留的"进行中"状态标成已停止
         return {'ok': True, 'msg': '调度器本来就没有在运行', 'scheduler': scheduler_info()}
     for pid in pids:
         try:
@@ -286,6 +303,9 @@ def scheduler_stop() -> dict:
           f"{'（含强制）' if forced else ''}")
     if left:
         return {'ok': False, 'msg': f'仍有进程未退出：{left}', 'scheduler': scheduler_info()}
+    # 已停：队列状态标"已停止"，否则界面（本页/手机端）会继续引用上一轮的
+    # "上课（进行中）"、日志里那条旧收尾时间也还在
+    mark_queue_stopped()
     return {'ok': True,
             'msg': f"已停止（PID {'、'.join(map(str, pids))}）" + ('，有进程被强制结束' if forced else ''),
             'scheduler': scheduler_info()}
@@ -326,6 +346,25 @@ def tail_lines(path, n: int = 250) -> list[str]:
     return lines[-n:]
 
 
+#: 调度器"本次启动"的日志标记：`scenarios/runner.py` 的 run_scheduler() 每次启动都会
+#: 先打一条 `调度引擎: task_queue|legacy`（在设备连接/启动检查之前），全项目只此一处。
+#: **改动 runner 的这行日志时必须同步这里**（tools/test_state_freshness.py 有守卫）。
+RUN_START_LOG_RE = re.compile(r'调度引擎:\s*(?:task_queue|legacy)')
+
+
+def lines_since_runner_start(lines: list[str]) -> list[str]:
+    """只保留"最近一次调度器启动之后"的日志行（找不到启动标记就原样返回）。
+
+    重启会丢掉调度器内存里的 pending（"正在上课/打工"的登记），上一轮日志里那条
+    "进行中，预计…收尾"就作废了——不截断的话界面会继续显示"上课中 / 剩余 xx 分钟"
+    （用户实报："宠物去上课了，我手动召回，停掉调度器再启动，显示还是在上课"）。
+    """
+    for idx in range(len(lines) - 1, -1, -1):
+        if RUN_START_LOG_RE.search(lines[idx]):
+            return lines[idx:]
+    return lines
+
+
 def work_eta(lines: list[str]):
     """从日志里找最后一次"进行中"登记，算出剩余秒数 + 场景名（kind）。
 
@@ -335,9 +374,12 @@ def work_eta(lines: list[str]):
         （出门预检/被雇佣召回等路径）
     早期只匹配 ①，导致手动切到打工后界面仍停在更早那条"冒险: 进行中"上——
     而那条的结束时间早过了，于是显示"冒险中 / 收尾中"（用户实报的 bug）。
+
+    **只看本次调度器启动之后的登记**（见 lines_since_runner_start）：重启后上一轮的
+    登记已经作废，继续展示会让用户以为宠物还在上课/打工。
     """
     m = None
-    for ln in lines[-400:]:
+    for ln in lines_since_runner_start(lines)[-400:]:
         mm = re.search(r'(?:([^\[\]:：]{1,8})[:：]\s*进行中|检测到正在([^，,]{1,10}))'
                        r'，预计 (\d+) 秒后结束'
                        r'（(\d{2}):(\d{2}):(\d{2}) 收尾）', ln)
@@ -503,14 +545,17 @@ def config_summary() -> dict:
         strategy = '只打工'
     else:
         strategy = f'学习 {sq}h + 打工 {wq}h'
+    stop_h = stop_total_hours(sched)   # 合计停止点（学习+打工合计满则两项一起停）
 
     rows = [
         ['调度策略', strategy],
         ['调度引擎', str(runner.get('engine', 'task_queue'))],
         ['打工', f"{work.get('location', '')} · {work.get('duration', '')} · {n_per_day(work.get('times_per_day'))}"],
         ['金币阈值', f"{sched.get('coin_threshold', '-')}（低于优先打工）"],
-        ['时长上限', f"{sched.get('daily_hour_limit', '-')} 小时/天"],
-        ['打工停止', f"{sched.get('work_stop_hours', '-')} 小时/天（避 10% 效率档）"],
+        # 合计停止点：学习+打工合计满即两项一起停（不再分"停学习/停打工"两个数，
+        # 见设置页「合计停止点与收益档」卡片与 stop_total_hours()）
+        ['合计停止点', (f"{stop_h} 小时/天（学习+打工合计满则全停，转冒险）"
+                    if stop_h else '不限')],
         ['福袋', f"{'启用' if (cfg.get('gift_bag') or {}).get('enabled', True) else '未启用'}"
                  f" · 每 {(cfg.get('gift_bag') or {}).get('interval_seconds', '-')} 秒扫描"],
         ['踩踩', f"{visit.get('times_per_day', '-')} 次/天 @ {visit.get('start_time', '')}"],
@@ -646,6 +691,106 @@ def adventure_data(sel_date: str | None = None) -> dict:
         'today_n': tn, 'today_net': tnet,
         'date': sel, 'dates': dates, 'date_n': date_n,
         'today': today, 'yesterday': yesterday, 'all_n': len(rows),
+        'updated': str(view[-1].get('ts') or '')[11:16] if view else '',
+    }
+
+
+SESSION_REWARD_FILE = RUNS / 'session_rewards.jsonl'   # 学习/打工按次结算收益
+_ATTR_KEYS = ('力量', '智力', '魅力')
+
+
+def _reward_sum(items) -> dict:
+    """把一批结算记录汇总成 次数/学分/属性/金币/疲惫场次。
+
+    credits_n / coins_n = **解析出数值**的条数：打工结算页字段还没实测，
+    金币可能一条都解析不出来，前端要靠它区分"没收益"和"没解析出来"。
+    """
+    out = {'sessions': 0, 'credits': 0, 'coins': 0, 'tired': 0,
+           'credits_n': 0, 'coins_n': 0, 'workpoints': 0, 'workpoints_n': 0,
+           'attrs': {k: 0 for k in _ATTR_KEYS}}
+    for r in items:
+        out['sessions'] += 1
+        if r.get('credits') is not None:
+            out['credits'] += int(r['credits'])
+            out['credits_n'] += 1
+        if r.get('coins') is not None:
+            out['coins'] += int(r['coins'])
+            out['coins_n'] += 1
+        if r.get('workpoints') is not None:
+            out['workpoints'] += int(r['workpoints'])
+            out['workpoints_n'] += 1
+        if r.get('tired'):
+            out['tired'] += 1
+        for k, v in (r.get('attrs') or {}).items():
+            if k in out['attrs']:
+                out['attrs'][k] += int(v or 0)
+    return out
+
+
+def rewards_data(sel_date: str | None = None) -> dict:
+    """学习/打工每次结算的收益（数据源 runs/session_rewards.jsonl，由
+    src/scenario.record_session_reward 在结算页记录）。
+
+    sel_date: 'YYYY-MM-DD' 看指定某天 / 'all' 全部历史 / 空或 'today' = 当天
+    （当天还没有记录时回落到最近有记录的一天）。归属哪天优先取结算页自带的
+    日期时间（= 这次活动的开始时间，跨零点结算归前一天），识别不到再用 ts。
+    """
+    rows = []
+    try:
+        for _line in SESSION_REWARD_FILE.read_text('utf-8').splitlines()[-3000:]:
+            try:
+                rows.append(json.loads(_line))
+            except Exception:
+                pass
+    except Exception:
+        pass
+    if not rows:
+        return {'ok': False}
+    rows.sort(key=lambda d: str(d.get('ts') or ''))
+    today = datetime.now().strftime('%Y-%m-%d')
+    yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+    for r in rows:
+        day = ''
+        m = re.search(r'(\d{4})\s*/\s*(\d{1,2})\s*/\s*(\d{1,2})', str(r.get('sig') or ''))
+        if m:
+            day = f'{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}'
+        r['_day'] = day or str(r.get('ts') or '')[:10] or today
+    date_n: dict = {}
+    for r in rows:
+        date_n[r['_day']] = date_n.get(r['_day'], 0) + 1
+    dates = sorted(date_n, reverse=True)
+    if not sel_date or sel_date == 'today':
+        sel = today if today in date_n else (dates[0] if dates else today)
+    elif sel_date == 'all':
+        sel = 'all'
+    elif sel_date in date_n:
+        sel = sel_date
+    else:
+        sel = today
+    view = rows if sel == 'all' else [r for r in rows if r['_day'] == sel]
+    recent = []
+    for r in view[-300:]:
+        attrs = ' '.join(f'{k}+{v}' for k, v in (r.get('attrs') or {}).items() if v)
+        # 标题：学习=课程 / 打工=岗位名（结算页"工资明细"里那行"武馆教学助理(10分钟)"），
+        # 都没有才回落配置的打工地点
+        recent.append([str(r.get('ts') or '')[5:16],
+                       r.get('kind') or '',
+                       r.get('course') or r.get('job') or r.get('location') or '',
+                       r.get('credits'), attrs, r.get('coins'),
+                       1 if r.get('tired') else 0,
+                       r.get('workpoints'), r.get('pay_detail') or ''])
+    school = _reward_sum([r for r in view if r.get('kind') == 'school'])
+    work = _reward_sum([r for r in view if r.get('kind') == 'work'])
+    today_school = _reward_sum([r for r in rows
+                                if r.get('kind') == 'school' and r['_day'] == today])
+    today_work = _reward_sum([r for r in rows
+                              if r.get('kind') == 'work' and r['_day'] == today])
+    return {
+        'ok': True, 'date': sel, 'dates': dates, 'date_n': date_n,
+        'today': today, 'yesterday': yesterday, 'all_n': len(rows),
+        'n': len(view), 'school': school, 'work': work,
+        'today_school': today_school, 'today_work': today_work,
+        'recent': recent,
         'updated': str(view[-1].get('ts') or '')[11:16] if view else '',
     }
 
@@ -882,6 +1027,37 @@ def capture_phone(width: int = 390, min_interval: float = 5.0):
     return data, at, False
 
 
+def _int_or_0(v) -> int:
+    """配置里的数字字段转 int（None / 空串 / 非数字 → 0）。"""
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
+def stop_total_hours(sched: dict) -> int:
+    """设置页「合计满则停止」的当前值 = 学习与打工**一起**停下的那个合计小时数。
+
+    底层仍是三个键（scenarios/runner.py 里各有一处判定，不区分引擎）：
+    `daily_hour_limit`（合计满则停学习）/ `work_stop_hours`（满则停打工）/
+    `efficiency_tier2_hours`（满则两项全停）。学习在 min(全停, 停学习) 停、
+    打工在 min(全停, 停打工) 停，所以「都停」的时刻 = 两者里更晚的那个；
+    任一项不限（对应键 0）就永远等不到"都停"，返回 0（不限）。
+
+    设置页只暴露这一个数（保存时三键写同一个值，见 apply_settings），
+    这个函数负责把老配置（三项不一致，例如"学满 8h 后继续打 25% 档到 12h"）
+    折算成一个能看的数字；前端另有三项不一致的提示。
+    """
+    def _stop(*vals):
+        pos = [v for v in (_int_or_0(x) for x in vals) if v > 0]
+        return min(pos) if pos else None
+    study = _stop(sched.get('efficiency_tier2_hours'), sched.get('daily_hour_limit'))
+    work = _stop(sched.get('efficiency_tier2_hours'), sched.get('work_stop_hours'))
+    if study is None or work is None:
+        return 0
+    return max(study, work)
+
+
 def editable_snapshot() -> dict:
     """设置卡可编辑字段的当前值（供表单回填）。"""
     try:
@@ -906,6 +1082,7 @@ def editable_snapshot() -> dict:
     school = cfg.get('school') or {}
     career = cfg.get('career') or {}
     notify = cfg.get('notify') or {}
+    hf = cfg.get('hire_friend') or {}
     return {
         # 连接层：ADB 路径与设备序列号（设置页「连接手机」卡片；改完需重启调度器）
         'adb_path': str((cfg.get('adb') or {}).get('path') or ''),
@@ -920,6 +1097,10 @@ def editable_snapshot() -> dict:
         'hire_name': str(work.get('hire_name') or ''),
         'hire_wait': bool(work.get('hire_wait', False)),
         'coin_threshold': sched.get('coin_threshold', 2000),
+        # 设置页「合计满则停止」= 唯一入口（stop_total_hours 由下面三个键折算，
+        # 保存时三键一起写同一个值）。三个原键仍回填给前端：用于"三项不一致"
+        # 提示与主页胶囊的分母，不再单独出现在表单里。
+        'stop_total_hours': stop_total_hours(sched),
         'daily_hour_limit': sched.get('daily_hour_limit', 8),
         'work_stop_hours': sched.get('work_stop_hours', 12),
         'study_quota_hours': sched.get('study_quota_hours', 8),
@@ -941,12 +1122,21 @@ def editable_snapshot() -> dict:
         'care_exchange': care.get('exchange_count', 20),
         'friend_care_enabled': bool(fc.get('enabled', False)),
         'friend_care_name': str(fc.get('friend_name') or ''),
+        # 时间段（HH:MM-HH:MM；起止相同 = 跨零点 = 全天）
+        'friend_care_range': str(fc.get('time_range') or ''),
         'friend_care_interval': fc.get('interval_seconds', 120),
         'friend_care_method': str(fc.get('method') or 'ocr检测'),
+        'care_interval': care.get('interval_seconds', 60),
+        'hire_friend_enabled': bool(hf.get('enabled', False)),
+        # 雇佣好友的"备选目标"：实际优先用 work.hire_name（config 的 _hire_friend_raw 会把它
+        # 排到 friend_name 列表最前），这里单独给一份供任务列表显示"雇的是谁"做兜底
+        'hire_friend_name': str(hf.get('friend_name') or ''),
+        'hire_friend_times': hf.get('times_per_day', 8),
         'employed_enabled': bool(emp.get('enabled', False)),
         'employed_action': str(emp.get('action') or '等到25/75（小于45min）'),
         'employed_interval': emp.get('interval_seconds', 60),
         'gift_bag_enabled': bool((cfg.get('gift_bag') or {}).get('enabled', True)),
+        'gift_bag_range': str((cfg.get('gift_bag') or {}).get('time_range') or ''),
         'gift_bag_interval': (cfg.get('gift_bag') or {}).get('interval_seconds', 1800),
         'career_watch': bool(career.get('watch', True)),
         'career_stop_study': bool(career.get('stop_study_on_unlock', True)),
@@ -980,6 +1170,13 @@ def apply_settings(updates: dict) -> dict:
         'gift_bag_enabled': ('tasks.gift_bag.enabled', 'gift_bag.enabled'),
         'hire_friend_enabled': ('tasks.hire_friend.enabled', 'hire_friend.enabled'),
     }
+    # 合计停止点（设置页唯一入口）：学习+打工合计满 N 小时 → 两项一起停（转冒险）。
+    # runner 里三个键各有一处判定——daily_hour_limit 停学习、work_stop_hours 停打工、
+    # efficiency_tier2_hours 两项全停；设置页只给一个数，所以**三键写同一个值**
+    #（只写其中一个会出现"设了 10 小时却 12 小时才停"的错觉）。三项的分开玩法
+    # （例如"学满 8h 后继续吃 25% 档打工到 12h"）仍可手改 config.yaml，引擎照旧认。
+    stop_total_keys = ('schedule.daily_hour_limit', 'schedule.work_stop_hours',
+                       'schedule.efficiency_tier2_hours')
     mapping = {
         # 连接层（改完需重启调度器才生效，设置页卡片里有提示）
         'adb_path': ('adb.path', 'str'),
@@ -999,10 +1196,15 @@ def apply_settings(updates: dict) -> dict:
         'hire_name': ('work.hire_name', None),
         'hire_wait': ('work.hire_wait', 'bool'),
         'coin_threshold': ('schedule.coin_threshold', 'int'),
+        # 合计停止点：映射到 work_stop_hours 只为过 validate_field（0..24 校验），
+        # 实际写入见 stop_total_keys 的三键同值分支
+        'stop_total_hours': ('schedule.work_stop_hours', 'int'),
         'daily_hour_limit': ('schedule.daily_hour_limit', 'int'),
         'work_stop_hours': ('schedule.work_stop_hours', 'int'),
         'study_quota_hours': ('schedule.study_quota_hours', 'int'),
         'work_quota_hours': ('schedule.work_quota_hours', 'int'),
+        # 收益档门槛：**设置页已不给输入框**（游戏机制说明，卡片里只读展示）。
+        # 保留映射只为向后兼容旧客户端/手写 API 调用；手改 config.yaml 也能改。
         'efficiency_tier1_hours': ('schedule.efficiency_tier1_hours', 'int'),
         'efficiency_tier2_hours': ('schedule.efficiency_tier2_hours', 'int'),
         'main_order': ('tasks.main_order', None),
@@ -1022,11 +1224,15 @@ def apply_settings(updates: dict) -> dict:
         'care_method': ('care.method', None),
         'care_exchange': ('care.exchange_count', 'int'),
         'friend_care_name': ('friend_care.friend_name', None),
+        'friend_care_range': ('friend_care.time_range', 'str'),
         'friend_care_interval': ('friend_care.interval_seconds', 'int'),
         'friend_care_method': ('friend_care.method', None),
+        'care_interval': ('care.interval_seconds', 'int'),
+        'hire_friend_times': ('hire_friend.times_per_day', 'int'),
         'employed_enabled': ('employed.enabled', 'bool'),
         'employed_action': ('employed.action', None),
         'employed_interval': ('employed.interval_seconds', 'int'),
+        'gift_bag_range': ('gift_bag.time_range', 'str'),
         'gift_bag_interval': ('gift_bag.interval_seconds', 'int'),
         'career_watch': ('career.watch', 'bool'),
         'career_stop_study': ('career.stop_study_on_unlock', 'bool'),
@@ -1050,6 +1256,18 @@ def apply_settings(updates: dict) -> dict:
             rejected.append(f'{field}: 不支持')
             continue
         key, kind = mapping[field]
+        if field == 'stop_total_hours':
+            # 合计停止点：校验一次（复用 work_stop_hours 的 0..24 规则），
+            # 通过后三个键一起写，保证"填多少就多少小时全停"
+            ok, fixed = S.validate_field('schedule.work_stop_hours', value)
+            if not ok:
+                rejected.append(f'{field}: 非法值 {value!r}')
+                continue
+            fixed = int(fixed)
+            for k in stop_total_keys:
+                S.set_value(data, k, fixed)
+            applied[field] = fixed
+            continue
         if kind == 'bool':
             if not isinstance(value, bool):
                 rejected.append(f'{field}: 需要布尔值')
@@ -1278,6 +1496,7 @@ HTML = r"""<!doctype html>
   --qp-sb-feed:#CA9F5B;
   --qp-sb-shower:#E7BC6C;
   --qp-sb-record:#CAA05C;
+  --qp-sb-store:#BAD2FE;
   --qp-statusbar:var(--qp-sb-main);
   --qp-bg2:#EDD18F;
   --card:#F9EFDE;       /* 卡片/资料卡底（官方 #F9EFDE） */
@@ -1291,13 +1510,20 @@ HTML = r"""<!doctype html>
   --gold:#CA810D;       /* 金币（官方 #FFCA810D） */
 
   /* 圆钮（左=功能入口 / 右=装饰入口，官方是两套） */
-  --btn-l-bg:#F9F1E2;   /* 左圆钮底（官方 #F9F1E2） */
+  --btn-l-bg:#F9F1E2;   /* 左圆钮底（官方 #F9F1E2）：**已不用**，左四钮现走 --panel-bg，
+                           留着是记官方原色，想还原成官方样只要把 .rbtn 的 background 换回它 */
   --btn-l-fg:#BE6321;   /* 左圆钮图标棕（官方 #FFBE6321） */
-  --btn-r-bg:rgba(0,0,0,.28);       /* 右圆钮底：纯黑蒙版（只压暗、不改色相） */
+  /* 纯黑半透明蒙版（只压暗、不改色相）——**右圆钮与胶囊共用同一份材质**，
+     见 .col-r .rbtn / .cap::before。改一处两边同步，不会各调各的又跑偏。 */
+  --mask-black:rgba(0,0,0,.28);
+  --btn-r-bg:var(--mask-black);     /* 右圆钮底 */
   --btn-r-fg:#FFEA70;   /* 右圆钮图标亮黄 */
 
-  /* 胶囊（官方 #99E1B053 → alpha 0.6，本色 #E1B053） */
-  --cap-bg:#B69251;
+  /* 胶囊（用户要求改为**与右圆钮同材质**的黑色半透明蒙版；
+     官方原色 #99E1B053（本色 #E1B053、压在暖黄背景上合成 #B69251）已弃用。
+     明暗模式**必须完全一致**：深色模式的 media query 里不覆盖这个 token
+     （15. 深色模式一节只换房间背景图）——所以白天黑夜都是同一层黑色蒙版。 */
+  --cap-bg:var(--mask-black);
   --cap-fg:#FFFFFF;
 
   /* 进度条 */
@@ -1313,11 +1539,23 @@ HTML = r"""<!doctype html>
   --sh-1:0 1px 10px rgba(120,85,30,.06),0 4px 5px rgba(120,85,30,.06);
   --sh-2:0 2px 12px rgba(120,85,30,.12);
 
-  /* 房间背景（由 body[data-scene] 切换） */
-  --qp-room-main:url('/qp-icons/bg/room-main.jpg');
-  --qp-room-feed:url('/qp-icons/bg/room-feed.jpg');
-  --qp-room-shower:url('/qp-icons/bg/room-shower.jpg');
-  --qp-room-record:url('/qp-icons/bg/room-record.jpg');
+  /* 玻璃面板材质：任务卡 .qpanel 与底部弧形栏 .deck **共用同一份**
+     （用户要求"底部那条栏的材质跟任务列表一样"）。以后调材质只改这里。
+     深色模式不覆盖这两项 —— 与 .qpanel 现状一致（深色下两边一起保持同一观感）。 */
+  --panel-bg:rgba(255,255,255,.62);
+  --panel-blur:blur(6px);
+  /* 「更白一档」的白玻璃：**资料卡 + 左侧 4 个功能圆钮共用这一份**（用户要求
+     "把 QQ宠物托管这个胶囊的背景透明度调低一点，更白一点"、"左边的 4 个按钮的背景
+     跟它一样"）。比 --panel-bg(.62) 更实：实测底色 (249,241,224) → (252,248,239)。
+     任务卡 .qpanel / 底栏 .deck 仍走 --panel-bg，右侧圆钮仍是 --btn-r-bg 黑蒙版。 */
+  --panel-bg-strong:rgba(255,255,255,.80);
+
+  /* 房间背景（由 JS 按 html[data-scene] 内联切换；这里只是首帧兜底，见下方注释） */
+  --qp-room-main:url('/qp-icons/bg/room-main.jpg?v=5');
+  --qp-room-feed:url('/qp-icons/bg/room-feed.jpg?v=5');
+  --qp-room-shower:url('/qp-icons/bg/room-shower.jpg?v=5');
+  --qp-room-record:url('/qp-icons/bg/room-record.jpg?v=5');
+  --qp-room-store:url('/qp-icons/bg/room-store.jpg?v=5');
   --qp-room:var(--qp-room-main);
   /* 1dp = 可用宽度/360（全局：设置页等非 .home 页面也要用） */
   --u:var(--vu, calc(100vw / 360));
@@ -1420,7 +1658,13 @@ body{
   position:absolute;
   width:calc(var(--u)*42);height:calc(var(--u)*42);
   border:0;border-radius:50%;
-  background:var(--btn-l-bg);
+  /* 左列四个圆钮：材质跟任务卡/底栏同一份（用户要求）。
+     原来是官方那不透明米色 --btn-l-bg(#F9F1E2)；圆钮里是彩色图标，
+     底透明后图标依然清楚（图标自带描边/实色）。
+     现在与资料卡共用"更白"那份 --panel-bg-strong（用户要求：圆钮背景跟资料卡一样）。
+     右列圆钮下面 .col-r .rbtn 会覆盖成官方纯黑蒙版（--btn-r-bg），那颗保持原样。 */
+  background:var(--panel-bg-strong);
+  backdrop-filter:var(--panel-blur);-webkit-backdrop-filter:var(--panel-blur);
   display:flex;align-items:center;justify-content:center;
   padding:0;cursor:pointer;
   box-shadow:var(--sh-1);
@@ -1442,8 +1686,10 @@ body{
      合成后约 #8D6535（背景 #C48C4A 压暗 45%），层次够、又不抢图标。
    - 保留 backdrop-filter 与 .qpanel/.fb-group 质感统一。 */
 .col-r .rbtn{
+  /* 底色是官方那层纯黑蒙版（--btn-r-bg，与白玻璃面板**故意不同**），
+     但模糊半径跟面板共用 token，避免以后调材质时这里漏掉。 */
   background:var(--btn-r-bg);
-  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  backdrop-filter:var(--panel-blur);-webkit-backdrop-filter:var(--panel-blur);
 }
 /* 右列图标尺寸：**逐个设**，不要统一一个百分比（用户要求"3 个图标都大一点"）。
    原因：三张图的"可见内容占画布比例"差很多（实测 alpha/几何包围盒）：
@@ -1474,36 +1720,177 @@ body{
 .rbtn.on{box-shadow:0 0 0 calc(var(--u) * 2) rgba(255,255,255,.85),var(--sh-1)}
 .rbtn.on img{filter:none}
 
-/* 禁用态（总览页左上角那个"返回"）。
-   为什么禁用：它是 data-tab="main"，而 showTab() 在目标页 == 当前页时直接
-   `if(name===curTab) return;` 早退 —— 总览页点它什么都不会发生。
-   而 #tabbar 挂在 .home 里，切到设置/日志页时整个 .home 隐藏
-   （实测 getBoundingClientRect() 全为 0×0），所以它**只在总览页可见**，
-   偏偏在总览页永远无效 —— 两头堵死，是个纯粹的死键。
-   置灰表达"此处没有上一级可返回"（总览页本来就是根页面）。
+/* 左上角第 1 个圆钮（#btnScene）**不再是"返回"**：总览页是根页面，返回无处可去，
+   历史上它是置灰死键（`.rbtn:disabled` 那条已随之删除）。现在它是"切换房间背景"，
+   所以照常参与 .rbtn 的按压反馈，但**不参与选中态**：
+   JS 给 tabbar 按钮刷 .on 时按 id 跳过它（否则总览页它常驻白环、又比其他钮大一圈）。
+   图标 = 官方黄衣 off_r1_tshirt（用户指定），**两处单独调**（均实测截图对比过）：
+   ① 尺寸 58.5%（不是左列统一的 55%）：该图内容包围盒 87.5%×71.9%，比其余左列图标
+      （~84%×86%）宽而扁；沿用 55% 时可见 20.2×16.6dp，比齿轮/日记（19.3×19.3dp）
+      明显小一圈。按**可见面积相等**反解 = 55% × √(0.711/0.629) ≈ 58.5%
+      （与右列手机图"按面积补"同一条经验：统一高度对长宽比差很多的图标不够用）。
+   ② 滤镜 brightness(.9) saturate(1.25)：原图是给右列深色钮配的亮黄 #FFE45C，
+      直接放在左列米白钮（#F9F1E2）上对比度极低、发飘发白；压暗加饱和后成金黄，
+      既保住"黄衣服"的观感，又与旁边三个棕图标（#BE6321）体量一致。
+      没走"整图染棕"（`brightness(0) invert(...)` 那套）—— 那是另一颗红棕色衣服，不是黄的了。 */
+/* 用户要求"衣服颜色跟左列其他图标一样"：不再用官方黄色 off_r1_tshirt + 提亮滤镜，
+   换成同色系的棕色素材 off_l1_tshirt.png（由官方素材改色而来：保留 alpha 与明暗结构，
+   色相/亮度按左列官方图标实测基色 #BD6221、亮度 ~106 重映射，色差 ΔRGB≈(2.6,1.1,0)）。
+   尺寸 58.5% 保持不动 —— 那是按衣服轮廓调过的，与其他图标的视觉大小一致。 */
+#tabbar #btnScene img{width:58.5%;height:58.5%}
 
-   **必须在这里压掉 .on 的白环**：JS 会按 data-tab===当前页 给按钮加 .on，
-   总览页时它必然带环；而那个环是 box-shadow 外扩 2dp，把 42dp 撑成 46dp ——
-   这正是"它比其他钮大一圈"的原因（实测 45.4dp vs 其余 41.8dp）。
-   选择器特异性同为 (0,2,0)，靠**书写顺序在后**胜出，故本块必须留在 .rbtn.on 之后。 */
-.rbtn:disabled{
-  opacity:.42;cursor:default;
-  box-shadow:var(--sh-1);          /* 退回普通圆钮的阴影，不要选中环 */
+/* 切换房间背景的轻提示（#sceneToast，JS 的 sceneToast()）。
+   4 张房间图肉眼可辨，但"回到自动"这一步在任务场景恰好是主房间时看不出变化，
+   故给一句状态文字；位置取绝对定位居中偏下 —— 避开顶部资料卡/胶囊区，
+   也不会盖住底部抽屉（.deck）。1.6 秒自动淡出，pointer-events:none 不挡点击。
+   z-index 高于 .flt 各层（总览页里最高的是 .deck 的 5），保证压在最上面。 */
+#sceneToast{
+  position:absolute;left:50%;top:62%;transform:translate(-50%,-50%);
+  z-index:9;max-width:86%;padding:6px 14px;border-radius:999px;
+  font-size:12.5px;color:#fff;background:rgba(0,0,0,.72);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  opacity:0;transition:opacity .16s;pointer-events:none;
 }
-.rbtn:disabled:active{transform:none}
+#sceneToast.on{opacity:1}
+
+/* 房间背景选择面板（#bgSheet，点左上角黄衣圆钮打开）
+   21 张 = 自动 + 5 套官方房间场景 + 15 款官方「装扮→背景」家居背景；
+   缩略图直接复用页面背景图（同一 URL，浏览器只下载一次，开面板不会额外占带宽）。
+   面板贴底、暖色卡片底（跟资料卡/任务面板一套色），最高 76vh 内部滚动。 */
+#bgSheet{position:fixed;inset:0;z-index:30;display:none}
+#bgSheet.on{display:block}
+#bgSheet .bgmask{position:absolute;inset:0;background:rgba(0,0,0,.42)}
+#bgSheet .bgpanel{
+  position:absolute;left:0;right:0;bottom:0;max-height:76vh;
+  display:flex;flex-direction:column;
+  padding:calc(var(--u) * 12) calc(var(--u) * 12)
+          calc(var(--u) * 12 + env(safe-area-inset-bottom, 0px));
+  background:var(--card);border-radius:calc(var(--u) * 16) calc(var(--u) * 16) 0 0;
+  box-shadow:0 -6px 24px rgba(80,50,10,.28);
+}
+#bgSheet .bghead{
+  display:flex;align-items:center;justify-content:space-between;
+  font-weight:650;font-size:calc(var(--u) * 14);color:var(--strong);
+  padding:0 calc(var(--u) * 2) calc(var(--u) * 10);
+}
+#bgSheet .bghead button{
+  border:0;background:none;color:var(--sub);font-size:calc(var(--u) * 13);
+  padding:calc(var(--u) * 2) calc(var(--u) * 4);
+}
+#bgSheet .bggrid{
+  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:calc(var(--u) * 8);overflow-y:auto;overscroll-behavior:none;
+}
+#bgSheet .bgtile{
+  border:0;background:none;padding:0;font:inherit;
+  display:flex;flex-direction:column;align-items:center;gap:calc(var(--u) * 3);
+}
+#bgSheet .bgthumb{
+  width:100%;aspect-ratio:15 / 32;object-fit:cover;display:block;
+  border-radius:calc(var(--u) * 8);box-shadow:var(--sh-1);background:#E9E2D4;
+}
+#bgSheet .bgtile.on .bgthumb{box-shadow:0 0 0 calc(var(--u) * 2) var(--accent)}
+#bgSheet .autothumb{
+  display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(160deg,#F7E4BC,#E9C98D);color:var(--text);
+  font-size:calc(var(--u) * 13);font-weight:600;
+}
+#bgSheet .bgname{
+  max-width:100%;font-size:calc(var(--u) * 10.5);color:var(--text);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+#bgSheet .bgtip{
+  padding-top:calc(var(--u) * 10);color:var(--sub);
+  font-size:calc(var(--u) * 10.5);line-height:1.55;
+}
 
 /* ---------- 4. 资料卡（官方 x=74 y=26 207×46） ---------- */
 .idcard{
   left:calc(var(--u) * 74);
   top:calc(var(--u) * var(--top-card));
   width:calc(var(--u) * 207);
-  height:calc(var(--u) * var(--h-card));
-  display:flex;align-items:center;gap:calc(var(--u) * 6);
+  /* 高度**不写死**、由内容撑（`.idtop` 40u + 上下 padding 6u = 46u = --h-card）：
+     之前写死 46u 又把 .idtop 设成 46u，内容 52u 撑破胶囊 → 头像/状态环相对卡片背景
+     整体错位（用户实报）。 */
+  display:flex;flex-direction:column;
   padding:calc(var(--u) * 3) calc(var(--u) * 8) calc(var(--u) * 3) calc(var(--u) * 3);
-  background:var(--card);border-radius:999px;
+  /* 顶部「QQ宠物托管」资料卡：材质同任务卡/底栏（用户要求），原来是 --card(#F9EFDE 不透明)。
+     用户后续要求"这个胶囊再白一点（透明度调低）"、"左边的 4 个按钮的背景跟它一样"
+     → 与左列圆钮共用 --panel-bg-strong(.80)；任务卡/底栏仍走 --panel-bg(.62)。
+     展开态沿用同一个背景。 */
+  background:var(--panel-bg-strong);
+  backdrop-filter:var(--panel-blur);-webkit-backdrop-filter:var(--panel-blur);
+  /* 圆角 = 胶囊圆角（高/2）；展开态**沿用同一个圆角**，不改成小圆角 */
+  border-radius:calc(var(--u) * var(--h-card) / 2);
   box-shadow:var(--sh-1);
   box-sizing:border-box;
 }
+/* 展开态（点右侧状态环）：胶囊原位向下展开，把体力/清洁/心情三行显示在名字下面 ——
+   官方就是这么做的手势（2026-09-28 真机实测：点环后卡片原位展开、没有遮罩/弹窗，
+   页面其它部分照常可见；点行右侧 › 才进游戏自己的详情页，点底部 ^ 收起）。
+   **宽度一律不变**（用户要求：展开时右边别被撑大；官方实拍展开态其实比胶囊宽
+   207→224u，这里不跟），只是下面的行区高度从 0 长出来；背景材质和圆角也都不动。 */
+.idcard.open{
+  z-index:6;                     /* 盖住下面的等级条/胶囊行 */
+}
+.idcard .idtop{
+  display:flex;align-items:center;gap:calc(var(--u) * 6);
+  height:calc(var(--u) * (var(--h-card) - 6));flex:none;   /* 46 - 上下 padding 6 = 40 */
+}
+/* 行区：高度 0 → 展开高度做动画（官方的"展开"就是这个手感；别用 display:none 硬切，
+   那样卡片会瞬间跳高、用户实报"展开动画不对"）。 */
+.idrows{
+  height:0;overflow:hidden;
+  transition:height .22s cubic-bezier(.22,.61,.36,1);
+}
+/* 行区高度：3 行 × 37.5u + 20u 收起箭头区（官方展开态卡片 34.3..214 = 179.7u 高，
+   = 46u 头部 + 133.7u 行区）。**尺寸全按官方原图量**（`qqpet_assets/01_ui_screenshots/
+   05_pet_status.png` 1080×2412，÷3 = CSS px，而页面的 --u = 100vw/360 正好等于 CSS px；
+   早先误按 ÷2.769（390 宽）量，整体大了 8%，字号/行距/条粗全偏 —— 用户实报）。 */
+.idcard.open .idrows{height:calc(var(--u) * 133)}
+/* 官方：头部（46u）与第一行中心（99.4u）之间有 3.3u 间隙。用 margin 加在第一行上，
+   收起态因为容器 height:0 + overflow:hidden 不受影响。 */
+.idrows .prow:first-child{margin-top:calc(var(--u) * 3.3)}
+.idcard .prow{
+  display:flex;align-items:center;
+  height:calc(var(--u) * 37.5);      /* 官方行距 37.5u（三行中心 99.4 / 136.9 / 175.5） */
+  padding:0 calc(var(--u) * 7) 0 calc(var(--u) * 5.5);
+}
+.pico{width:calc(var(--u) * 17);height:calc(var(--u) * 17);flex:none;object-fit:contain}
+.pname{font-size:calc(var(--u) * 12);font-weight:400;color:var(--strong);margin-left:calc(var(--u) * 0.8);flex:none}
+/* 数值字号 12u 与官方一致；**字重必须常规**（官方墨宽 12px / 笔划 1.5px；写 680 会变成
+   15px / 2.0px —— 明显比官方粗且宽，还把进度条往右挤，用户实报）。
+   不用 tabular-nums：等宽数字比官方（比例数字）宽 1~2u，列宽已有 min-width:20u 兜底，
+   "92→100" 切换时进度条不会跳。 */
+.pval{
+  font-size:calc(var(--u) * 12);font-weight:400;color:var(--strong);
+  margin-left:calc(var(--u) * 6);min-width:calc(var(--u) * 20);
+  font-variant-numeric:normal;
+}
+.pbar{
+  flex:1;height:calc(var(--u) * 4);border-radius:999px;   /* 官方条厚 4u（不是 5u） */
+  background:rgba(120,90,40,.28);overflow:hidden;margin-left:calc(var(--u) * 8);
+}
+.pbar>i{display:block;height:100%;border-radius:999px;transition:width .35s}
+.pbar>i.e{background:var(--energy)}
+.pbar>i.c{background:var(--clean)}
+.pbar>i.m{background:var(--mood)}
+/* 行右侧「›」：官方点它进游戏自己的详情页（心情值/体力值…），本工具没有那些页面，
+   只作视觉还原、不绑事件（别做成点了没反应的假按钮，所以 pointer-events:none）。 */
+.pchev{
+  flex:none;margin-left:calc(var(--u) * 10);color:#C0AE8E;
+  font-size:calc(var(--u) * 11);line-height:1;pointer-events:none;
+}
+/* 展开态底部中央的 ^ 收起箭头（官方底部同款）。它放在 .idrows 里面，
+   跟着行区一起"长出来"，不是 display 切换硬弹出来。 */
+.idfold{
+  display:flex;width:100%;height:calc(var(--u) * 17);   /* 官方：箭头区 ~17u，^ 居中 */
+  align-items:center;justify-content:center;
+  border:0;background:none;padding:0;
+}
+.idfold svg{width:calc(var(--u) * 8.4);height:calc(var(--u) * 4.3)}   /* 官方 ^ 实测 8.4×4.3u */
+.idfold path{stroke:#B9A585;stroke-width:2.2;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.petnone{color:var(--sub);font-size:calc(var(--u) * 11.5);padding:calc(var(--u) * 2) calc(var(--u) * 9) 0}
 .avatar{
   width:calc(var(--u) * 40);height:calc(var(--u) * 40);
   border-radius:50%;flex:none;background:#ffedd5;
@@ -1524,15 +1911,32 @@ body{
   font-size:calc(var(--u) * 10);color:var(--sub);line-height:1.2;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
-/* 状态环：官方三层同心环（蓝/橙/绿），中心留白 */
+/* 状态环：官方资料卡右侧的**三层同心进度环** —— 外圈=体力(蓝)、中圈=清洁(绿)、
+   内圈=心情(橙)，每圈按 0~100 画弧、未满那段是灰底（官方实拍
+   qqpet_assets/01_ui_screenshots/02_pet_home.png；点开后的体力/清洁/心情面板见
+   05_pet_status.png）。数值来自 runs/status_cache.json（护理巡检 OCR 状态面板写入），
+   没读到 = 三圈全灰。点环 = 官方交互：**胶囊原位向下展开**显示三行数值（见 .idcard.open）。
+   历史教训：早先是一条 conic-gradient 的固定比例三色块（绿 70%/橙 18%/蓝 12%），
+   只是"看着像官方"，实际既不是三个圈也不随数据变——别再改回那种画法。 */
 .idring{
-  width:calc(var(--u) * 26);height:calc(var(--u) * 26);
-  border-radius:50%;flex:none;
-  background:conic-gradient(var(--ok) 0 70%,var(--accent) 70% 88%,#0EA5E9 88% 100%);
-  -webkit-mask:radial-gradient(circle,transparent 38%,#000 38%);
-  mask:radial-gradient(circle,transparent 38%,#000 38%);
+  width:calc(var(--u) * 27);height:calc(var(--u) * 27);
+  flex:none;padding:0;border:0;background:none;line-height:0;
+  -webkit-tap-highlight-color:transparent;
 }
-.idring.off{background:conic-gradient(#EF4444 0 100%)}
+.idring svg{display:block;width:100%;height:100%;transform:rotate(-90deg)}
+/* 弧粗：官方径向实测 2.7~2.9u（含抗锯齿）；viewBox 40 渲染成 27u ⇒ 1u = 1.4815 vb，
+   取 3.3 vb（≈2.2u 几何 + 抗锯齿 ≈ 2.8u）。
+   原来写 2.6（= 1.76u）明显比官方细，用户实报。 */
+.idring circle{fill:none;stroke-width:3.3}
+/* 未满那段（官方是明显的灰弧，不能画得太淡——太淡在米白卡上等于看不见，
+   实测 rgba(...,.18) 在截图里完全看不出缺口） */
+.idring .trk{stroke:rgba(120,90,40,.30)}
+.idring .arc{stroke-linecap:round;transition:stroke-dashoffset .45s ease}
+.idring .arc.e{stroke:var(--energy)}
+.idring .arc.c{stroke:var(--clean)}
+.idring .arc.m{stroke:var(--mood)}
+
+
 
 /* ---------- 5. 胶囊两行（官方 y=86 三颗 + y=126 两颗，每颗 67×28 间距 4） ---------- */
 .caps{
@@ -1568,9 +1972,14 @@ body{
   left:0;right:0;
   top:50%;transform:translateY(-50%);
   height:calc(var(--u) * 20);
+  /* 材质 = 右侧圆钮那一套：纯黑半透明蒙版 + 同一份毛玻璃模糊（--panel-blur）。
+     背景色走 --cap-bg -> --mask-black，**明暗模式同一个值**，不随主题变。 */
   background:var(--cap-bg);
+  backdrop-filter:var(--panel-blur);-webkit-backdrop-filter:var(--panel-blur);
   border-radius:calc(var(--u) * 10);
-  box-shadow:inset 0 calc(var(--u)*1) calc(var(--u)*2) rgba(255,255,255,.28);
+  /* 原本这里是"官方金色胶囊"的白色内高光（inset 0 1px 2px rgba(255,255,255,.28)）。
+     换成黑色蒙版后必须去掉：高光把上半部提亮成灰蒙蒙一片，跟右圆钮那种
+     "平整压暗"的观感不一致（用户要求两边材质一样）。右圆钮也没有这层高光。 */
   z-index:0;
 }
 /* 文字层：占满胶囊体区域，水平+垂直居中（底部进度条由 .bar 绝对定位） */
@@ -1628,6 +2037,11 @@ body{
 
    轨道色是"深色凹槽"：官方实测 #9A8353（亮度 132）**深于**胶囊底（179），
    是挖进去的槽；改前用 rgba(255,255,255,.30) 反而比胶囊底亮 +32，像贴白胶带。
+   **胶囊底换成黑色蒙版后同步改**：原来的暖褐凹槽 rgba(90,70,35,.38) 压在黑色胶囊上
+   等于看不见（0.2h/12h 那种近乎空条只剩一个橙点，"槽"整个消失）。
+   现在用**同一支黑色蒙版再叠一层**（rgba(0,0,0,.30)，与 --mask-black 同色相、
+   只加深不引色相）：合成后比胶囊底明显更暗，仍是"挖进去的槽"，
+   橙色填充压在它上面照样跳得出来。
 
    填充用官方条纹素材：static/qp-icons/official/cap_bar_fg.png
    （源：cdn_assets 的 pet_level_progress_fg.png，688×32，官方等级进度条前景图）。
@@ -1640,7 +2054,7 @@ body{
   bottom:calc(var(--u) * 3.5);
   height:calc(var(--u) * 2.5);
   margin:0;
-  background:rgba(90,70,35,.38);
+  background:rgba(0,0,0,.30);
   border-radius:calc(var(--u) * 1.25);
   overflow:hidden;
 }
@@ -1672,10 +2086,16 @@ body{
 /* 任务队列面板：占据场景层剩余空间，可滚动 */
 .qpanel{
   display:flex;flex-direction:column;
-  background:rgba(255,255,255,.62);
-  border-radius:calc(var(--u) * 14);
-  padding:calc(var(--u) * 8) calc(var(--u) * 9);
-  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  background:var(--panel-bg);              /* 材质见 :root 的 --panel-bg/--panel-blur */
+  /* 圆角：14 -> 22dp（用户要求"更圆一点"）。选 22 是因为右边那两粒胶囊 .fb-group 是 25dp，
+     同屏看着是一套；再大就变成胶囊形了。要调只改这个数（比如 18 更收敛 / 26 更圆）。
+     .qpanel 有 overflow:hidden，圆角会直接把里面的任务行裁出来，不用给行另加圆角。 */
+  border-radius:calc(var(--u) * 22);
+  /* 内边距按圆角配比：圆角 22u 时上下 8u / 左右 9u 会让标题和行贴着圆角走
+     （用户："这些东西离那个圆角的卡片边框就感觉不是很适配"）→ 收到 14u / 16u / 12u，
+     视觉上内容才"住在卡片里"。改圆角时记得一起看这里（经验值 ≈ 圆角的 0.6~0.7 倍）。 */
+  padding:calc(var(--u) * 14) calc(var(--u) * 16) calc(var(--u) * 12);
+  backdrop-filter:var(--panel-blur);-webkit-backdrop-filter:var(--panel-blur);
   box-shadow:var(--sh-1);
   overflow:hidden;
   z-index:2;                 /* 面板在下 */
@@ -1694,9 +2114,11 @@ body{
 /* 分组容器承载磨砂底与圆角：组内按钮无缝连成一个胶囊体。
    官方 View 树就是两段（上段 feed+shower 共用容器、下段 friend 独立）。 */
 .fb-group{
+  /* 材质 = :root 的 --panel-bg / --panel-blur，跟任务卡 .qpanel、底栏 .deck 同一份代码
+     （原来是自己写死的 rgba(255,255,255,.55)，比那两块略透一点）。 */
   display:flex;flex-direction:column;
-  background:rgba(255,255,255,.55);
-  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  background:var(--panel-bg);
+  backdrop-filter:var(--panel-blur);-webkit-backdrop-filter:var(--panel-blur);
   border-radius:calc(var(--u) * 25);
   box-shadow:var(--sh-1);
   overflow:hidden;
@@ -1731,9 +2153,13 @@ body{
   bottom:0;
   top:auto;
   height:calc(var(--u) * 135);   /* 669 -> 804dp */
-  background:linear-gradient(180deg,#EFDCC6 0%,#E4CFB9 22%,#E0C9B2 100%);
+  /* 材质 = 任务卡那份（半透明白玻璃 + 背景模糊），底下房间图会透出来；
+     原来是官方那条不透明米色渐变（#EFDCC6→#E4CFB9→#E0C9B2），改后这两块观感统一。
+     弧形轮廓（border-radius 的 50%/52dp）保持不变 —— 那是官方底栏的形。 */
+  background:var(--panel-bg);
+  backdrop-filter:var(--panel-blur);-webkit-backdrop-filter:var(--panel-blur);
   border-radius:50% 50% 0 0 / calc(var(--u) * 52) calc(var(--u) * 52) 0 0;
-  box-shadow:0 calc(var(--u) * -1) calc(var(--u) * 3) rgba(120,85,30,.08);
+  box-shadow:var(--sh-1);
   z-index:1;
 }
 .drawer{
@@ -1810,35 +2236,27 @@ body{
 /* 进度条（通用） */
 .bar{height:4px;background:var(--track);border-radius:2px;overflow:hidden;margin-top:7px}
 .bar>i{display:block;height:100%;background:var(--accent);width:0;border-radius:2px}
-/* 学习/打工合并瓦片：两段叠加（学习橙在左、打工蓝紧随）。
-   类名用 bar-split，不能用 sw（.sw 是设置页开关）。
-   注意：这里是**双段**条，两段必须能区分（学习=橙 / 打工=蓝），
-   所以不能直接用官方那张橙色条纹图（两段会同色）。
-   **不要用 background-blend-mode:multiply 染色** —— 实测橙色条纹 × 蓝色
-   = (14,93,0) 暗绿（multiply 是逐通道相乘，橙的 R=255 保留、G/B 被压掉）。
-   正解：预先生成一张**蓝色条纹变体**素材（cap_bar_fg_blue.png，
-   由 cap_bar_fg.png 做 HSV 色相旋转 +171° 得到，条纹形状/明暗完全保留），
-   两段各用一张图。 */
-.bar.bar-split{display:flex}
-.bar.bar-split>i{flex:none;border-radius:0}
-.bar.bar-split>i#swBarSchool{
-  background-image:url('/qp-icons/official/cap_bar_fg.png');
-}
-.bar.bar-split>i#swBarWork{
-  background-image:url('/qp-icons/official/cap_bar_fg_blue.png');
-}
-.bar.bar-split>i:last-child{border-top-right-radius:calc(var(--u) * 1.25);border-bottom-right-radius:calc(var(--u) * 1.25)}
+/* 学习/打工胶囊的进度条：**单段**（学习+打工合计已用 / 合计停止点）。
+   原来是"学习橙 + 打工蓝"两段叠加，用户要求这个胶囊只显示总小时数、不再区分两者
+   → 两段合并成一段，直接用 .cap .bar>i 的官方橙色条纹素材（cap_bar_fg.png），
+   不再需要蓝色变体（static/qp-icons/official/cap_bar_fg_blue.png 保留作素材，
+   现已无人引用；若将来又要分段，可直接拿回来用——见 INTEGRATION.md 第六轮）。
+   两个阶段类名（bar-split / swBarSchool / swBarWork）已随之删除，别再生造。 */
 
 /* ---------- 7. 任务队列 ---------- */
 .qcard{border-radius:var(--r-xl)}
 .qhead{
   display:flex;align-items:center;
-  margin-bottom:calc(var(--u) * 4);
+  /* 左右内距 = 任务行的内距，标题左缘与行内文字左缘对齐（不然标题比行名靠左 10u，
+     整块看着是斜的）；与第一行之间留 8u，标题不再"顶着"列表。 */
+  padding:0 calc(var(--u) * 8);
+  min-height:calc(var(--u) * 16);
+  margin-bottom:calc(var(--u) * 8);
 }
 /* 面板标题（原状态行已移除，只留固定标题） */
 .qtitle{
-  font-size:calc(var(--u) * 11);font-weight:600;
-  color:var(--sub);letter-spacing:.06em;
+  font-size:calc(var(--u) * 11.5);font-weight:600;
+  color:var(--sub);letter-spacing:.08em;
 }
 /* 标题右侧的收尾队列提示（原为单独一行，现并到标题行） */
 .qpend{
@@ -1851,37 +2269,100 @@ body{
 .qpend .run{color:var(--accent);font-weight:600}
 .qgrp{font-size:10.5px;color:var(--sub);letter-spacing:.06em;margin:10px 0 2px}
 .tasklist .mrow{
-  display:flex;gap:10px;padding:9px 2px;
-  border-top:1px solid var(--line);align-items:center;
+  display:flex;gap:calc(var(--u) * 6);
+  padding:calc(var(--u) * 7.5) calc(var(--u) * 8);   /* 左右 8u：与标题行同一左缘（标题那侧也跟着调） */
+  align-items:center;border-radius:calc(var(--u) * 10);
+  /* 任务行分隔线：原来是 1px 实线 var(--line)(#EFE3CF) 通到卡片左右两边，压在毛玻璃上
+     又硬又脏（用户："分隔线太丑了"）。改成 **1px 两端渐隐的发丝线**：用背景渐变画
+     （不是 border），两端各留 10% 淡出、颜色压到 13% 透明 —— 跟玻璃面板一个调子。
+     调法：想更弱把 .13 调小（.08 几乎看不见）/ 想更清楚调大（.2 偏明显）；
+     想彻底不要线就说一声，把 background-image 整行去掉即可（靠行距区分）。 */
+  background-image:linear-gradient(90deg,
+      rgba(120,85,30,0) 0%,
+      rgba(120,85,30,.11) 8%,
+      rgba(120,85,30,.11) 92%,
+      rgba(120,85,30,0) 100%);
+  background-size:100% 1px;
+  background-repeat:no-repeat;
+  background-position:left top;
 }
-.tasklist .mrow:first-child,.mrow:first-child{border-top:0}
+.tasklist .mrow:first-child,.mrow:first-child{border-top:0;background-image:none}
 .mcb{
-  width:calc(var(--u) * 20);height:calc(var(--u) * 20);
+  width:calc(var(--u) * 19);height:calc(var(--u) * 19);
   border-radius:calc(var(--u) * 6);background:rgba(0,0,0,.10);
   flex:none;cursor:pointer;position:relative;user-select:none;
-  margin-left:auto;   /* 移到行尾（原"已启用/已禁用"的位置） */
+  /* 不用再写 margin-left：行内已有 gap，之前 gap+margins 双份间距白吃 14u 宽度
+     （对象名"喵帕斯～"就差这 3u 被省略号截掉） */
 }
 .mcb.on{background:var(--accent)}
 .mcb.on::after{
   content:"✓";position:absolute;inset:0;display:flex;align-items:center;
   justify-content:center;color:#fff;font-size:13px;font-weight:700;
 }
-.qico{width:18px;height:18px;flex:none;border-radius:5px;margin:0 -3px}
-.mname{font-weight:650;font-size:14px;color:var(--strong)}
-.mname.off{color:var(--sub);font-weight:500}
-.mdet{
-  margin-left:auto;font-size:12.5px;color:var(--sub);
-  font-variant-numeric:tabular-nums;text-align:right;
+/* 任务名：字号/字重跟着 u 走；禁用态只用"灰 + 常规字重"，**不再划删除线**
+   （line-through 压在毛玻璃上又脏又像报错，用户实报"排版和样式有点丑"）。 */
+.mname{font-weight:600;font-size:calc(var(--u) * 13.5);color:var(--strong);white-space:nowrap}
+/* 选中/进行中的箭头：跟在任务名后（比名字小一号、橙色），不再占用右侧那一列 */
+.marrow{
+  flex:none;margin-left:calc(var(--u) * 5);
+  color:var(--accent);font-size:calc(var(--u) * 11);line-height:1;
 }
-.mdet .run{color:var(--accent);font-weight:650}
-.mdet .off-t{color:#a89478}
+/* 行右侧一簇：对象名 + 状态文字，整体贴右（与勾选框之间留 gap）。
+   auto 边距放这里而不是 .mdet，是为了"有对象名"的行也能右对齐 */
+.mright{
+  margin-left:auto;display:flex;align-items:center;
+  gap:calc(var(--u) * 6);min-width:0;flex:0 1 auto;
+}
+/* 任务名的"对象"小字（好友护理 → 喵帕斯～、雇佣好友 → 柠檬..）：
+   浅色、小一号、超长省略 */
+.msub{
+  font-size:calc(var(--u) * 11.5);color:var(--sub);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  min-width:calc(var(--u) * 36);   /* 再怎么挤也留 3 个字的位置，别缩成"喵…" */
+}
+.mname.off{color:var(--sub);font-weight:400}
+/* 行右侧状态：只显示**有意义**的几种（执行中 / 等待 HH:MM / 今日完成 / 今日结束 / 已禁用），
+   正常"可执行"不写字，免得每行尾巴都挂个词显得吵。 */
+.mdet{
+  flex:none;
+  font-size:calc(var(--u) * 11);color:var(--sub);
+  font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap;
+}
+.mdet .run{color:var(--accent);font-weight:600}
+.mdet .done{color:var(--ok);font-weight:600}
+.mdet .off-t{color:#b6a488}
 .ttag{
   font-size:9.5px;padding:1px 5px;border-radius:4px;
   border:1px solid var(--line);color:var(--sub);flex:none;margin-left:2px;
 }
-.mrow.done{opacity:.6}
-.mrow.done .mname{text-decoration:line-through;color:var(--sub);font-weight:500}
-.mrow.run .mname{color:var(--accent)}
+/* 行态：活跃行（执行中/进行中）统一淡橙底 + 橙色名字。**上下留 1.5u 间隙**：
+   否则两条相邻的高亮（例如"学习 进行中" + "好友护理 执行中"）橙色底直接贴在一起，
+   看着像一整块（用户实报）。不要再加深浅分级 —— 用户明确说不需要。 */
+.mrow.run{
+  /* 高亮药丸由 **::before 伪元素**画（见下）：不再动盒模型，行高和普通行完全一致。
+     走过的两条弯路（都别再回去）：
+       ① background-size/position 内缩 —— 背景层仍被元素自身的 border-radius 裁切，
+          药丸上下沿撞上"属于整行"的圆角弧，圆角看着很奇怪（用户实报）；
+       ② 上下透明边框 + background-clip:padding-box —— 形状是对了，但浏览器把
+          `calc(var(--u)*2)` 的边框宽度取整成 2px（应为 2.78px），高亮行比普通行矮 1.1u。
+     **不要在这里写 background-image:none**（那会抹掉本行头顶的分隔线）。 */
+  background-color:transparent;
+}
+.tasklist .mrow{position:relative;z-index:0}   /* 给 ::before 定位 + 独立层叠上下文 */
+.mrow.run::before{
+  content:"";position:absolute;z-index:-1;     /* 在行背景之上、文字之下 */
+  left:0;right:0;
+  /* 顶部要多让 1px：本行的分隔线画在行顶部那 1px 里，不让的话上缝只剩 2u-1px，
+     手机 u=1 时就是"上缝 1px / 下缝 2px"——一眼就看出上下不对称（用户三次实报）。
+     让出 1px 后：橙色到上面那条线的**下沿** = 2u、到下一条线的**上沿** = 2u。 */
+  top:calc(var(--u) * 2 + 1px);bottom:calc(var(--u) * 2);
+  background:rgba(255,153,15,.14);
+  border-radius:calc(var(--u) * 8);            /* 自己的圆角，自洽 */
+}
+.mrow.run .mname{color:var(--accent);font-weight:650}
+.mrow.done,.mrow.dead{opacity:.72}
+.mrow.done .mname,.mrow.dead .mname{color:var(--sub);font-weight:400}
+.mrow.off{opacity:.62}
 .tasklist .row{
   display:flex;justify-content:space-between;align-items:center;
   padding:8px 0;border-top:1px dashed var(--line);font-size:14px;
@@ -1955,6 +2436,24 @@ body{
 .form .frow:first-child{border-top:0}
 .form .k{color:#1C1C1E;font-size:calc(var(--u) * 14);flex:none}
 .form .u{color:#8A8A8E;font-size:calc(var(--u) * 12);margin-left:calc(var(--u) * 3)}
+/* 卡片内的迷你说明表（2 列：条件 → 结果），用于「合计停止点」这种"到几小时会怎样"
+   的机制说明。比整段灰字好扫，一行一件事（用户要求：别写「当前设置/收益档/说明」
+   那种长段落）。行本身仍是 .frow（display:block 撑满整行），表内不吃 .frow 的
+   space-between，所以 colgroup 不用管宽度，第一列 nowrap 即可。 */
+.form .mintbl{
+  width:100%;border-collapse:collapse;
+  font-size:calc(var(--u) * 12);color:var(--sub);
+}
+.form .mintbl th{
+  font-weight:500;text-align:left;color:var(--sub);
+  padding:0 calc(var(--u) * 4) calc(var(--u) * 6);
+}
+.form .mintbl th:first-child{white-space:nowrap;width:1%}
+.form .mintbl td{
+  padding:calc(var(--u) * 6) calc(var(--u) * 4);
+  border-top:1px solid #F0F0F2;vertical-align:top;
+}
+.form .mintbl td:first-child{white-space:nowrap;color:#1C1C1E}
 .form select,.form input[type=number],.form input[type=text]{
   border:0;background:transparent;color:#8A8A8E;
   font-size:calc(var(--u) * 14);text-align:right;
@@ -2079,6 +2578,13 @@ pre#logbox{
   /* 内层滚动区同样不回弹（原为 contain —— contain 只是不往父级传递，自身照弹） */
   overscroll-behavior:none;
 }
+/* 日志页顶部多了切换条（10u 上边距 + 按钮 ≈ 46px）：日志框高度要把它扣掉，
+   否则最下面「异常截图」那张卡被挤到折叠线以下、标题只露半行（实测截图可见）。
+   320px 是切换条之前调好的固定占用，这里 -366px = 320 + 46。 */
+#logIndex pre#logbox{
+  height:calc(100vh - 366px - env(safe-area-inset-top, 0px));
+  height:calc(100dvh - 366px - env(safe-area-inset-top, 0px));
+}
 /* 异常截图缩略图 */
 .thumbs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 .thumbs a{display:block;border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden;position:relative}
@@ -2088,6 +2594,59 @@ pre#logbox{
   background:rgba(33,29,24,.72);color:#fff;font-size:10px;
   padding:2px 6px;text-align:center;
 }
+
+/* ---------- 10.1 日志页·收益记录子页 ---------- */
+/* 切换条（实时日志 / 收益记录）：复用 .logctl 的控件观感，常驻在两个子页上方。
+   **左右必须跟卡片一样内缩 12u**：内页 section 自身水平 padding 是 0，全靠
+   `.pgsec-c{margin:0 12u}` 撑出内缩，裸放会让切换条贴到屏幕边缘、跟下面所有
+   卡片错开一整条 12u（实测截图一眼就看出来）。上方留 10u（同 `.pgsec:first-of-type`），
+   否则紧贴导航栏底边。 */
+#logSubtabs{margin:calc(var(--u) * 10) calc(var(--u) * 12) 0}
+/* 统计范围：选择器在左、口径说明贴右同一行（不再写第二遍"统计范围"） */
+.rwscope{width:100%;flex-wrap:nowrap}
+.rwscope #rwDateRow{flex:none;display:flex;align-items:center;gap:calc(var(--u) * 6)}
+.rwscope #rwDateRow select{
+  border:1px solid #E8E8EC;border-radius:calc(var(--u) * 9);
+  padding:calc(var(--u) * 6) calc(var(--u) * 10);
+  font-size:calc(var(--u) * 13);background:#F7F7F9;color:#1C1C1E;
+  /* **不要 appearance:none** —— 去掉原生下拉箭头后它看着就是个普通输入框，
+     看不出能点（冒险页的选择器保留原生外观，这里保持一致） */
+}
+/* meta 单行省略：范围选"全部"时文案会变长，宁可省字也不折行把卡片撑高 */
+.rwscope #rwMeta{margin-left:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+
+/* 汇总块：两行大字（学习 / 打工）+ 一行疲惫提示 */
+.rwsum{font-variant-numeric:tabular-nums}
+.rwsum .rwline{
+  display:flex;align-items:baseline;gap:calc(var(--u) * 8);
+  padding:calc(var(--u) * 7) 0;border-top:1px dashed var(--line);
+}
+.rwsum .rwline:first-child{border-top:0}
+/* 首/末行去掉自身内距：上下留白就都等于卡片 padding（12u），视觉对称；
+   行间距仍是 7u + 7u（虚线两侧） */
+.rwsum .rwline:first-child{padding-top:0}
+.rwsum .rwline:last-child{padding-bottom:0}
+.rwsum .rwico{width:calc(var(--u) * 18);height:calc(var(--u) * 18);flex:none;align-self:center}
+/* 没图标的那行（疲惫提示）用同宽占位，标签列才跟上面两行对齐 —— 少了它整行往左错 18u+8u */
+.rwsum .rwphs{width:calc(var(--u) * 18);flex:none}
+.rwsum .rwk{color:var(--sub);font-size:calc(var(--u) * 12);flex:none;width:calc(var(--u) * 52)}
+.rwsum .rwv{font-weight:650;font-size:calc(var(--u) * 14.5);color:var(--text);white-space:nowrap}
+.rwsum .rwd{
+  color:var(--sub);font-size:calc(var(--u) * 11.5);margin-left:auto;text-align:right;
+  /* 右侧明细单行省略：宁可省字也别折行把三行汇总撑成五行 */
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;
+}
+.rwsum .rwv .gold{color:var(--gold)}
+.rwsum .rwv .accent{color:var(--accent)}
+.rwsum .rwv .tired{color:#C0392B;font-weight:600}
+/* 按次记录：复用冒险页 .advlist/.arow 的观感，左侧放类型图标 */
+#rwList .arow{gap:calc(var(--u) * 6)}
+#rwList .ai{width:calc(var(--u) * 96);display:flex;align-items:center;gap:calc(var(--u) * 5)}
+#rwList .ai img{width:calc(var(--u) * 15);height:calc(var(--u) * 15);flex:none}
+#rwList .ai .rk{color:var(--text);font-weight:600}
+#rwList .ag{text-align:left}
+#rwList .tired{color:#C0392B}
+#rwList .empty{padding:calc(var(--u) * 14);text-align:center;color:var(--sub);font-size:calc(var(--u) * 12.5)}
 
 /* ---------- 11. 冒险页 ---------- */
 .advchart{
@@ -2178,11 +2737,10 @@ pre#logbox{
 /* ---------- 14. 响应式 ---------- */
 /* 窄屏（≤639px）：侧栏仍保留，收紧尺寸 */
 @media(max-width:639px){
-  .tasklist .mrow{gap:8px;padding:8px 0}
-  .mcb{width:18px;height:18px;border-radius:5px}
-  .mcb.on::after{font-size:11px}
-  .mname{font-size:13px;white-space:nowrap}
-  .mdet{font-size:10.5px;white-space:nowrap}
+  /* 这里原来把任务行的内距/勾选框/字号覆盖成一套**写死的 px**（padding:8px 0 等），
+     而手机正好都 ≤639px ⇒ 覆盖永远生效：行内距变成 0、勾选框 18px、字号 13px，
+     跟卡片其它地方那套 --u 尺寸对不上（用户："排版很一般"）。现在尺寸统一走 u
+     （u 本身 = clientWidth/360，窄屏自然变小），这里只留"窄屏才需要"的两条。 */
   .ttag{display:none}
 }
 /* 小屏（≤360px）：进一步收紧 */
@@ -2220,25 +2778,33 @@ pre#logbox{
 @media(prefers-color-scheme:dark){
   :root{
     /* 只替换背景图；其余 token 一律沿用浅色值 */
-    --qp-room-main:url('/qp-icons/bg/room-main-dark.jpg');
-    --qp-room-feed:url('/qp-icons/bg/room-feed-dark.jpg');
-    --qp-room-shower:url('/qp-icons/bg/room-shower-dark.jpg');
-    --qp-room-record:url('/qp-icons/bg/room-record-dark.jpg');
+    --qp-room-main:url('/qp-icons/bg/room-main-dark.jpg?v=5');
+    --qp-room-feed:url('/qp-icons/bg/room-feed-dark.jpg?v=5');
+    --qp-room-shower:url('/qp-icons/bg/room-shower-dark.jpg?v=5');
+    --qp-room-record:url('/qp-icons/bg/room-record-dark.jpg?v=5');
+    --qp-room-store:url('/qp-icons/bg/room-store-dark.jpg?v=5');
     /* 状态栏采样色是唯一例外：它要跟背景图走（深色房间顶部明显更暗），
        否则深色模式下状态栏还是浅色那条，比背景亮一截。取各 -dark 图顶部实测色。 */
     --qp-sb-main:#A9722D;
     --qp-sb-feed:#C39145;
     --qp-sb-shower:#A3651D;
     --qp-sb-record:#C18C3A;
+    --qp-sb-store:#2A2E38;
   }
 }
 
-/* 房间背景按 `html[data-scene]` 切换。
-   注意：必须写在 html 上 —— 背景图作用在 html 元素，而 CSS 变量只向下继承，
-   写在 body 上的覆写对父级 html 无效（曾踩坑：data-scene 变了但背景不动）。 */
+/* 房间背景由 JS 按 `html[data-scene]` 内联写到 html 上（见 setSceneAttr）：
+   键 = SCENE_INFO 的键（5 套场景 room-* + 15 款官方家居背景 home-*）。
+   注意：**必须写在 html 上** —— 背景图作用在 html 元素，而 CSS 变量只向下继承，
+   写在 body 上的覆写对父级 html 无效（曾踩坑：data-scene 变了但背景不动）。
+   下面这 4 条只是"JS 还没跑"的首帧兜底（早期版本靠它们切换）；
+   JS 一旦跑起来，内联的 --qp-room/--qp-statusbar 优先级更高、覆盖它们。
+   15 款家居背景 + 8 个职业/毕业主题都有官方夜间版（--qp-room-* 的深色值在
+   @media(prefers-color-scheme:dark) 里换成 *-dark 图，见 SCENE_INFO 的 dark 字段）。 */
 html[data-scene="feed"]{--qp-room:var(--qp-room-feed);--qp-statusbar:var(--qp-sb-feed)}
 html[data-scene="shower"]{--qp-room:var(--qp-room-shower);--qp-statusbar:var(--qp-sb-shower)}
 html[data-scene="record"]{--qp-room:var(--qp-room-record);--qp-statusbar:var(--qp-sb-record)}
+html[data-scene="store"]{--qp-room:var(--qp-room-store);--qp-statusbar:var(--qp-sb-store)}
 
 /* 内页（非总览）把 html 背景换成白色。
    原因：body 的 padding-top 给状态栏留了安全区，露出的是 html 的底色 ——
@@ -2425,13 +2991,17 @@ main > section[data-page]:not([data-page="main"]) > .plannote{
          ================================================================== -->
 
     <!-- 左列圆钮（官方 4 个：返回/设置/消息/日记，x=20 y=28/86/146/206）
-         第 1 个是官方首页的"返回"，但本仪表盘的总览页就是根页面、没有上一级，
-         且 #tabbar 只在总览页可见 —— 即它永远只在"点了也没反应"的页面出现。
-         故置灰禁用（disabled，样式见 .rbtn:disabled）。
-         不加 class="on"：JS 仍会按 data-tab===curTab 给它加 .on，但 :disabled
-         那条把白环压掉了，所以这里写不写都一样（留着反而误导）。 -->
+         第 1 个官方是"返回"，但本仪表盘的总览页就是根页面、没有上一级
+         （showTab 目标页 == 当前页会早退，点了永远没反应，曾是置灰死键）。
+         现改为「房间背景」= #btnScene：**点按 = 打开 #bgSheet 选择面板**
+         （21 张 = 自动 + 官方 5 套房间场景 + 官方「装扮→背景」15 款家居背景），
+         **长按 = 直接切下一张**。手动选择记 localStorage('qpet_scene')、
+         非自动时暂停"按当前任务换背景"，详见 JS 的 SCENE_INFO / selectScene / applyScene。
+         图标 = 官方黄衣 off_r1_tshirt（用户指定：官方素材里的黄色衣服图标）。
+         仍带 data-tab="main"：`#tabbar button` 那个 JS 契约（§INTEGRATION 1）不动，
+         只是绑定时按 id 特判（见 JS 的 setupSceneBtn）。 -->
     <nav class="flt col-l" id="tabbar">
-      <button class="rbtn" data-tab="main" title="总览（当前页）" disabled><img src="/qp-icons/official/off_l1_back.png" alt=""></button>
+      <button class="rbtn" id="btnScene" data-tab="main" title="房间背景"><img src="/qp-icons/official/off_l1_tshirt.png" alt=""></button>
       <button class="rbtn" data-tab="set" title="设置"><img src="/qp-icons/official/off_l2_gear.png" alt=""></button>
       <button class="rbtn" data-tab="log" title="日志"><img src="/qp-icons/official/off_l3_diary.png" alt=""></button>
       <button class="rbtn" data-tab="notify" title="通知"><img src="/qp-icons/official/off_l4_bell.png" alt=""></button>
@@ -2448,14 +3018,39 @@ main > section[data-page]:not([data-page="main"]) > .plannote{
       <button class="rbtn r" data-tab="shot" title="实时画面"><img src="/qp-icons/ctrl/phone.svg?v=2" alt=""></button>
     </nav>
 
-    <!-- 资料卡（官方 x=74 y=26 207×46） -->
-    <div class="flt idcard">
+    <!-- 资料卡（官方 x=74 y=26 207×46）。展开态见 CSS 的 .idcard.open：
+         点右侧状态环 → 卡片**原位向下展开**（官方交互，没有遮罩/弹窗），名字下面
+         出现 体力/清洁/心情 三行 + 进度条，底部 ^ 收起。 -->
+    <div class="flt idcard" id="idCard">
+      <div class="idtop">
       <span class="avatar" id="schedDot"><img src="/qp-icons/official/mood_smile.png" alt=""></span>
       <div class="idtxt">
         <div class="idname">QQ宠物托管</div>
         <div class="idsub" id="schedTxt">--</div>
       </div>
-      <span class="idring" id="idRing"></span>
+      <!-- 状态环（官方资料卡右侧那枚）：三层同心弧，外=体力(蓝)/中=清洁(绿)/内=心情(橙)，
+           每弧按 0~100 画（数据 = /api/data 的 status，见 renderPetStatus）。
+           点它 = 展开/收起下面的三行数值（官方点环展开的那套交互）。 -->
+      <button class="idring" id="idRing" type="button"
+              aria-label="宠物状态（体力/清洁/心情）" title="体力 / 清洁 / 心情">
+        <svg viewBox="0 0 40 40" aria-hidden="true">
+          <circle class="trk" cx="20" cy="20" r="18.1"/>
+          <circle class="arc e" id="arcEnergy" cx="20" cy="20" r="18.1"/>
+          <circle class="trk" cx="20" cy="20" r="12.5"/>
+          <circle class="arc c" id="arcClean" cx="20" cy="20" r="12.5"/>
+          <circle class="trk" cx="20" cy="20" r="7.05"/>
+          <circle class="arc m" id="arcMood" cx="20" cy="20" r="7.05"/>
+        </svg>
+      </button>
+      </div>
+      <!-- 展开区：高度由 CSS 从 0 动画长出来（.idrows），里面 = 三行数值 + 底部 ^ 收起。
+           收起箭头放这里面，才能跟着一起长出来而不是"啪"地弹出来。 -->
+      <div class="idrows">
+        <div id="petRows"></div>
+        <button class="idfold" id="idFold" type="button" aria-label="收起">
+          <svg viewBox="0 0 24 12" aria-hidden="true"><path d="M3 9.5 L12 2.5 L21 9.5"/></svg>
+        </button>
+      </div>
     </div>
 
     <!-- 胶囊（官方结构：图标在胶囊【外面】且比胶囊大 22.3 vs 19.7dp；文字在胶囊内居中）
@@ -2480,7 +3075,7 @@ main > section[data-page]:not([data-page="main"]) > .plannote{
       </div>
       <div class="caps-row">
         <div class="cap" title="今日冒险"><img class="cico" src="/qp-icons/official/cap_compass.png" alt=""><div class="capbody"><span class="cval" id="advTxt">--</span></div></div>
-        <div class="cap" title="学习/打工" id="capSw"><img class="cico" src="/qp-icons/official/cap_cookie.png" alt=""><div class="capbody"><span class="cval" id="swTxt">--</span><span class="cunit" id="swLbl" hidden></span><div class="bar bar-split"><i id="swBarSchool"></i><i id="swBarWork"></i></div></div></div>
+        <div class="cap" title="今日学习+打工合计" id="capSw"><img class="cico" src="/qp-icons/official/cap_cookie.png" alt=""><div class="capbody"><span class="cval" id="swTxt">--</span><div class="bar"><i id="swBarTotal"></i></div></div></div>
         <div class="cap" title="经验日常"><img class="cico" src="/qp-icons/official/cap_diamond.png" alt=""><div class="capbody"><span class="cval" id="expTxt">--</span></div></div>
       </div>
     </div>
@@ -2496,11 +3091,11 @@ main > section[data-page]:not([data-page="main"]) > .plannote{
     <!-- 右功能栏（官方 x=414 y=335/405/495，各 50×70） -->
     <div class="flt funcbar" aria-label="调度器控制">
       <div class="fb-group">
-        <button class="fab" id="btnRunnerStart" title="启动调度器"><img class="fi" src="/qp-icons/ctrl/play.svg?v=3" alt=""><span class="ft">启动</span></button>
-        <button class="fab stop" id="btnRunnerStop" title="停止调度器"><img class="fi" src="/qp-icons/ctrl/stop.svg?v=3" alt=""><span class="ft">停止</span></button>
+        <button class="fab" id="btnRunnerStart" title="启动调度器"><img class="fi" src="/qp-icons/ctrl/play.svg?v=5" alt=""><span class="ft">启动</span></button>
+        <button class="fab stop" id="btnRunnerStop" title="停止调度器"><img class="fi" src="/qp-icons/ctrl/stop.svg?v=5" alt=""><span class="ft">停止</span></button>
       </div>
       <div class="fb-group">
-        <button class="fab ghost" id="btnShot" title="实时画面"><img class="fi" src="/qp-icons/ctrl/refresh.svg?v=3" alt=""><span class="ft">画面</span></button>
+        <button class="fab ghost" id="btnShot" title="实时画面"><img class="fi" src="/qp-icons/ctrl/refresh.svg?v=5" alt=""><span class="ft">画面</span></button>
       </div>
     </div>
 
@@ -2517,6 +3112,22 @@ main > section[data-page]:not([data-page="main"]) > .plannote{
         <span class="dmeta" id="runnerMeta"></span>
         </div>
       </div>
+
+    <!-- 切换房间背景的轻提示（样式 #sceneToast；文案由 JS sceneToast() 写） -->
+    <div id="sceneToast"></div>
+
+    <!-- 房间背景选择面板（点左上角黄衣圆钮打开；21 张缩略图，点一张即生效）。
+         绝对铺满视口（position:fixed，祖先没有 transform/filter 所以不会被 .home 收住），
+         只在总览页可见 —— 打开它的按钮本身也只在总览页。 -->
+    <div id="bgSheet" aria-hidden="true">
+      <div class="bgmask" data-bgclose></div>
+      <div class="bgpanel">
+        <div class="bghead"><span>房间背景</span><button type="button" data-bgclose>关闭</button></div>
+        <div class="bggrid" id="bgSheetGrid"></div>
+        <div class="bgtip">「自动」= 跟着当前任务换（喂食/洗澡/学习打工各一套）。长按左上角圆钮可直接切下一张。</div>
+      </div>
+    </div>
+
   </section><!-- /.home -->
 
 
@@ -2597,8 +3208,16 @@ main > section[data-page]:not([data-page="main"]) > .plannote{
   <section class="card" data-page="log">
     <div class="navhead">
       <button class="backbtn" data-back="main" title="返回总览"><img src="/qp-icons/official/off_l1_back.png" alt=""></button>
-      <span class="navtitle">实时日志</span>
+      <span class="navtitle" id="logTitle">实时日志</span>
     </div>
+    <!-- 日志页两个子页：实时日志（全部输出）/ 收益记录（每次学习·打工结算的收益）。
+         切换条常驻（两个子页都看得见），点它 = 换页；历史模型与设置页二级一致：
+         进收益记录 pushState(层级 2)，点"实时日志" history.back() 退栈。 -->
+    <div class="logctl" id="logSubtabs">
+      <button data-lsub="index" class="on" title="调度器全部输出">实时日志</button>
+      <button data-lsub="reward" title="每次学习/打工结算拿到的学分·属性·金币">收益记录</button>
+    </div>
+    <div id="logIndex">
     <div class="pgsec">
       <div class="pgsec-t">工具栏</div>
       <div class="pgsec-c">
@@ -2621,6 +3240,34 @@ main > section[data-page]:not([data-page="main"]) > .plannote{
         <div class="thumbs" id="shots"></div>
       </div>
     </div>
+    </div><!-- /#logIndex -->
+
+    <div id="logReward" class="hide">
+      <div class="pgsec" id="rwScopeSec">
+        <div class="pgsec-t">统计范围</div>
+        <div class="pgsec-c">
+          <!-- 选择器 + 口径说明**同一行**（同冒险页"标题+说明同行"的做法）：
+               之前拆成两行、卡内又写一遍"统计范围"，跟上面的灰标题重复，
+               且控件行下面留一大块空白 -->
+          <div class="logctl rwscope">
+            <span id="rwDateRow"></span>
+            <span class="logfoot" id="rwMeta"></span>
+          </div>
+        </div>
+      </div>
+      <div class="pgsec" id="rwSumSec">
+        <div class="pgsec-t">收益汇总</div>
+        <div class="pgsec-c">
+          <div class="rwsum" id="rwSum"></div>
+        </div>
+      </div>
+      <div class="pgsec">
+        <div class="pgsec-t">按次记录</div>
+        <div class="pgsec-c">
+          <div class="advlist" id="rwList"></div>
+        </div>
+      </div>
+    </div><!-- /#logReward -->
   </section>
 
 
@@ -2633,9 +3280,29 @@ main > section[data-page]:not([data-page="main"]) > .plannote{
 const $=s=>document.querySelector(s);
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 const TASKNAME={care:'护理',school:'学习',friend_care:'好友护理',gift_bag:'福袋',hire_friend:'雇佣好友',adventure:'冒险',visit:'踩踩',pk:'PK',work:'打工'};
-// 任务 -> 图标文件名（static/qp-icons/ 下，必须用 colored/ 里存在的名字）
-const TASKICON={care:'soap',school:'logo_study',friend_care:'emoji',gift_bag:'coin',
-  hire_friend:'logo_work',adventure:'logo_adventure',visit:'logo_hangout',pk:'logo_pk',work:'logo_work'};
+// 任务类型标签：循环=按间隔反复巡检；每日=每天定时一轮；主线=主任务组
+// （提到模块作用域：refreshData 的行渲染和首屏骨架 renderTaskSkeleton 都要用）
+const TTAG={care:'循环',friend_care:'循环',gift_bag:'循环',
+            visit:'每日',pk:'每日',
+            adventure:'主线',school:'主线',work:'主线',hire_friend:'主线'};
+// 首屏骨架：/api/state 还没回来时 #taskList 是空的，卡片只有标题那么高 →
+// 下面「功能栏与任务列表底部对齐」的 place() 会量到一个偏上的"列表底部"，
+// 命中 top<100 兜底把功能栏放到 319.3dp（低位），等数据渲染完再跳到真位置
+// —— 用户看到的"启动/停止/画面先在下面、过一会儿才跟列表底对齐"就是这个。
+// 这里按静态 TASKNAME 先铺**同结构**的占位行（行高只由 .mrow/.mname/.ttag/.mcb
+// 决定，跟状态文字无关），卡片高度首屏即到位，place() 一次就对。
+function renderTaskSkeleton(){
+  const tl=document.getElementById('taskList');
+  if(!tl||tl.children.length) return false;
+  tl.innerHTML=Object.keys(TASKNAME).map(k=>{
+    const tag=TTAG[k]?('<span class="ttag">'+TTAG[k]+'</span>'):'';
+    return '<div class="mrow">'
+      +'<span class="mname">'+(TASKNAME[k]||k)+'</span>'+tag
+      +'<span class="mcb on" data-k="'+k+'"></span></div>';
+  }).join('');
+  return true;
+}
+// 任务行的图标映射（TASKICON）随「删除任务名前的图标」一并移除，见 rowOf()。
 
 // 底部状态卡的图标：跟着「当前在干什么」换（冒险/学习/打工各一个图标）。
 // 图标全部取自官方素材库，两种来源别混：
@@ -2681,27 +3348,259 @@ function setRunIcon(key, stopped){
   el.style.filter=stopped?'grayscale(1) opacity(.55)':'';
 }
 // 把当前任务映射到房间场景，切 html[data-scene]（CSS 变量作用域要求写在 html 上）。
-// 场景图只有 4 套（main/feed/shower/record）；store 那张是纯天空渐变、不是房间，不用。
+// 背景库见下面的 SCENE_INFO：**5 套官方房间场景**（room-*，家/喂食/洗澡/学习/商店）
+// + **15 款官方「装扮 → 背景」家居背景**（home-*，从官方 APP 里逐张抓的预览，
+// 见 qqpet_assets/tools/extract_home_bgs.py 的由来与复现步骤）。
 // 映射依据：喂食->feed、洗澡/护理->shower、学习/记录类->record，其余回 main。
 // 注意 etaKind 是"上课/打工/冒险"这类进行中活动名，优先级高于队列里的当前任务名
 // （队列的 current 可能还是上一项，进行中活动才是"此刻在干什么"）。
 const SCENE_OF={care:'feed',friend_care:'feed',school:'record',work:'record',
                 hire_friend:'record',adventure:'main',visit:'main',pk:'main',gift_bag:'main'};
+// —— 背景库：键 = html[data-scene] 的取值 ——
+// file/dark：static/qp-icons/bg/<file>.jpg（dark 缺省 = 深色模式下沿用同一张，
+//   家居背景在官方 APP 里没有夜间版）；
+// sb/sbDark：该图**顶部实测色**，PWA 独立窗口的状态栏那条带取它（见 syncThemeColor）。
+//   色值只在这里维护一份；CSS `:root` 里的 --qp-room-*/--qp-sb-* 只当"JS 还没跑"的首帧兜底。
+const SCENE_INFO={
+  main:{name:'主房间',file:'room-main',dark:'room-main-dark',sb:'#D5A758',sbDark:'#A9722D'},
+  feed:{name:'喂食区',file:'room-feed',dark:'room-feed-dark',sb:'#CA9F5B',sbDark:'#C39145'},
+  shower:{name:'浴室',file:'room-shower',dark:'room-shower-dark',sb:'#E7BC6C',sbDark:'#A3651D'},
+  record:{name:'教室 / 打工',file:'room-record',dark:'room-record-dark',sb:'#CAA05C',sbDark:'#C18C3A'},
+  store:{name:'商店',file:'room-store',dark:'room-store-dark',sb:'#BAD2FE',sbDark:'#2A2E38'},
+  // 官方「装扮 → 背景」15 款（顺序照官方页面从上到下、左到右）
+  'home-yueer':{name:'月儿圆圆',file:'home-yueer',dark:'home-yueer-dark',sb:'#E0BA96',sbDark:'#252C46'},
+  'home-sunset':{name:'朝朝落霞',file:'home-sunset',dark:'home-sunset-dark',sb:'#E9EEFD',sbDark:'#B7ADB8'},
+  'home-starry':{name:'夕夕星河',file:'home-starry',dark:'home-starry-dark',sb:'#E6ECFE',sbDark:'#BFB0B7'},
+  'home-ocean':{name:'浪花泡泡鱼',file:'home-ocean',dark:'home-ocean-dark',sb:'#B2E1FB',sbDark:'#5F8FB8'},
+  'home-nordic':{name:'简约星阁',file:'home-nordic',dark:'home-nordic-dark',sb:'#A9AAB5',sbDark:'#C5BAB3'},
+  'home-coast':{name:'意式海岸',file:'home-coast',dark:'home-coast-dark',sb:'#EFE4E2',sbDark:'#D7BBA1'},
+  'home-geo':{name:'撞色几何',file:'home-geo',dark:'home-geo-dark',sb:'#F7D374',sbDark:'#D4A976'},
+  'home-mint':{name:'薄荷清新',file:'home-mint',dark:'home-mint-dark',sb:'#BDBEBA',sbDark:'#D1CCC1'},
+  'home-sunny':{name:'暖阳午后',file:'home-sunny',dark:'home-sunny-dark',sb:'#ECD0C0',sbDark:'#DCC7B9'},
+  'home-greyblue':{name:'沉稳灰蓝',file:'home-greyblue',dark:'home-greyblue-dark',sb:'#99A6B6',sbDark:'#C0BCBE'},
+  'home-pink':{name:'粉色童话',file:'home-pink',dark:'home-pink-dark',sb:'#FBDEDA',sbDark:'#F2C5BF'},
+  'home-green':{name:'绿色童话',file:'home-green',dark:'home-green-dark',sb:'#B9D1BA',sbDark:'#CAC9AF'},
+  'home-blue':{name:'蓝色童话',file:'home-blue',dark:'home-blue-dark',sb:'#CCDDED',sbDark:'#D1D8E0'},
+  'home-snow':{name:'蓝色雪花',file:'home-snow',dark:'home-snow-dark',sb:'#7A9CBE',sbDark:'#6383A2'},
+  'home-yellowpaw':{name:'黄色爪爪',file:'home-yellowpaw',dark:'home-yellowpaw-dark',sb:'#DAA95D',sbDark:'#CEA367'},
+  // 官方「宠物职业小镇」7 个打工地点主题（到对应职业解锁）+ 高级学院毕业奖励
+  // （素材包来源同上一批：vas_material_folder/petHomeBackground.<id>.zip 的 normal_bg{,_dark}）
+  'career-caihong':{name:'彩虹画室',file:'career-caihong',dark:'career-caihong-dark',sb:'#DFCFCB',sbDark:'#BC9076'},
+  'career-miwu':{name:'迷雾侦探所',file:'career-miwu',dark:'career-miwu-dark',sb:'#8E8B7E',sbDark:'#3D3630'},
+  'career-zhuying':{name:'竹影武馆',file:'career-zhuying',dark:'career-zhuying-dark',sb:'#8499A0',sbDark:'#2F4064'},
+  'career-shanyao':{name:'闪耀星屋',file:'career-shanyao',dark:'career-shanyao-dark',sb:'#D7D2F0',sbDark:'#2C2664'},
+  'career-yunduo':{name:'云朵梦舍',file:'career-yunduo',dark:'career-yunduo-dark',sb:'#106AC6',sbDark:'#101A62'},
+  'career-xingchen':{name:'星尘魔法塔',file:'career-xingchen',dark:'career-xingchen-dark',sb:'#4E3163',sbDark:'#2C2352'},
+  'career-gulu':{name:'咕噜厨房',file:'career-gulu',dark:'career-gulu-dark',sb:'#E8CAAF',sbDark:'#A17559'},
+  'career-graduate':{name:'高级学院毕业',file:'career-graduate',dark:'career-graduate-dark',sb:'#ECD4CB',sbDark:'#CEC9BA'},
+};
+const SCENE_ORDER=Object.keys(SCENE_INFO);   // 长按循环顺序 + 选择面板顺序（= 上面声明顺序）
 let lastScene='';
-function applyScene(curKey, etaKind){
+// 最近一帧的任务场景输入：手动切回「自动」时要立刻按它重算，不必等下一次数据刷新。
+let autoCurKey='', autoEtaKind='';
+function computeScene(curKey, etaKind){
   let scene='main';
   if(etaKind.indexOf('洗澡')>=0||etaKind.indexOf('护理')>=0) scene='shower';
   else if(etaKind.indexOf('上课')>=0||etaKind.indexOf('学习')>=0) scene='record';
   else if(etaKind.indexOf('打工')>=0) scene='record';
   else if(curKey) scene=SCENE_OF[curKey]||'main';
-  if(scene!==lastScene){
-    lastScene=scene;
-    document.documentElement.setAttribute('data-scene',scene);  // 必须写 html（见 CSS 注释）
-    // 状态栏色跟着场景走（色值只定义在 CSS 的 --qp-statusbar，这里读出来即可，
-    // 不在 JS 里重复维护一份色表）
-    if(curTab==='main') syncThemeColor('main');
-  }
+  return scene;
 }
+function isDarkTheme(){
+  return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+}
+// 背景图版本号：**换图后必须 +1**。/qp-icons/* 走 Cache-Control: max-age=3600，
+// 同名覆盖时浏览器一小时以内仍显示旧图（本机踩过：新素材已上线但页面还是旧的）。
+// 房间场景 + 家居背景一共 25 张，统一用这一个版本号（CSS 里的静态声明也带同一个）。
+const BG_VER='5';
+function sceneBgFile(key){
+  const info=SCENE_INFO[key]; if(!info) return '';
+  return (isDarkTheme() && info.dark) ? info.dark : info.file;
+}
+function sceneBgUrl(key){
+  const file=sceneBgFile(key);
+  return file ? "url('/qp-icons/bg/"+file+".jpg?v="+BG_VER+"')" : '';
+}
+function setSceneAttr(scene){
+  if(scene===lastScene) return;
+  lastScene=scene;
+  const root=document.documentElement, info=SCENE_INFO[scene];
+  root.setAttribute('data-scene',scene);  // 必须写 html（见 CSS 注释）
+  // 背景图与状态栏色都**内联写到 html**：CSS 里那套 --qp-room-*/--qp-sb-* 只够描述 5 套
+  // 房间场景；家居背景 15 套 × 明/暗 = 30 张，逐个写 CSS 规则会重复两份表。
+  // 明暗两张图来自官方素材包（petHomeBackground.<id>.zip 里的 normal_bg / normal_bg_dark），
+  // 暗版是夜灯/月光版、不是同一张调暗，所以深色模式必须换图（sceneBgFile 用 info.dark）。
+  if(info){
+    root.style.setProperty('--qp-room', sceneBgUrl(scene));
+    const sb=(isDarkTheme() && info.sbDark) ? info.sbDark : info.sb;
+    if(sb) root.style.setProperty('--qp-statusbar', sb);
+  }
+  if(curTab==='main') syncThemeColor('main');
+}
+function applyScene(curKey, etaKind){
+  autoCurKey=curKey; autoEtaKind=etaKind||'';
+  if(sceneManual!=='auto') return;   // 手动固定背景时不跟随任务（见 selectScene）
+  setSceneAttr(computeScene(curKey, autoEtaKind));
+}
+
+// ---- 房间背景手动切换（总览页左上角第 1 个圆钮 #btnScene）----
+// 官方那个位置是"返回"，但总览页就是根页面（点了永远早退，曾是置灰死键），
+// 现改为换背景：**点按 = 打开选择面板**（21 张：自动 + 5 房间 + 15 家居），
+// **长按 = 直接切下一张**（快速预览用）。
+// **手动选择必须暂停"按当前任务自动换背景"**，否则每 6 秒一次的 refreshData 会立刻
+// 把背景改回任务场景 —— 用户看到的就是"点了没用、自己弹回去"。
+// 选择存 localStorage('qpet_scene')，刷新/重开 PWA 后保持；选回「自动」才恢复跟随任务。
+let sceneManual='auto';
+try{
+  const sv=localStorage.getItem('qpet_scene');
+  if(sv==='auto'||SCENE_INFO[sv]) sceneManual=sv;
+}catch(e){}
+let sceneToastTimer=null;
+function sceneToast(msg){
+  const el=$('#sceneToast'); if(!el) return;
+  el.textContent='房间背景：'+msg;
+  el.classList.add('on');
+  if(sceneToastTimer) clearTimeout(sceneToastTimer);
+  sceneToastTimer=setTimeout(()=>el.classList.remove('on'),1600);
+}
+function sceneName(key){
+  return key==='auto' ? '自动（跟随任务）' : ((SCENE_INFO[key]||{}).name||key);
+}
+// 按当前 sceneManual 重设背景（初始首帧、深色模式切换、选完都走它）
+function applyManualScene(){
+  lastScene='';            // 强制重设（深色切换时场景键没变、但图要换）
+  if(sceneManual==='auto') applyScene(autoCurKey, autoEtaKind);
+  else setSceneAttr(sceneManual);
+  const btn=$('#btnScene');
+  if(btn) btn.title='房间背景（点按选择 / 长按切下一张）· 当前：'+sceneName(sceneManual);
+}
+function markSceneSheet(){
+  const grid=$('#bgSheetGrid'); if(!grid) return;
+  grid.querySelectorAll('.bgtile').forEach(t=>t.classList.toggle('on', t.dataset.bg===sceneManual));
+}
+function selectScene(key, quiet){
+  sceneManual=key;
+  try{ localStorage.setItem('qpet_scene',key); }catch(e){}
+  applyManualScene();
+  markSceneSheet();
+  if(!quiet) sceneToast(sceneName(key));
+}
+function cycleScene(){
+  const i=SCENE_ORDER.indexOf(sceneManual);   // sceneManual==='auto' 时 i=-1 → 从第一张开始
+  selectScene(i+1<SCENE_ORDER.length ? SCENE_ORDER[i+1] : 'auto');
+}
+// —— 选择面板：21 张缩略图，点一张即生效（同时存 localStorage）——
+function buildSceneSheet(){
+  const grid=$('#bgSheetGrid'); if(!grid||grid.dataset.built) return;
+  let html='<button type="button" class="bgtile" data-bg="auto">'
+         + '<span class="bgthumb autothumb">自动</span>'
+         + '<span class="bgname">跟随任务</span></button>';
+  SCENE_ORDER.forEach(k=>{
+    const info=SCENE_INFO[k];
+    // 缩略图跟着深浅色取对应文件（房间场景有 -dark 版），跟实际应用的那张保持一致
+    html+='<button type="button" class="bgtile" data-bg="'+k+'">'
+        + '<img class="bgthumb" loading="lazy" src="/qp-icons/bg/'+sceneBgFile(k)+'.jpg?v='+BG_VER+'" alt="">'
+        + '<span class="bgname">'+info.name+'</span></button>';
+  });
+  grid.innerHTML=html;
+  grid.dataset.built='1';
+  markSceneSheet();
+}
+function openSceneSheet(){
+  buildSceneSheet();
+  const el=$('#bgSheet'); if(!el) return;
+  el.classList.add('on');
+  el.setAttribute('aria-hidden','false');
+}
+function closeSceneSheet(){
+  const el=$('#bgSheet'); if(!el) return;
+  el.classList.remove('on');
+  el.setAttribute('aria-hidden','true');
+}
+// 圆钮绑定：点按开面板、长按（500ms）切下一张。
+// 长按后浏览器仍会补一次 click，用 lpFired 吃掉它（否则会"切一张又弹出面板"）。
+(function setupSceneBtn(){
+  const btn=$('#btnScene'); if(!btn) return;
+  let lpTimer=null, lpFired=false;
+  const cancelLp=()=>{ if(lpTimer){ clearTimeout(lpTimer); lpTimer=null; } };
+  btn.addEventListener('pointerdown', ()=>{
+    lpFired=false; cancelLp();
+    lpTimer=setTimeout(()=>{ lpTimer=null; lpFired=true; cycleScene(); }, 500);
+  });
+  ['pointerup','pointerleave','pointercancel'].forEach(ev=>btn.addEventListener(ev,cancelLp));
+  btn.addEventListener('contextmenu', e=>e.preventDefault());   // 别弹系统菜单
+  btn.addEventListener('click', e=>{
+    e.preventDefault(); e.stopPropagation();
+    if(lpFired){ lpFired=false; return; }
+    openSceneSheet();
+  });
+  const sheet=$('#bgSheet');
+  if(sheet) sheet.addEventListener('click', e=>{
+    const tile=e.target.closest && e.target.closest('.bgtile');
+    if(tile){ selectScene(tile.dataset.bg); closeSceneSheet(); return; }
+    if(e.target.closest && e.target.closest('[data-bgclose]')) closeSceneSheet();
+  });
+})();
+
+// ---- 宠物状态环 + 状态面板（官方资料卡那枚三层同心环） ----
+// 三圈固定对应：外=体力(蓝 #--energy)、中=清洁(绿 --clean)、内=心情(橙 --mood)，
+// 每圈按 0~100 画弧（未满部分是灰底 trk）。数据 = /api/data 的 status
+// （runs/status_cache.json，护理巡检时 OCR 状态面板写入）；没读到 → dashoffset=整圈
+// （只看见灰底），面板里数值显示 '--'。
+// 面板是只读展示：官方点环展开的体力/清洁/心情 + 每行右侧 › 进详情，这里不做假箭头。
+const PET_STATS=[['energy','体力','e'],['clean','清洁','c'],['mood','心情','m']];
+function petVal(st,k){
+  const raw=(st||{})[k];
+  if(raw===null||raw===undefined||raw==='') return null;
+  const n=Number(raw);
+  return isFinite(n)?n:null;
+}
+function setRingArc(id, v){
+  const el=document.getElementById(id); if(!el) return;
+  const r=parseFloat(el.getAttribute('r'))||0, C=2*Math.PI*r;
+  const pct=(v===null)?0:Math.max(0,Math.min(100,v));
+  el.setAttribute('stroke-dasharray', C.toFixed(2));
+  el.setAttribute('stroke-dashoffset', (C*(1-pct/100)).toFixed(2));
+}
+// 三行：图标(官方 status_*.png，从真机截图上抠的) + 名称 + 数值 + 进度条 + 右侧 ›。
+// › 在官方是"进体力值/清洁值/心情值详情页"，本工具没有那些页面，所以只作视觉还原
+// （CSS 里 pointer-events:none，避免做成点了没反应的假按钮）。
+function renderPetRows(st){
+  const box=$('#petRows'); if(!box) return;
+  box.innerHTML=PET_STATS.map(([k,name,cls])=>{
+    const v=petVal(st,k), pct=(v===null)?0:Math.max(0,Math.min(100,v));
+    return '<div class="prow">'
+      +'<img class="pico" src="/qp-icons/official/status_'+k+'.png" alt="">'
+      +'<span class="pname">'+name+'</span>'
+      +'<span class="pval">'+(v===null?'--':v)+'</span>'
+      +'<span class="pbar"><i class="'+cls+'" style="width:'+pct+'%"></i></span>'
+      +'<span class="pchev">›</span>'
+      +'</div>';
+  }).join('');
+}
+function renderPetStatus(st){
+  st=st||{}; window.__petStatus=st;
+  const v=PET_STATS.map(([k])=>petVal(st,k));
+  setRingArc('arcEnergy', v[0]); setRingArc('arcClean', v[1]); setRingArc('arcMood', v[2]);
+  const btn=$('#idRing');
+  if(btn) btn.title='体力 '+(v[0]===null?'--':v[0])+' · 清洁 '+(v[1]===null?'--':v[1])
+    +' · 心情 '+(v[2]===null?'--':v[2])+'（点击展开/收起）';
+  renderPetRows(st);   // 展开着的时候跟着 6 秒刷新一起更新
+}
+// 展开/收起：官方是"点状态环 → 胶囊原位向下展开"，底部 ^ 收起（真机实测 2026-09-28）。
+function togglePetCard(open){
+  const card=$('#idCard'); if(!card) return;
+  const want=(open===undefined)? !card.classList.contains('open') : !!open;
+  card.classList.toggle('open', want);
+  if(want) renderPetRows(window.__petStatus||{});
+}
+(function setupPetRing(){
+  const btn=$('#idRing'); if(!btn) return;
+  btn.addEventListener('click', e=>{ e.preventDefault(); e.stopPropagation(); togglePetCard(); });
+  const fold=$('#idFold');
+  if(fold) fold.addEventListener('click', e=>{ e.preventDefault(); e.stopPropagation(); togglePetCard(false); });
+})();
+
 let etaRemain=null, etaClock='', schedOn=false;
 let logAuto=true, logFilter='';
 try{ logAuto = localStorage.getItem('qpet_logAuto')!=='0'; }catch(e){}
@@ -2716,7 +3615,10 @@ function renderData(d){
   // 头部
   const dot=$('#schedDot');
   dot.className='avatar '+(d.scheduler.alive?'on':'off');
-  const _ring=$('#idRing'); if(_ring) _ring.className='idring'+(d.scheduler.alive?'':' off');
+  // 状态环现在画的是**宠物体力/清洁/心情**（官方三层同心环），不再兼任"调度器在跑"的
+  // 指示灯——那个信息由左侧头像的绿/红描边 + 下面这行文案承担（历史实现把环涂红，
+  // 与官方的含义冲突，用户指出后改掉）。
+  renderPetStatus(d.status||{});
   $('#schedTxt').textContent=d.scheduler.alive?('运行中 · 已跑 '+(d.scheduler.uptime||'')):'未运行';
   // 调度器卡片
   if($('#runnerState')){
@@ -2742,7 +3644,16 @@ function renderData(d){
     wdHtml='今日：学习 '+td.learn_min+' 分 · 打工 '+td.work_min+' 分 · 合计 '+(td.total_min??(td.learn_min+td.work_min))+' 分 · '+eff+nxt;
   }
   const rs=$('#runnerState'), rh=$('#runnerHint'), rsub=$('#runnerSub');
-  const curTask=(d.queue&&d.queue.current)?String(d.queue.current):'';
+  // 队列状态是不是"当前这个调度器进程"写的：重启后上一轮写在文件里的
+  // pending（如"上课"）会一直留着，照读会让界面继续显示"上课中"（用户实报：
+  // 宠物被召回、停掉调度器再启动，显示还是在上课）。服务端 mark_starting()
+  // 会写 starting:true + 本次 PID，这里对不上就当"启动检查中"。
+  // 宽限期（10 分钟）：legacy 引擎不写队列状态，不能让"启动中"永远挂着。
+  const q=d.queue||{}, schInfo=d.scheduler||{};
+  const qStale=!!(q.starting||q.stopped||(q.pid&&schInfo.pid&&q.pid!==schInfo.pid));
+  const upSecs=schInfo.uptime?schInfo.uptime.split(':').reduce((a,b)=>a*60+Number(b),0):0;
+  const qStarting=qStale&&upSecs<600;
+  const curTask=(!qStale&&q.current)?String(q.current):'';
   const etaKind=(d.work_eta&&d.work_eta.kind)?String(d.work_eta.kind):'';
   // 状态 key：图标与文案共用同一个，避免出现「冒险中」配着福袋图标这种错位。
   //   ① remaining>0 的 work_eta = 主任务活动真在进行（带倒计时，最准）
@@ -2760,6 +3671,14 @@ function renderData(d){
     rsub.textContent='已停止：手机不会被自动操作；随时可再启动';
     $('#workSub').innerHTML=wdHtml;
     setRunIcon(null, true);
+  }else if(qStarting){
+    // 刚起来/上一轮留下的状态：调度器一启动会先出门实测宠物当前状态，
+    // 实测完写出带自己 PID 的状态后才显示"上课中/打工中"等真实结论
+    rs.textContent='启动中';
+    rh.textContent=d.last_line?d.last_line.replace(/^\[[\d:]+\]\s*/,'').slice(0,60):'启动检查中…';
+    $('#workSub').innerHTML=wdHtml;
+    rsub.textContent='';
+    setRunIcon(null);
   }else if(busyEta){
     rs.textContent=busyEta+'中';
     rh.textContent='预计 '+etaClock+' 结束';
@@ -2793,76 +3712,119 @@ function renderData(d){
   $('#pkBar').style.width=(pp!=null?Math.min(100,pp/ppMax*100):0)+'%';
   const av=pg.adventure&&pg.adventure.learned!=null?pg.adventure.learned:0;
   $('#advTxt').textContent=av+'/'+(cfg.adventure_times||1);
-  // 今日学习 / 打工（合并一张卡：两者共享同一份合计预算，放一起才看得出分配）
-  // 主数值 = 学习节数 + 打工次数（当前正在进行的那一项 +1）；进度条分两段叠加显示
-  // 学习/打工占比。注意 kind 必须参与判断——work_eta 是"上课/打工/冒险"共用模板，
+  // 今日学习+打工（一个胶囊只显示【合计总时长】小时数，不再区分学习/打工）。
+  // 数据 = school_progress.study_secs + work_progress.work_secs（秒，各自累计；
+  // 学习/打工的明细只在 title 悬浮提示与统计页里看，胶囊上不分开显示）。
+  // 主数值 = "已用/目标"（如 7.5/12h），进度条 = 单段橙条按 已用/目标 填充
+  //（原来是学习橙+打工蓝两段叠加，用户要求不再区分 → 已合并成一条）。
+  // 目标（分母）取当天的【合计停止点】：设置页只暴露一个值（stop_total_hours，
+  // 后端由 efficiency_tier2_hours / daily_hour_limit / work_stop_hours 折算，
+  // 保存时三键同值），这里直接用它；老配置三项不一致时退回三者里 >0 的最大值。
+  // 不能拿 study_quota+work_quota 当分母：两者都放开成 24 时等于 48h，条永远是空的
+  //（实测配额 24+24、打工 10h 时蓝段只有 21%，看不出进度）；停止点都没配时才退回配额合计。
+  // 注意 kind 仍要参与判断——work_eta 是"上课/打工/冒险"共用模板，
   // 只判有无会把"正在上课"错算成"正在打工"（曾显示 0+1 实际在上课）。
   // etaKind 已在上面状态卡那段声明（图标与文案共用同一个 key）
   const busy=(schedOn&&etaRemain!=null);
   const hrs=s=>((s||0)/3600).toFixed(1).replace(/\.0$/,'');
   const sc=pg.school&&pg.school.learned!=null?pg.school.learned:0;
   const scHrs=Number(hrs(pg.school&&pg.school.study_secs));
-  const scQuota=cfg.study_quota_hours||0;
   const wk=pg.work&&pg.work.learned!=null?pg.work.learned:0;
   const wkHrs=Number(hrs(pg.work&&pg.work.work_secs));
-  const wkQuota=cfg.work_quota_hours||0;
   const scBusy=busy&&etaKind.indexOf('上课')>=0;
   const wkBusy=busy&&etaKind.indexOf('打工')>=0;
-  // 主数值：学习N节(+1) / 打工M次(+1)；两者都为0且无进行中时简显示 0
-  const scTxt=sc+(scBusy?1:0), wkTxt=wk+(wkBusy?1:0);
-  $('#swTxt').textContent=(scBusy||sc>0||wkBusy||wk>0)
-    ? ('学 '+scTxt+' · 工 '+wkTxt) : '0';
-  // 总预算 = 学习配额 + 打工配额（两者共享）；进度条按"已用/总预算"分两段
-  const totalQuota=scQuota+wkQuota;
-  const totalUsed=scHrs+wkHrs;
-  const pct=v=>totalQuota?Math.min(100,Math.max(0,v/totalQuota*100)):0;
-  $('#swBarSchool').style.width=pct(scHrs)+'%';
-  $('#swBarWork').style.width=pct(wkHrs)+'%';
-  const swLblTxt='学习 / 打工'
-    +(totalQuota?(' · '+totalUsed.toFixed(1).replace(/\.0$/,'')+'/'+totalQuota+'h'):'');
-  $('#swLbl').textContent=swLblTxt;
-  // 胶囊太窄放不下，长文案转到 title 上（悬浮可见）
-  const _capSw=$('#capSw'); if(_capSw) _capSw.title='今日 '+swLblTxt;
-  $('#swTxt').title='学习 '+sc+' 节（'+scHrs+'h'
-    +(scQuota?('/'+scQuota+'h'):'')+'）· 打工 '+wk+' 次（'+wkHrs+'h'
-    +(wkQuota?('/'+wkQuota+'h'):'')+'）'
+  // 合计小时：先把两段秒数相加再换算，避免各自 toFixed(1) 后相加的舍入误差
+  const totalHrs=Number(hrs(((pg.school&&pg.school.study_secs)||0)
+                            +((pg.work&&pg.work.work_secs)||0)));
+  // 合计停止点（小时）：>0 才有效（0 = 不限，不参与取上限）
+  const edt=d.editable||{};
+  const stopPts=[edt.stop_total_hours,edt.efficiency_tier2_hours,edt.daily_hour_limit,
+                 edt.work_stop_hours].map(Number).filter(v=>v>0);
+  const targetHrs=stopPts.length?Math.max.apply(null,stopPts)
+    :((Number(cfg.study_quota_hours)||0)+(Number(cfg.work_quota_hours)||0));
+  $('#swTxt').textContent=totalHrs+'h'+(targetHrs?('/'+targetHrs+'h'):'');
+  $('#swBarTotal').style.width=(targetHrs
+    ?Math.min(100,Math.max(0,totalHrs/targetHrs*100)):0)+'%';
+  // 胶囊太窄放不下，长文案转到 title 上（悬浮/长按可见）
+  const swTip='今日学习+打工合计 '+totalHrs+' 小时'
+    +(targetHrs?('（目标 '+targetHrs+'h = 合计停止点）'):'')
+    +' · 学习 '+sc+' 节 '+scHrs+'h / 打工 '+wk+' 次 '+wkHrs+'h'
     +((scBusy||wkBusy)?(' · 正在进行：'+(d.work_eta.kind||'')):'');
+  const _capSw=$('#capSw'); if(_capSw) _capSw.title=swTip;
+  $('#swTxt').title=swTip;
   const ed=(pg.exp_daily&&pg.exp_daily.done)?'✓ 完成':'未完成';
   $('#expTxt').textContent=ed;
   // 队列：MAA 风格任务开关列表（勾选=启用该任务，写入 config 下轮生效）
-  const q=d.queue||{}, qt=q.tasks||{};
-  const qLive=(d.scheduler||{}).alive;
+  // q 是上面判过新鲜度的队列状态：重启后文件里还是上一轮的内容（含"上课 待结算"），
+  // 这类状态按"没在跑"渲染（用配置里的启用状态），别把上一轮的任务当现状
+  const qt=q.tasks||{};
+  const qLive=(d.scheduler||{}).alive && !qStale;
   const qOrder=(cfg.task_order||[]);
   const qRank=k=>{const i=qOrder.indexOf(k);return i<0?999:i;};
   let rows='';
-  const cur=(q.current||'');
+  const cur=qStale?'':(q.current||'');
   const curMap={'上课':'school','学习':'school','打工':'work','冒险':'adventure',
                 '护理':'care','踩踩':'visit','PK':'pk','好友护理':'friend_care',
                 '福袋':'gift_bag','雇佣好友':'hire_friend'};
   const curKey=cur?(curMap[cur]||Object.keys(TASKNAME).find(k=>TASKNAME[k]===cur)||''):null;
+  // 主任务组"延时收尾"期间（宠物在游戏里上课/打工/冒险/被雇佣打工），调度器已经回主页去跑
+  // 别的支线了，所以 **current 是空的**，只有 pending 描述（'雇佣打工' 等）—— 早先只认 current，
+  // 于是"宠物正在被雇佣打工、列表里雇佣好友那一行却不亮"（用户实报）。
+  // 优先用调度器新写的 pending_key（精确）；老调度器没这个字段时按描述兜底映射。
+  const pendMap={'上课':'school','打工':'work','雇佣打工':'hire_friend','冒险':'adventure'};
+  // 描述优先于 pending_key：描述是场景写 pending 时留下的原文，最可靠；
+  // pending_key 是调度器额外写的键（老进程没有、极少数路径可能认错键），只作兜底。
+  const pendKey=pendMap[q.pending]||q.pending_key||'';
   applyScene(curKey, (d.work_eta&&d.work_eta.kind)?String(d.work_eta.kind):'');
-  // 任务类型标签：循环=按间隔反复巡检；每日=每天定时一轮；主线=主任务组
-  const TTAG={care:'循环',friend_care:'循环',gift_bag:'循环',
-              visit:'每日',pk:'每日',
-              adventure:'主线',school:'主线',work:'主线',hire_friend:'主线'};
+  // 任务行的"目标"副标题：好友护理/雇佣好友这类要指名道姓的任务，在任务名后面
+  // 跟一个浅色小字（用户："好友护理后面能显示护理的谁吗"）。数据来自设置页快照，
+  // 改配置后下一轮 /api/data 就跟着变；名字过长由 CSS 省略号截断。
+  const _ed=d.editable||{};
+  const _first=c=>String(c||'').split(/[,，、]/)[0].trim();
+  const TASKSUB={
+    friend_care:_first(_ed.friend_care_name),
+    hire_friend:_first(_ed.hire_name||_ed.hire_friend_name),
+  };
   const rowOf=(k,on,st,nx)=>{
     const isRun=curKey&&k===curKey;
-    let det;
+    const isPend=pendKey&&k===pendKey;      // 宠物正在做、等收尾结算
+    // 行右侧状态：只给"有信息量"的几种写字 —— 正常可执行留空（每行都挂"可执行"太吵），
+    // 有等待点就给时间（等待 · 14:03），跑着的、跑完的、今天收工的、禁用的各一句。
+    const sub=on?(TASKSUB[k]||''):'';   // 禁用行不显示对象（那行本来就不跑）
+    let det='';
     if(!on) det='<span class="off-t">已禁用</span>';
-    else if(st==='cfg') det=on==='cfg'?'':'已启用';
-    else if(isRun) det='<span class="run">▶ 执行中</span>';
-    else if(st==='ready') det='可执行';
-    else if(st==='waiting') det=(qt[k]&&qt[k].next)?('等待 · '+qt[k].next.slice(11,16)):'等待';
-    else if(st==='done') det='✓ 今日完成';
+    else if(isRun) det='<span class="run">执行中</span>';
+    else if(isPend) det='<span class="run">进行中</span>';
+    else if(st==='waiting') det=(qt[k]&&qt[k].next)?('等待 '+qt[k].next.slice(11,16)):'等待';
+    else if(st==='done') det='<span class="done">✓ 今日完成</span>';
     else if(st==='dead') det='今日结束';
-    else det='—';
+    // 带"对象"的行（好友护理/雇佣好友）可用宽度只剩 ~100u：状态压成极简形式
+    //（时间 / ✓ / —），把位置让给对象名；"跑着"这件事由任务名后的 ▶ 表示（见 runMark）。
+    if(sub&&det){
+      if(isRun||isPend) det='';
+      else if(st==='waiting') det=(qt[k]&&qt[k].next)?qt[k].next.slice(11,16):'';
+      else if(st==='done') det='<span class="done">✓</span>';
+      else if(st==='dead') det='—';
+    }
     const done=(st==='done'||st==='dead');
     const tag=TTAG[k]?('<span class="ttag">'+TTAG[k]+'</span>'):'';
     // 按需求：右侧的"已启用/已禁用"状态文字已移除，
     // 勾选框从左侧移到原状态文字的位置（最右）。
-    return '<div class="mrow'+(done?' done':'')+(isRun?' run':'')+'">'
-      +'<img class="qico" src="/qp-icons/'+(TASKICON[k]||'coin')+'-24.png" alt="">'
-      +'<span class="mname'+(on?'':' off')+'">'+(TASKNAME[k]||k)+'</span>'+tag
+    // 任务名前的彩色图标（img.qico + TASKICON 映射）也已按用户要求删除，
+    // 任务行只剩「名称 + 类型标签 + 勾选框」，别再往行首加图标。
+    // 两种"活跃"（isRun 执行中 / isPend 进行中）用同一个高亮类：
+    // 靠"高亮行上下留 1.5u 间隙"避免相邻两条糊成一片（用户明确不要深浅分级那版）
+    return '<div class="mrow'+(done?' done':'')+((isRun||isPend)?' run':'')+(on?'':' off')+'">'
+      +'<span class="mname'+(on?'':' off')+'">'+(TASKNAME[k]||k)+'</span>'
+      // 选中/进行中的 ▶ 紧跟在任务名后面（用户："那个被选中的箭头放到任务名的后面去"）
+      +((isRun||isPend)?('<span class="marrow" title="'+(isPend?'进行中（等收尾结算）':'正在执行')+'">▶</span>'):'')
+      +tag
+      // 对象名与状态文字包成"贴右一簇"：auto 边距只加在簇上，这样有对象/没对象的行
+      // 右缘都对齐（早先对象名跟在任务名后面 → 看起来像没右对齐，用户实报）
+      +'<span class="mright">'
+      +(sub?('<span class="msub" title="'+esc(sub)+'">'+esc(sub)+'</span>'):'')
+      +(det?('<span class="mdet">'+det+'</span>'):'')
+      +'</span>'
       +'<span class="mcb'+(on&&st!=='disabled'?' on':'')+'" data-k="'+k+'"></span></div>';
   };
   if(qLive){
@@ -2912,8 +3874,7 @@ function renderData(d){
 
 async function refreshData(){
   try{ renderData(await j('/api/data')); }
-  catch(e){ $('#schedDot').className='avatar off'; $('#schedTxt').textContent='连接失败';
-    const _r2=$('#idRing'); if(_r2) _r2.className='idring off'; }
+  catch(e){ $('#schedDot').className='avatar off'; $('#schedTxt').textContent='连接失败'; }
 }
 
 function svgSet(id,inner){const el=document.getElementById(id);if(el)el.innerHTML=inner;}
@@ -3168,6 +4129,140 @@ async function refreshLogs(){
   }catch(e){}
 }
 
+// ---- 日志页子页：实时日志（全部输出） / 收益记录（每次学习·打工结算） ----
+// 历史模型与设置页二级完全一致（navDepth：总览 0 / 内页 1 / 二级 2）：
+//   进收益记录 pushState（1→2）、点"实时日志"或侧滑 history.back() 退栈（2→1）。
+// **"返回"类操作绝不能 pushState**——按钮压栈、手势退栈方向相反，会退不回去
+// （设置页踩过：一条 6 页路径侧滑要退 5 次，见 INTEGRATION.md 第十二轮）。
+function showLogIndex(skipHistory){
+  const a=document.getElementById('logIndex'), b=document.getElementById('logReward');
+  if(a) a.classList.remove('hide');
+  if(b) b.classList.add('hide');
+  window.__logSub=null;
+  const t=document.getElementById('logTitle'); if(t) t.textContent='实时日志';
+  document.querySelectorAll('#logSubtabs button')
+    .forEach(x=>x.classList.toggle('on', x.dataset.lsub==='index'));
+  if(skipHistory) return;
+  if(navDepth>=2){ navDepth=1; try{ history.back(); }catch(e){} }   // 退栈，不是再压一条
+}
+function openLogReward(skipHistory){
+  const a=document.getElementById('logIndex'), b=document.getElementById('logReward');
+  if(!a||!b) return;
+  // 已经在收益记录子页（再点一次切换条/定时刷新）不能重复压栈
+  if(!skipHistory && window.__logSub==='reward') return;
+  if(!skipHistory){
+    try{ history.pushState({tab:'log',sub:'reward'}, '', '?tab=log&sub=reward'); }catch(e){}
+    navDepth=2;
+  }
+  a.classList.add('hide'); b.classList.remove('hide');
+  window.__logSub='reward';
+  const t=document.getElementById('logTitle'); if(t) t.textContent='收益记录';
+  document.querySelectorAll('#logSubtabs button')
+    .forEach(x=>x.classList.toggle('on', x.dataset.lsub==='reward'));
+  refreshRewards();
+}
+document.querySelectorAll('#logSubtabs button').forEach(b=>b.onclick=()=>{
+  if(b.dataset.lsub==='reward') openLogReward(); else showLogIndex();
+});
+
+const RW_ICON={school:'/qp-icons/official/study_book.png', work:'/qp-icons/official/work_coin.png'};
+const RW_NAME={school:'学习', work:'打工'};
+async function refreshRewards(){
+  try{
+    const d=await j('/api/rewards'+(window.__rwDate?'?date='+encodeURIComponent(window.__rwDate):''));
+    renderRewards(d);
+  }catch(e){}
+}
+function rwAttrs(a){ return ['力量','智力','魅力'].filter(k=>a&&a[k]).map(k=>k+'+'+a[k]).join(' '); }
+function renderRewards(d){
+  window.__rw=d;
+  const meta=$('#rwMeta'), sum=$('#rwSum'), list=$('#rwList'), row=$('#rwDateRow');
+  // 没记录时把"统计范围/收益汇总"两个空白卡收起来，只留按次记录里的说明
+  const sec=(id,v)=>{const e=document.getElementById(id); if(e) e.classList.toggle('hide', v);};
+  if(!d||!d.ok){
+    sec('rwScopeSec', true); sec('rwSumSec', true);
+    if(meta) meta.textContent='暂无记录';
+    if(sum) sum.innerHTML='';
+    if(row) row.innerHTML='';
+    if(list) list.innerHTML='<div class="empty">还没有收益记录。调度器跑完一节学习/一次打工、'
+      +'检测到结算页后就会自动出现在这里（记录从本次更新之后开始）。</div>';
+    return;
+  }
+  sec('rwScopeSec', false); sec('rwSumSec', false);
+  // 统计范围下拉（与冒险页同款：今天 / 昨天 / 各天 / 全部）
+  if(row){
+    const sig=(d.date||'')+'|'+(d.dates||[]).join(',');
+    if(row.__sig!==sig){
+      row.__sig=sig;
+      const opts=[];
+      for(const dt of (d.dates||[])){
+        const lab=dt===d.today?'今天':(dt===d.yesterday?'昨天':dt.slice(5).replace('-','/'));
+        opts.push('<option value="'+dt+'"'+(dt===d.date?' selected':'')+'>'+lab+'</option>');
+      }
+      opts.push('<option value="all"'+(d.date==='all'?' selected':'')+'>全部</option>');
+      // 只放选择器本身：卡上方已有灰色小标题"统计范围"，卡内不重复写一遍
+      row.innerHTML='<select id="rwDate">'+opts.join('')+'</select>';
+    }
+  }
+  const s=d.school||{}, w=d.work||{};
+  const line=(ico,k,v,det,cls)=>'<div class="rwline"><img class="rwico" src="'+ico+'" alt="">'
+    +'<span class="rwk">'+k+'</span><span class="rwv '+(cls||'')+'">'+v+'</span>'
+    +(det?'<span class="rwd">'+det+'</span>':'')+'</div>';
+  // 打工金币/工分解析不出时明说，别拿 +0 冒充"这次打工没收益"；
+  // 部分解析出来时标出还有几次没解析
+  const miss=(a,b)=>((a||0)<(b||0))?('（'+(b-a)+' 次未解析）'):'';
+  const wc=(w.coins_n||0)>0?('金币 +'+(w.coins||0)+miss(w.coins_n,w.sessions))
+                           :(w.sessions?'金币 —'+miss(0,w.sessions):'—');
+  const wpc=(w.workpoints_n||0)>0?(' · 工分 +'+(w.workpoints||0)):'';
+  const sc=(s.credits_n||0)>0?(s.credits||0):null;
+  let html='';
+  html+=line(RW_ICON.school,'学习',(s.sessions||0)+' 节',
+    (sc===null?(s.sessions?'学分 —'+miss(0,s.sessions):'学分 +0')
+              :('学分 +'+sc+miss(s.credits_n,s.sessions)))
+    +(rwAttrs(s.attrs)?(' · '+rwAttrs(s.attrs)):''),
+    s.tired?'tired':'');
+  html+=line(RW_ICON.work,'打工',(w.sessions||0)+' 次', wc+wpc, w.tired?'tired':'');
+  const tired=(s.tired||0)+(w.tired||0);
+  if(tired){
+    // 疲惫单独一行提示（"收益减少"是结算页原文，鼠标悬停看口径说明）。
+    // 占位 span 与图标同宽 —— 否则这一行没有图标，标签会往左错一整列
+    html+='<div class="rwline" title="结算页显示「疲惫，收益减少」的场次">'
+      +'<span class="rwphs"></span><span class="rwk">提示</span>'
+      +'<span class="rwv tired">疲惫 '+tired+' 次·收益减少</span></div>';
+  }
+  $('#rwSum').innerHTML=html;
+  const tsLab=d.date==='all'?1:0;
+  const arr=(d.recent||[]).slice().reverse();
+  list.innerHTML=arr.map(r=>{
+    const ts=r[0], kind=r[1], title=r[2], credits=r[3], attrs=r[4], coins=r[5],
+          tired=r[6], wp=r[7], pay=r[8];
+    const isS=kind==='school';
+    const val=isS?(credits!=null?'学分+'+credits:'—')
+                 :(coins!=null?'+'+coins:'—');
+    // 打工行把工分也带上；工资构成（本金/雇佣加成）挂在金币上的悬停提示里
+    const mid=[esc(title||''), esc(attrs||''), (!isS&&wp!=null?'工分+'+wp:''),
+               (tired?'<span class="tired">疲惫</span>':'')]
+      .filter(Boolean).join(' · ');
+    return '<div class="arow">'
+      +'<span class="ai"><img src="'+(RW_ICON[kind]||'')+'" alt=""><span class="rk">'
+      +(tsLab?esc(ts):esc((ts||'').slice(6)))+'</span></span>'
+      +'<span class="ag">'+mid+'</span>'
+      +'<span class="av '+((coins!=null&&!isS)?'pos':'')+(val==='—'?' zero':'')+'"'
+      +(pay?' title="'+esc(pay)+'"':'')+'>'+val+'</span>'
+      +'</div>';
+  }).join('')||'<div class="empty">这一天还没有收益记录</div>';
+  if(meta){
+    const scope=d.date==='all'?'全部历史':(d.date===d.today?'今天':d.date.slice(5).replace('-','/'));
+    const tn='今日 学习 '+(d.today_school?.sessions||0)+' 节 / 打工 '
+      +(d.today_work?.sessions||0)+' 次';
+    meta.textContent=scope+' · 共 '+(d.n||0)+' 次 · '+(d.date===d.today?'':tn+' · ')
+      +'更新 '+(d.updated||'');
+  }
+}
+document.addEventListener('change',function(e){
+  if(e.target&&e.target.id==='rwDate'){ window.__rwDate=e.target.value; refreshRewards(); }
+});
+
 // 秒级：时钟 + 倒计时
 setInterval(()=>{
   const n=new Date();
@@ -3183,7 +4278,7 @@ $('#btnAuto').onclick=()=>{logAuto=!logAuto;$('#btnAuto').className=logAuto?'on'
 $('#logFilter').oninput=e=>{logFilter=e.target.value.trim();refreshLogs()};
 
 function renderCfg(rows){
-  const HIDE=['调度策略','打工','金币阈值','时长上限','踩踩','PK','冒险','护理'];
+  const HIDE=['调度策略','打工','金币阈值','合计停止点','踩踩','PK','冒险','护理'];
   rows=(rows||[]).filter(r=>HIDE.indexOf(r[0])<0);
   if(!rows.length){$('#cfgList').innerHTML='';return}
   $('#cfgList').innerHTML=rows.map(r=>'<div class="row"><span class="k">'+r[0]+'</span><span class="v">'+r[1]+'</span></div>').join('');
@@ -3309,9 +4404,34 @@ function renderSettings(ed){
   const moSel=(cur)=>'<select id="selMainOrder" title="主任务组（学习/雇佣/冒险/打工）互斥时的执行优先级：按 > 顺序逐个检查，第一个条件满足的执行。学习与雇佣好友在两组预设里都固定排在最前，此处切换的只是打工与冒险的先后；每个任务还要自身条件满足才会执行（金币达标/未超时长上限/未疲劳/次数未满），改完下一轮调度生效">'+moOpts.map(o=>'<option value="'+o[0]+'"'+(o[0]===cur?' selected':'')+'>'+o[1]+'</option>').join('')+(moOpts.some(o=>o[0]===cur)?'':'<option value="'+esc(cur||'')+'" selected>自定义：'+esc(cur||'')+'</option>')+'</select>';
   // 复用全局 card()：组标题在卡片【外】，行在白色卡片【内】
   const FG=(t,rows,key)=>card(t,rows,key);
+  // 「合计停止点」说明表：只有 3 行 2 列，随配置动态生成（用户嫌原来的
+  // 「当前设置 / 收益档 / 说明」三段长文太啰嗦，要求"弄个表格放在下面"）。
+  const stopExplain=(e)=>{
+    const t1=Number(e.efficiency_tier1_hours??8), stop=Number(e.stop_total_hours??12);
+    const rows=[];
+    if(t1>0) rows.push(['没到 '+t1+' 小时','正常收益 100%']);
+    if(t1>0&&(stop<=0||t1<stop)) rows.push(['满 '+t1+' 小时','收益降到 25%（只提示，继续跑）']);
+    rows.push(stop>0
+      ? ['满 '+stop+' 小时','学习和打工<b>一起停</b>，转冒险']
+      : ['已设 0 = 不限','不会按时长自动停']);
+    if(stop>0) rows.push(['次日 0 点','时长清零，重新开始']);
+    return '<div class="frow" style="display:block"><table class="mintbl">'
+      +'<tr><th>什么时候</th><th>会发生什么</th></tr>'
+      +rows.map(r=>'<tr><td>'+r[0]+'</td><td>'+r[1]+'</td></tr>').join('')
+      +'</table></div>';
+  };
+  // 只有三项底层停止线真不一致（手改过 config.yaml）时才多一行提示，平时不占地方
+  const stopWarn=(e)=>{
+    const d=Number(e.daily_hour_limit||0), w=Number(e.work_stop_hours||0),
+          t=Number(e.efficiency_tier2_hours||0);
+    if(d===w&&w===t) return '';
+    return '<div class="frow" style="display:block;color:var(--warn);font-size:12px">'
+      +'⚠ 配置里三项停止线不一致（停学习 '+d+' / 停打工 '+w+' / 全停 '+t
+      +'）——改上面的数会把三项一起写成同一个值</div>';
+  };
   $('#setForm').innerHTML=
     FG('学习',[
-    '<div class="frow"><span class="k">只打工不学习</span><button class="sw'+(ed.school_enabled?'':' on')+'" id="swSchool" title="开=只打工；关=学习+打工"></button></div>',
+    '<div class="frow"><span class="k">启用学习</span><button class="sw'+(ed.school_enabled?' on':'')+'" id="swSchool" title="开=学习+打工（默认）；关=只打工不学习。与「调度」页的「学习」勾选框是同一个开关"></button></div>',
     '<div class="frow"><span class="k">学习科目</span>'+sel('selSchoolAttr', ['力量','智力','魅力','夏令营'], ed.school_attribute)+'</div>',
     '<div class="frow"><span class="k">每天学习次数</span><input type="number" id="numSchoolTimes" min="0" step="1" title="0=不限" value="'+(ed.school_times??0)+'"></div>',
     '<div class="frow"><span class="k">课时档位</span>'+sel('selSchoolDur', ['短课','长课'], ed.school_duration)+'</div>',
@@ -3325,25 +4445,23 @@ function renderSettings(ed){
     '<div class="frow"><span class="k">优先雇佣</span>'+friendPicker('txtHire', ed.hire_name, '宠物名/主人名，空=自动选收益最高')+'</div>',
     '<div class="frow"><span class="k">等TA空闲</span><button class="sw'+(ed.hire_wait?' on':'')+'" id="swHireWait" title="开=优先雇佣的好友正在打工/学习（面板显示 出门中/被雇佣中）时不换人，点头像进主页读剩余时间，等到他结束再雇（期间先跑冒险/护理等其他任务）；显示 对方今天很累了 时等待无意义，仍换收益最高的人。需先填「优先雇佣」"></button></div>',
     ],'work')+
-    FG('学习 / 打工 总控（8h 共享预算）',[
-    '<div class="frow"><span class="k">今日学习</span><input type="number" id="numStudyQuota" min="0" max="24" step="1" title="今天最多学几小时。0 = 今天不学习。学习与打工共享同一份合计预算" value="'+(ed.study_quota_hours??8)+'"><span class="u">小时</span></div>',
-    '<div class="frow"><span class="k">今日打工</span><input type="number" id="numWorkQuota" min="0" max="24" step="1" title="今天最多打几小时。0 = 今天不打工。学习与打工共享同一份合计预算" value="'+(ed.work_quota_hours??8)+'"><span class="u">小时</span></div>',
-    '<div class="frow"><span class="k">合计预算</span><input type="number" id="numHour" min="0" max="24" step="1" title="学习+打工合计达到该时长后，今天不再学习（但仍可打工，直到「打工停」）。0=不限" value="'+(ed.daily_hour_limit??'')+'"><span class="u">小时（学习停）</span></div>',
-    '<div class="frow"><span class="k">打工停</span><input type="number" id="numWorkStop" min="0" max="24" step="1" title="学习+打工合计达到该时长后今天不再打工。设得比「合计预算」大 = 学满后继续吃 25% 档打工；两个都填 8 = 合计满 8h 全停转冒险" value="'+(ed.work_stop_hours??'')+'"><span class="u">小时（打工停）</span></div>',
+    FG('学习 / 打工 配额（各自上限，可选）',[
+    '<div class="frow"><span class="k">今日学习</span><input type="number" id="numStudyQuota" min="0" max="24" step="1" title="今天最多学几小时，按【学习自身】时长算。0 = 今天不学习；24 = 不各自限制（收工只看下面的「合计满则停止」）" value="'+(ed.study_quota_hours??8)+'"><span class="u">小时</span></div>',
+    '<div class="frow"><span class="k">今日打工</span><input type="number" id="numWorkQuota" min="0" max="24" step="1" title="今天最多打几小时，按【打工自身】时长算。0 = 今天不打工；24 = 不各自限制（收工只看下面的「合计满则停止」）" value="'+(ed.work_quota_hours??8)+'"><span class="u">小时</span></div>',
     '<div class="frow"><span class="k">金币阈值</span><input type="number" id="numCoin" min="0" step="100" title="金币 ≥ 该值优先学习，低于该值先打工赚够再学。只学习时请填 0，否则金币不足会先去打工" value="'+(ed.coin_threshold??'')+'"></div>',
     '<div class="frow"><span class="k">当前设置</span><span id="quotaHint" style="color:var(--sub);font-size:12px"></span></div>',
     '<div class="frow"><span class="k">一键预设</span><span style="display:flex;gap:6px;flex-wrap:wrap">'
-      +'<button class="minibtn" data-quota="study8" title="学习8 / 打工0 / 合计8 / 打工停8 / 金币0">只学习 8h</button>'
-      +'<button class="minibtn" data-quota="study12" title="学习12 / 打工0 / 合计12 / 打工停12 / 金币0">只学习 12h</button>'
-      +'<button class="minibtn" data-quota="work8" title="学习0 / 打工8 / 合计8 / 打工停8">只打工 8h</button>'
-      +'<button class="minibtn" data-quota="half" title="学习4 / 打工4 / 合计8 / 打工停8 / 金币2000">各半 4+4</button>'
-      +'<button class="minibtn" data-quota="both" title="学习8 / 打工8 / 合计8 / 打工停8 / 金币2000（默认：按金币自动选）">都行 8+8</button>'
+      +'<button class="minibtn" data-quota="study8" title="学习8 / 打工0 / 合计满8全停 / 金币0">只学习 8h</button>'
+      +'<button class="minibtn" data-quota="study12" title="学习12 / 打工0 / 合计满12全停 / 金币0">只学习 12h</button>'
+      +'<button class="minibtn" data-quota="work8" title="学习0 / 打工8 / 合计满8全停">只打工 8h</button>'
+      +'<button class="minibtn" data-quota="half" title="学习4 / 打工4 / 合计满8全停 / 金币2000">各半 4+4</button>'
+      +'<button class="minibtn" data-quota="both" title="学习8 / 打工8 / 合计满8全停 / 金币2000（默认：按金币自动选）">都行 8+8</button>'
       +'</span></div>',
     ],'quota')+
-    FG('疲劳分两层（8h 降收益仍可跑 / 12h 完全停止）',[
-    '<div class="frow"><span class="k">第一层门槛</span><input type="number" id="numEffT1" min="0" max="24" step="1" title="学习+打工合计达到该时长进入【第一层】：收益效率降到 25%，但仍可继续学习/打工。游戏在 8h/12h 的提示文案相同，分层以本工具的时长账本为准" value="'+(ed.efficiency_tier1_hours??8)+'"><span class="u">小时 → 25%，仍可跑</span></div>',
-    '<div class="frow"><span class="k">第二层门槛</span><input type="number" id="numEffT2" min="0" max="24" step="1" title="学习+打工合计达到该时长进入【第二层】：收益效率降到 10%，且完全禁止学习/打工（转冒险）。0 = 不设第二层" value="'+(ed.efficiency_tier2_hours??12)+'"><span class="u">小时 → 10%，完全停</span></div>',
-    '<div class="frow"><span class="k">说明</span><span style="color:var(--sub);font-size:12px">第一层只降收益、不拦任务；第二层才禁止学习/打工。游戏疲劳提示会记录，但是否停由上面的合计时长决定</span></div>',
+    FG('合计停止点与收益档（按学习+打工合计）',[
+    '<div class="frow"><span class="k">合计满则停止</span><input type="number" id="numStopTotal" min="0" max="24" step="1" title="学习+打工合计达到该时长后，学习和打工【一起停】（剩下的时间跑冒险/支线），次日 0 点清零恢复。0 = 不限。不区分学习/打工——保存时三处判定（停学习/停打工/全停）一起写成这个数" value="'+(ed.stop_total_hours??12)+'"><span class="u">小时 · 学习+打工一起停</span></div>',
+    stopExplain(ed),
+    stopWarn(ed),
     ],'fatigue')+
     FG('调度',[
     '<div class="frow"><span class="k">主任务优先级</span>'+moSel(ed.main_order)+'</div>',
@@ -3367,13 +4485,22 @@ function renderSettings(ed){
     '<div class="frow"><span class="k">护理阈值（体力/清洁）</span><span class="two"><input type="number" id="numEnergy" min="0" max="100" value="'+(ed.care_energy??'')+'"><input type="number" id="numClean" min="0" max="100" value="'+(ed.care_clean??'')+'"></span></div>',
     '<div class="frow"><span class="k">护理方式</span>'+sel('selCare', ['一键护理','ocr检测'], ed.care_method)+'</div>',
     '<div class="frow"><span class="k">补货数量（个）</span><input type="number" id="numExchange" min="1" max="99" step="1" title="饼干/香皂不足时一次金币买多少个" value="'+(ed.care_exchange??'')+'"></div>',
+    '<div class="frow"><span class="k">检查间隔（秒）</span><input type="number" id="numCareInt" min="10" step="10" title="每隔这么久检查一次体力/清洁，不足则喂食/洗澡" value="'+(ed.care_interval??60)+'"></div>',
     ],'care')+
     FG('好友护理',[
     '<div class="frow"><span class="k">好友护理</span><button class="sw'+(ed.friend_care_enabled?' on':'')+'" id="swFC" title="开=按间隔到指定好友家护理（体力/清洁<90自动补）"></button></div>',
     '<div class="frow"><span class="k">好友护理对象</span>'+friendPicker('txtFCName', ed.friend_care_name, '宠物名或主人名')+'</div>',
+    '<div class="frow"><span class="k">好友护理时间段</span><input type="text" id="txtFCRange" style="width:calc(var(--u) * 110)" title="HH:MM-HH:MM，支持跨零点。起止相同（00:00-00:00）= 跨零点 = **全天**" value="'+esc(ed.friend_care_range||'00:00-00:00')+'"></div>',
     '<div class="frow"><span class="k">好友护理间隔（秒）</span><input type="number" id="numFCInt" min="30" step="30" value="'+(ed.friend_care_interval??'')+'"></div>',
     '<div class="frow"><span class="k">好友护理方式</span>'+sel('selFCMethod', ['ocr检测','一键护理'], ed.friend_care_method)+'</div>',
     ],'friend_care')+
+    FG('雇佣好友',[
+    '<div class="frow"><span class="k">雇佣好友</span><button class="sw'+(ed.hire_friend_enabled?' on':'')+'" id="swHF" title="开=按间隔去好友家雇佣（帮他打工）。与「调度」页的「雇佣好友」勾选框是同一个开关"></button></div>',
+    '<div class="frow"><span class="k">每天次数</span><input type="number" id="numHFTimes" min="0" step="1" title="每天最多雇佣几次，0 = 不雇佣" value="'+(ed.hire_friend_times??8)+'"></div>',
+    '<div class="frow"><span class="k">目标好友</span><span style="color:var(--sub);font-size:12px;line-height:1.6">'
+      +'跟随「打工 → 优先雇佣」：那里填谁就优先去谁家，找不到时依次退到备选名单'
+      +'（config.yaml 的 <b>hire_friend.friend_name</b>，逗号分隔多个）。留空则不雇佣。</span></div>',
+    ],'hire_friend')+
     FG('被雇佣（帮好友打工）',[
     '<div class="frow"><span class="k">被雇佣托管</span><button class="sw'+(ed.employed_enabled?' on':'')+'" id="swEmp" title="开=定时出门检查是否被好友雇去打工"></button></div>',
     '<div class="frow"><span class="k">被雇佣处理</span>'+sel('selEmpAction', ['等到25/75（小于45min）','等到25/75','立刻召回','让利雇主（不召回）'], ed.employed_action)+'</div>',
@@ -3381,6 +4508,7 @@ function renderSettings(ed){
     ],'employed')+
     FG('福袋',[
     '<div class="frow"><span class="k">福袋领取</span><button class="sw'+(ed.gift_bag_enabled?' on':'')+'" id="swGiftBag" title="开=定时遍历好友领取系绳福袋"></button></div>',
+    '<div class="frow"><span class="k">福袋时间段</span><input type="text" id="txtGbRange" style="width:calc(var(--u) * 110)" title="HH:MM-HH:MM，支持跨零点。00:00-00:00 = 全天" value="'+esc(ed.gift_bag_range||'00:00-00:00')+'"></div>',
     '<div class="frow"><span class="k">福袋扫描间隔（秒）</span><input type="number" id="numGbInt" min="60" step="60" value="'+(ed.gift_bag_interval??'')+'"></div>',
     ],'gift_bag')+
     FG('职业',[
@@ -3412,6 +4540,7 @@ function renderSettings(ed){
   $('#swFC').onclick=()=>{ $('#swFC').classList.toggle('on'); markDirtyAndSave(); };
   $('#swEmp').onclick=()=>{ $('#swEmp').classList.toggle('on'); markDirtyAndSave(); };
   $('#swGiftBag').onclick=()=>{ $('#swGiftBag').classList.toggle('on'); markDirtyAndSave(); };
+  $('#swHF').onclick=()=>{ $('#swHF').classList.toggle('on'); markDirtyAndSave(); };
   $('#swCareer').onclick=()=>{ $('#swCareer').classList.toggle('on'); markDirtyAndSave(); };
   $('#swCareerStop').onclick=()=>{ $('#swCareerStop').classList.toggle('on'); markDirtyAndSave(); };
   $('#swPkHf').onclick=()=>{ $('#swPkHf').classList.toggle('on'); markDirtyAndSave(); };
@@ -3422,22 +4551,25 @@ function renderSettings(ed){
   const updQuotaHint=()=>{
     const el=$('#quotaHint'); if(!el) return;
     const sq=qv('#numStudyQuota'), wq=qv('#numWorkQuota');
-    const lim=qv('#numHour'), stop=qv('#numWorkStop'), coin=qv('#numCoin');
+    const stop=qv('#numStopTotal'), coin=qv('#numCoin');
     const parts=[];
     if(sq===0&&wq===0) parts.push('学习和打工都关了（只剩冒险/支线）');
     else if(sq>0&&wq===0) parts.push('只学习 '+sq+' 小时');
     else if(sq===0&&wq>0) parts.push('只打工 '+wq+' 小时');
     else if(sq>0&&wq>0) parts.push('学习 '+sq+'h + 打工 '+wq+'h，先到先切');
-    if(lim>0) parts.push('合计满 '+lim+'h 停学习');
-    if(stop>0) parts.push('满 '+stop+'h 停打工');
+    if(stop>0) parts.push('合计满 '+stop+'h 学习+打工一起停');
+    else parts.push('合计不限（不会自动收工）');
     if(sq>0&&wq===0&&coin>0) parts.push('⚠ 金币阈值 '+coin+' > 0：金币不足时会先去打工，想纯学习请设 0');
     el.textContent=parts.join('；');
     el.style.color=(sq>0&&wq===0&&coin>0)?'var(--warn)':'var(--sub)';
   };
-  ['#numStudyQuota','#numWorkQuota','#numHour','#numWorkStop','#numCoin'].forEach(id=>{
+  ['#numStudyQuota','#numWorkQuota','#numStopTotal','#numCoin'].forEach(id=>{
     const el=$(id); if(el) el.addEventListener('input',updQuotaHint);
   });
   updQuotaHint();
+  // 「合计停止点」不再有独立提示行（原来的「当前设置/收益档/说明」三段被用户嫌太长，
+  // 已换成卡片里那张 3 行说明表，见 stopExplain/stopWarn；表格随配置渲染，
+  // 改完保存后 refreshData 重建表单会自动跟着变）
   // 「当前选择」实时提示：科目与档位是两个独立字段，选「夏令营」时档位会被忽略
   // （夏令营固定第 7 张卡、不按属性选框），这里说清，避免看着矛盾
   const updSchoolHint=()=>{
@@ -3457,20 +4589,21 @@ function renderSettings(ed){
     const el=$(id); if(el) el.addEventListener('change',updSchoolHint);
   });
   updSchoolHint();
-  // 一键预设：把「学习/打工怎么分」这类需求一次填好 5 个字段（只改表单，点保存才落盘）
+  // 一键预设：把「学习/打工怎么分」这类需求一次填好（只改表单，改动即自动保存）。
+  // lim = 合计停止点（#numStopTotal），保存时三键同值 → 合计满 lim 小时两项一起停
   const QUOTA_PRESETS={
-    study8:  {study:8,  work:0, lim:8,  stop:8,  coin:0},
-    study12: {study:12, work:0, lim:12, stop:12, coin:0},
-    work8:   {study:0,  work:8, lim:8,  stop:8,  coin:2000},
-    half:    {study:4,  work:4, lim:8,  stop:8,  coin:2000},
-    both:    {study:8,  work:8, lim:8,  stop:8,  coin:2000},
+    study8:  {study:8,  work:0, lim:8,  coin:0},
+    study12: {study:12, work:0, lim:12, coin:0},
+    work8:   {study:0,  work:8, lim:8,  coin:2000},
+    half:    {study:4,  work:4, lim:8,  coin:2000},
+    both:    {study:8,  work:8, lim:8,  coin:2000},
   };
   document.querySelectorAll('[data-quota]').forEach(b=>{
     b.onclick=()=>{
       const p=QUOTA_PRESETS[b.dataset.quota]; if(!p) return;
       const set=(id,v)=>{const el=$(id); if(el) el.value=v;};
       set('#numStudyQuota',p.study); set('#numWorkQuota',p.work);
-      set('#numHour',p.lim); set('#numWorkStop',p.stop); set('#numCoin',p.coin);
+      set('#numStopTotal',p.lim); set('#numCoin',p.coin);
       markDirtyAndSave(); updQuotaHint();
       const msg=$('#saveMsg');
       if(msg){ msg.className='saveMsg'; msg.textContent='已应用「'+b.textContent+'」，自动保存中…'; }
@@ -3480,8 +4613,8 @@ function renderSettings(ed){
   // ---- 一级：分类列表（按 tasks.order 的常见顺序排列）----
   // 一级：分组卡片（照 QQ 宠物设置页 —— 小标题在卡外，卡内多行带 › 箭头）
   const MENU=[
-    ['核心任务',[['school','学习'],['work','打工'],['quota','学习/打工总控'],['fatigue','疲劳与收益档']]],
-    ['日常互动',[['care','护理'],['friend_care','好友护理'],['visit','踩踩'],['pk','PK'],['adventure','冒险']]],
+    ['核心任务',[['school','学习'],['work','打工'],['quota','学习/打工 配额'],['fatigue','合计停止点与收益档']]],
+    ['日常互动',[['care','护理'],['friend_care','好友护理'],['hire_friend','雇佣好友'],['visit','踩踩'],['pk','PK'],['adventure','冒险']]],
     ['扩展',[['employed','被雇佣'],['gift_bag','福袋'],['career','职业']]],
     ['系统',[['schedule','调度'],['adb','连接手机（ADB）']]],
   ];
@@ -3733,7 +4866,7 @@ async function saveSettings(){
   if(!setInit) return;
   const msg=$('#saveMsg');
   const updates={};
-  const schoolEnabledNew = !$('#swSchool').classList.contains('on');
+  const schoolEnabledNew = $('#swSchool').classList.contains('on');
   if(!!schoolEnabledNew !== !!setInit.school_enabled) updates.school_enabled=schoolEnabledNew;
   const fcEnabledNew = $('#swFC').classList.contains('on');
   if(!!fcEnabledNew !== !!setInit.friend_care_enabled) updates.friend_care_enabled=fcEnabledNew;
@@ -3741,6 +4874,8 @@ async function saveSettings(){
   if(!!empEnabledNew !== !!setInit.employed_enabled) updates.employed_enabled=empEnabledNew;
   const gbEnabledNew = $('#swGiftBag').classList.contains('on');
   if(!!gbEnabledNew !== !!setInit.gift_bag_enabled) updates.gift_bag_enabled=gbEnabledNew;
+  const hfEnabledNew = $('#swHF').classList.contains('on');
+  if(!!hfEnabledNew !== !!setInit.hire_friend_enabled) updates.hire_friend_enabled=hfEnabledNew;
   const cwNew = $('#swCareer').classList.contains('on');
   if(!!cwNew !== !!setInit.career_watch) updates.career_watch=cwNew;
   const csNew = $('#swCareerStop').classList.contains('on');
@@ -3755,12 +4890,19 @@ async function saveSettings(){
   const txtc=(id,key)=>{const v=getv(id); if(v!==(setInit[key]||'')) updates[key]=v;};
   selc('#selLoc','work_location'); selc('#selDur','work_duration'); selc('#selCare','care_method'); selc('#selFCMethod','friend_care_method'); selc('#selEmpAction','employed_action'); selc('#selMainOrder','main_order'); selc('#selSchoolAttr','school_attribute'); selc('#selSchoolDur','school_duration');
   txtc('#txtHire','hire_name');
-  num('#numCoin','coin_threshold'); num('#numHour','daily_hour_limit'); num('#numWorkStop','work_stop_hours'); num('#numSchoolTimes','school_times');
-  num('#numStudyQuota','study_quota_hours'); num('#numWorkQuota','work_quota_hours'); num('#numEffT1','efficiency_tier1_hours'); num('#numEffT2','efficiency_tier2_hours');
+  num('#numCoin','coin_threshold'); num('#numSchoolTimes','school_times');
+  num('#numStudyQuota','study_quota_hours'); num('#numWorkQuota','work_quota_hours');
+  // 合计停止点：一个输入框 → 后端写三个键（daily_hour_limit / work_stop_hours /
+  // efficiency_tier2_hours，见 apply_settings 的 stop_total_keys）
+  num('#numStopTotal','stop_total_hours');
+  // 收益档（efficiency_tier1/2_hours）不是设置项：只在卡片里当说明文字显示，
+  // 不走表单提交（config.yaml 里仍可手改，引擎照读）
   num('#numVisit','visit_times'); num('#numPk','pk_times'); num('#numAdv','adventure_times');
   txtc('#txtPkOnly','pk_only'); txtc('#txtPkSkip','pk_skip'); num('#numPkLv','pk_max_level'); txtc('#txtPkHelper','pk_helper');
   num('#numEnergy','care_energy'); num('#numClean','care_clean'); num('#numExchange','care_exchange'); num('#numGbInt','gift_bag_interval'); num('#numCareerInt','career_interval');
   txtc('#txtFCName','friend_care_name'); num('#numFCInt','friend_care_interval'); num('#numEmpInt','employed_interval');
+  txtc('#txtFCRange','friend_care_range'); txtc('#txtGbRange','gift_bag_range');
+  num('#numCareInt','care_interval'); num('#numHFTimes','hire_friend_times');
   // 连接层（ADB）：改完要重启调度器才生效，卡片里已提示
   txtc('#txtAdbPath','adb_path'); txtc('#txtAdbSerial','adb_serial');
   // 注意：通知渠道字段在**通知页**（#notifyForm），由 saveNotifySettings 单独提交，
@@ -4080,7 +5222,12 @@ function syncThemeColor(name){
   });
 }
 if(window.matchMedia){
-  try{ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', ()=>syncThemeColor(curTab)); }catch(e){}
+  // 切系统深浅色：房间背景图（room-*-dark）与状态栏采样色都要跟着换。
+  // 手动固定的家居背景没有夜间版，applyManualScene 会重设成同一张 —— 幂等，不用特判。
+  try{ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', ()=>{
+    applyManualScene();
+    syncThemeColor(curTab);
+  }); }catch(e){}
 }
 
 // 当前页（供 history 手势判断）
@@ -4104,13 +5251,20 @@ let pendingTab = null;   // 跳级退栈（二级 -> 别的内页）时，退到
 function showTab(name, skipHistory){
   // 离开设置页时重置层级，下次进入从一级列表开始
   if(name!=='set' && window.__setGrp) window.__setGrp=null;
+  // 同理：离开日志页时重置子页（下次进来停在"实时日志"）
+  if(name!=='log' && window.__logSub) window.__logSub=null;
   document.querySelectorAll('main > [data-page]').forEach(el=>el.classList.toggle('hide', el.dataset.page!==name));
+  // 日志页子页：默认子页是"实时日志"，只有显式进过收益记录（或 popstate 指明）才是它
+  if(name==='log' && !window.__logSub) showLogIndex(true);
   // 内页（非总览）把 html 底色切白：body 的 padding-top 露出的就是 html 底色，
   // 总览露房间暖色图、内页露白色顶栏（见 CSS 里 html[data-page] 那条注释）
   document.documentElement.setAttribute('data-page', name);
   syncThemeColor(name);   // 状态栏同步（须在下面的早退之前，见函数注释）
   // 两列导航都要更新选中态（#tabbar2 是右列，早期漏了）
-  document.querySelectorAll('#tabbar button, #tabbar2 button').forEach(b=>b.classList.toggle('on', b.dataset.tab===name));
+  // #btnScene 例外：它占着 data-tab="main" 但不是 tab（是"切换房间背景"），
+  // 刷 .on 会在总览页给它常驻白环、撑大一圈（历史上那个"返回键大一圈"就是这么来的）。
+  document.querySelectorAll('#tabbar button, #tabbar2 button').forEach(
+    b=>b.classList.toggle('on', b.id!=='btnScene' && b.dataset.tab===name));
   try{localStorage.setItem('qpet_tab',name);}catch(e){}
   // **层级同步必须放在早退之前**：侧滑回到"设置一级"时页面名没变（set -> set），
   // 若放在早退之后，navDepth 会停在 2，接着点"返回总览"就会多退一层（甚至退出应用）。
@@ -4161,11 +5315,24 @@ window.addEventListener('popstate', function(e){
     else { showSetIndex(true); navDepth=1; }
     return;
   }
+  // 日志页子页：同设置页二级，层级 2 要在这里补上（showTab 只认页面级 0/1）
+  if(t==='log'){
+    showTab('log', true);
+    if(st.sub==='reward'){ openLogReward(true); navDepth=2; }
+    else { showLogIndex(true); navDepth=1; }
+    return;
+  }
   if(t===curTab) return;   // 栈里这条就是当前页（"回总览"的 back() 落到总览就是这种）
   showTab(t, true);
 });
 // tab 按钮：#tabbar（左列4个）+ #tabbar2（右列3个）都要绑
-document.querySelectorAll('#tabbar button, #tabbar2 button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
+// #btnScene 例外：它虽在 #tabbar 里且带 data-tab="main"（保住 §INTEGRATION 1 的
+// `#tabbar button` 契约），但功能是换房间背景 —— 绑 showTab('main') 只会早退（什么都不做）。
+// 它自己的绑定（点按开选择面板 / 长按切下一张）在 setupSceneBtn 里。
+document.querySelectorAll('#tabbar button, #tabbar2 button').forEach(b=>{
+  if(b.id==='btnScene') return;
+  b.onclick=()=>showTab(b.dataset.tab);
+});
 // 内页返回（.home 里的导航会随总览页一起隐藏，故内页需要独立返回入口）
 // 内页顶栏返回按钮（统一 .backbtn[data-back]；二级设置页的 #btnSetBack 有自己的处理）
 document.addEventListener('click',function(e){
@@ -4188,6 +5355,10 @@ let _liveFromUrl=false;
 try{ _liveFromUrl=new URLSearchParams(location.search).get('live')==='1'; }catch(e){}
 let _grpFromUrl='';
 try{ _grpFromUrl=new URLSearchParams(location.search).get('grp')||''; }catch(e){}
+// ?tab=log&sub=reward 直开收益记录子页，同样必须**在这里**读走（showTab('log')
+// 会把 URL 重写成 '?tab=log'，之后 location.search 里就没有 sub 了）
+let _logSubFromUrl='';
+try{ _logSubFromUrl=new URLSearchParams(location.search).get('sub')||''; }catch(e){}
 // 初始：先取好友名单（下拉选择用），再渲染 tab —— 否则首次渲染
 // 的 datalist 是空的，用户以为"没有好友可选"
 (async function initFriends(){
@@ -4208,17 +5379,30 @@ try{ _grpFromUrl=new URLSearchParams(location.search).get('grp')||''; }catch(e){
 // ——曾整串丢掉，连 ?case= 这种无关参数一起没了。
 let rootSearch='';
 try{
-  const sp=new URLSearchParams(location.search); sp.delete('tab');
+  // tab 与 sub 都是"当前停在哪一页"的参数，不属于根条目（其余参数要保留）
+  const sp=new URLSearchParams(location.search); sp.delete('tab'); sp.delete('sub');
   const qs=sp.toString(); rootSearch = qs ? ('?'+qs) : '';
 }catch(e){}
 try{ history.replaceState({tab:'main'}, '', location.pathname + rootSearch); }catch(e){}
 curTab='main';
 showTab('main', true);
 if(initTab!=='main') showTab(initTab);
+// ?tab=log&sub=reward 直开收益记录子页（与设置页 ?tab=set&grp= 同款，便于分享/截图）
+try{
+  if(initTab==='log' && _logSubFromUrl==='reward') openLogReward();
+}catch(e){}
+
+// 房间背景：首帧就应用（不能等第一次 /api/data —— 手动选过的背景会先闪一下主房间再跳；
+// 「自动」也有必要走一遍：data-scene 与状态栏色要落定）。
+// 放在这里而不是场景那块：setSceneAttr 里读了 curTab（上面刚初始化完，
+// 提前调用会撞 let 的暂时性死区）。
+applyManualScene();
 
 setInterval(()=>{if(!document.hidden)refreshLogs()},3000);
 setInterval(()=>{if(!document.hidden)refreshData()},6000);
 setInterval(()=>{if(!document.hidden)refreshAdventure()},10000);
+// 收益记录只在子页打开时才拉（按次记录一天就十几条，10s 足够）
+setInterval(()=>{if(!document.hidden && window.__logSub==='reward')refreshRewards()},10000);
 setInterval(()=>{if(!document.hidden)refreshPlan()},15000);
 refreshData();refreshLogs();refreshAdventure();refreshPlan();
 // ?tab=shot&live=1 直接进实时画面并开播（分享链接/调试/自动验收用）
@@ -4255,19 +5439,53 @@ try{
       tl=document.getElementById('taskList'),
       fb=document.querySelector('.funcbar');
   if(!home||!tl||!fb) return;
-  function place(){
+  var lastTop=null;
+  function measure(){
+    if(!tl.children.length) return null;           // 还没内容：别量（会量到"标题下面一点"）
     var u=parseFloat(getComputedStyle(home).getPropertyValue('--vu'))||(home.clientWidth/360);
     var hr=home.getBoundingClientRect(), tr=tl.getBoundingClientRect();
     var want=(tr.bottom-hr.top)/u;                 // 期望：功能栏底端 = 列表底端
     var h2=fb.getBoundingClientRect().height/u;    // 功能栏实际高
     var top=want-h2;
     if(top<100) top=319.3;                         // 列表过短时回官方位置
+    return top;
+  }
+  function place(){
+    // 列表还没内容时别摆（否则会量到"标题下面一点点"、命中兜底位置）；
+    // 正常情况下 renderTaskSkeleton() 已经先铺好占位行，这里量到的就是最终高度。
+    if(!tl.children.length){ fb.style.visibility='hidden'; return; }
+    fb.style.visibility='';
+    var top=measure(); if(top===null) return;
+    // **迟滞**：与上次落点差 < 0.4u 就不动 —— 6 秒一次的数据刷新会让列表底部
+    // 有亚像素级变化（字体/行高取整），每次都跟着改 top 就是用户看到的"偶尔上下抽动"。
+    if(lastTop!==null && Math.abs(top-lastTop)<0.4) return;
+    lastTop=top;
     fb.style.top='calc(var(--u) * '+top.toFixed(1)+')';
   }
+  // **等布局稳定再量**：MutationObserver 在行重建的那一帧就会回调，此时量到的可能是
+  // 中间态（行已清空/只插入一半）→ 位置先跳一下再跳回来。改成下一帧 + 再下一帧各量一次，
+  // 取后一次（rAF 保证在样式/布局算完之后）。
+  // 立即量一次（保证任何环境都会摆位；rAF 在无头/虚拟时间/后台标签下可能不触发），
+  // 再在下一帧补量一次纠正"量在布局中间"的情况，最后加一个超时兜底。
+  // 三次都走同一个 place()，靠上面的 0.4u 迟滞保证不会来回抖。
+  var pending=false;
+  function placeSoon(){
+    place();
+    if(pending) return;
+    pending=true;
+    var done=function(){ if(!pending) return; pending=false; place(); };
+    if(window.requestAnimationFrame){
+      requestAnimationFrame(function(){ requestAnimationFrame(done); });
+    }
+    setTimeout(done, 150);
+  }
+  renderTaskSkeleton();   // 先占住列表高度，place() 一次到位（见函数注释）
   place();
-  window.addEventListener('resize',place);
+  window.addEventListener('resize',placeSoon);
+  window.addEventListener('orientationchange',placeSoon);
+  window.addEventListener('pageshow',placeSoon);      // 手机切回前台/从缓存恢复时重量
   var tlEl=document.getElementById('taskList');
-  if(tlEl&&window.MutationObserver) new MutationObserver(place).observe(tlEl,{childList:true});
+  if(tlEl&&window.MutationObserver) new MutationObserver(placeSoon).observe(tlEl,{childList:true});
 })();
 
 
@@ -4416,6 +5634,11 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/adventure':
                 q = parse_qs(u.query)
                 body = json.dumps(adventure_data((q.get('date') or [''])[0]),
+                                  ensure_ascii=False).encode('utf-8')
+                self._send(200, 'application/json; charset=utf-8', body)
+            elif path == '/api/rewards':
+                q = parse_qs(u.query)
+                body = json.dumps(rewards_data((q.get('date') or [''])[0]),
                                   ensure_ascii=False).encode('utf-8')
                 self._send(200, 'application/json; charset=utf-8', body)
             elif path == '/api/friends':
