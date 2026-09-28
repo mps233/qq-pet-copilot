@@ -1222,6 +1222,10 @@ def apply_settings(updates: dict) -> dict:
         'efficiency_tier1_hours': ('schedule.efficiency_tier1_hours', 'int'),
         'efficiency_tier2_hours': ('schedule.efficiency_tier2_hours', 'int'),
         'main_order': ('tasks.main_order', None),
+        # 任务队列扫描顺序——任务列表拖拽排序写回的就是它。
+        # `> `分隔的任务键，src/settings.validate_field 会校验键名合法性
+        # （含未知键直接拒绝并回默认），不会把调度器的扫描表写坏。
+        'task_order': ('tasks.order', None),
         'school_attribute': ('school.attribute', None),
         'school_duration': ('school.duration', None),
         'school_times': ('school.times_per_day', 'int'),
@@ -2301,6 +2305,22 @@ body{
   background-position:left top;
 }
 .tasklist .mrow:first-child,.mrow:first-child{border-top:0;background-image:none}
+/* 任务分组标题（日常轮巡 / 任务顺序）：小字 + 一条极淡的发丝线 */
+.tghd{display:flex;align-items:center;gap:calc(var(--u)*6);
+      padding:calc(var(--u)*9) calc(var(--u)*2) calc(var(--u)*3);
+      font-size:calc(var(--u)*10.5);font-weight:600;color:var(--sub)}
+.tghd:first-child{padding-top:calc(var(--u)*2)}
+.tghd i{flex:1;height:1px;background:currentColor;opacity:.16}
+.tghint{font-weight:400;font-size:calc(var(--u)*10);opacity:.72;white-space:nowrap}
+/* 拖动中的任务行：抬高 + 阴影、跟手；拖拽期间列表禁掉滚动手势 */
+.mrow.dragging{position:relative;z-index:9;opacity:.94;border-radius:calc(var(--u)*10);
+               box-shadow:0 8px 22px rgba(0,0,0,.22)}
+#taskList.dragging-list{touch-action:none;-webkit-user-select:none;user-select:none}
+#torderToast{position:fixed;left:50%;bottom:calc(var(--u)*40);transform:translate(-50%,10px);
+  background:rgba(0,0,0,.82);color:#fff;font-size:calc(var(--u)*12);
+  padding:calc(var(--u)*8) calc(var(--u)*15);border-radius:calc(var(--u)*18);
+  opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;z-index:99}
+#torderToast.on{opacity:1;transform:translate(-50%,0)}
 .mcb{
   width:calc(var(--u) * 19);height:calc(var(--u) * 19);
   border-radius:calc(var(--u) * 6);background:rgba(0,0,0,.10);
@@ -3299,6 +3319,90 @@ const TASKNAME={care:'护理',school:'学习',friend_care:'好友护理',gift_ba
 const TTAG={care:'循环',friend_care:'循环',gift_bag:'循环',
             visit:'每日',pk:'每日',
             adventure:'主线',school:'主线',work:'主线',hire_friend:'主线'};
+
+// ---- 任务行拖动排序（只对「任务顺序」组生效，日常轮巡固定不动）----
+// 用 pointer 事件而不是 HTML5 drag&drop：iOS Safari 的触摸不触发 dragstart。
+// 长按 220ms 才进入拖拽 —— 否则会和"点勾选框切启用""上下滑页面"抢手势。
+function setupTaskDrag(){
+  const list=document.getElementById('taskList');
+  if(!list||list.__dragBound) return;      // 每次渲染都会调用，只绑一次
+  list.__dragBound=true;
+  let st=null;
+  const draggable=k=>TTAG[k]&&TTAG[k]!=='循环';
+  list.addEventListener('pointerdown',e=>{
+    const row=e.target.closest('.mrow[data-k]');
+    if(!row||e.target.closest('.mcb')) return;      // 勾选框：交给原来的点击逻辑
+    if(!draggable(row.dataset.k)) return;
+    st={row:row,k:row.dataset.k,y0:e.clientY,dy:0,moved:false,armed:false};
+    st.timer=setTimeout(()=>{
+      if(!st) return;
+      st.armed=true;
+      st.row.classList.add('dragging');
+      list.classList.add('dragging-list');
+      try{ if(navigator.vibrate) navigator.vibrate(12); }catch(_){}
+    },220);
+  });
+  list.addEventListener('pointermove',e=>{
+    if(!st) return;
+    if(!st.armed){                                  // 长按没到就滑走了 → 当成滚动
+      if(Math.abs(e.clientY-st.y0)>10){ clearTimeout(st.timer); st=null; }
+      return;
+    }
+    st.dy=e.clientY-st.y0;
+    st.moved=true;
+    st.row.style.transform='translateY('+st.dy+'px)';
+    if(e.cancelable) e.preventDefault();
+  },{passive:false});
+  const end=()=>{
+    if(!st) return;
+    clearTimeout(st.timer);
+    const s=st; st=null;
+    list.classList.remove('dragging-list');
+    s.row.classList.remove('dragging');
+    s.row.style.transform='';
+    if(!s.armed||!s.moved) return;
+    // 落点：跟其它「任务顺序」行的中心比高度，算出插到第几位
+    const others=[...list.querySelectorAll('.mrow[data-k]')]
+      .filter(r=>draggable(r.dataset.k)&&r!==s.row);
+    const cy=s.row.getBoundingClientRect().top+s.dy+s.row.offsetHeight/2;
+    const seq=others.map(r=>r.dataset.k);
+    let idx=seq.length;
+    for(let i=0;i<others.length;i++){
+      const b=others[i].getBoundingClientRect();
+      if(cy<b.top+b.height/2){ idx=i; break; }
+    }
+    seq.splice(idx,0,s.k);
+    submitTaskOrder(seq);
+  };
+  list.addEventListener('pointerup',end);
+  list.addEventListener('pointercancel',end);
+}
+
+// 拖完写回配置：tasks.order（全量，轮巡组保持在最前）+ tasks.main_order
+// （四个主任务按新相对顺序，保证"拖动真的影响调度优先级"，而不只是列表好看）
+async function submitTaskOrder(restOrder){
+  const loop=Object.keys(TASKNAME).filter(k=>TTAG[k]==='循环');
+  const full=loop.concat(restOrder.filter(k=>loop.indexOf(k)<0));
+  const mains=restOrder.filter(k=>TTAG[k]==='主线');
+  try{
+    const r=await fetch('/api/settings',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({updates:{'task_order':full.join('>'),
+                                    'main_order':mains.join('>')}})});
+    const d=await r.json();
+    if(d&&d.ok){ taskOrderToast('任务顺序已保存 · 下一轮调度生效'); refreshData(); }
+    else { taskOrderToast('保存失败：'+((d&&d.rejected)||[]).join('、')); }
+  }catch(err){ taskOrderToast('保存失败：'+err); }
+}
+
+function taskOrderToast(msg){
+  let el=document.getElementById('torderToast');
+  if(!el){ el=document.createElement('div'); el.id='torderToast'; document.body.appendChild(el); }
+  el.textContent=msg;
+  el.classList.add('on');
+  clearTimeout(taskOrderToast._t);
+  taskOrderToast._t=setTimeout(()=>el.classList.remove('on'),2200);
+}
 // 首屏骨架：/api/state 还没回来时 #taskList 是空的，卡片只有标题那么高 →
 // 下面「功能栏与任务列表底部对齐」的 place() 会量到一个偏上的"列表底部"，
 // 命中 top<100 兜底把功能栏放到 319.3dp（低位），等数据渲染完再跳到真位置
@@ -3828,7 +3932,7 @@ function renderData(d){
     // 任务行只剩「名称 + 类型标签 + 勾选框」，别再往行首加图标。
     // 两种"活跃"（isRun 执行中 / isPend 进行中）用同一个高亮类：
     // 靠"高亮行上下留 1.5u 间隙"避免相邻两条糊成一片（用户明确不要深浅分级那版）
-    return '<div class="mrow'+(done?' done':'')+((isRun||isPend)?' run':'')+(on?'':' off')+'">'
+    return '<div class="mrow'+(done?' done':'')+((isRun||isPend)?' run':'')+(on?'':' off')+'" data-k="'+k+'">'
       +'<span class="mname'+(on?'':' off')+'">'+(TASKNAME[k]||k)+'</span>'
       // 选中/进行中的 ▶ 紧跟在任务名后面（用户："那个被选中的箭头放到任务名的后面去"）
       +((isRun||isPend)?('<span class="marrow" title="'+(isPend?'进行中（等收尾结算）':'正在执行')+'">▶</span>'):'')
@@ -3841,28 +3945,46 @@ function renderData(d){
       +'</span>'
       +'<span class="mcb'+(on&&st!=='disabled'?' on':'')+'" data-k="'+k+'"></span></div>';
   };
+  // 任务列表分两组（用户要求）：
+  //   日常轮巡 = TTAG 里的「循环」类（护理 / 好友护理 / 福袋）—— 按间隔巡检，
+  //              顺序固定，不参与拖动
+  //   任务顺序 = 其余（每日 / 主线）—— 可拖动排序，松手写回 tasks.order
+  const isLoopTask=k=>TTAG[k]==='循环';
+  const groupedRows=(keys, renderOne)=>{
+    const loop=keys.filter(isLoopTask), rest=keys.filter(k=>!isLoopTask(k));
+    let h='';
+    if(loop.length){
+      h+='<div class="tghd"><span>日常轮巡</span><i></i>'
+        +'<span class="tghint">按间隔巡检 · 顺序固定</span></div>';
+      for(const k of loop) h+=renderOne(k);
+    }
+    if(rest.length){
+      h+='<div class="tghd"><span>任务顺序</span><i></i>'
+        +'<span class="tghint">按住拖动排序</span></div>';
+      for(const k of rest) h+=renderOne(k);
+    }
+    return h || keys.map(renderOne).join('');
+  };
   if(qLive){
     // 收尾队列：写在标题行右侧（原来单独占一行，视觉上像多了一个任务）
     const _qp=document.getElementById('qPend');
     if(_qp) _qp.innerHTML = q.pending
       ? ('<span class="run">'+q.pending+' 待结算</span>') : '';
     const ks=Object.keys(qt).slice().sort((a,b)=>qRank(a)-qRank(b));
-    for(const k of ks){
+    rows+=groupedRows(ks, k=>{
       const st=qt[k].state||'';
       const nx=qt[k].next?('→ '+(qt[k].next.slice(0,10)===todayStr?'':'明 ')+qt[k].next.slice(11,16)):'';
-      rows+=rowOf(k, st!=='disabled', st, nx);
-    }
+      return rowOf(k, st!=='disabled', st, nx);
+    });
   }else{
     const _qp2=document.getElementById('qPend'); if(_qp2) _qp2.innerHTML='';
     const te=cfg.tasks_enabled||{};
     const keys=qOrder.length?qOrder:Object.keys(te);
     const allKeys=(keys.length?keys:Object.keys(TASKNAME)).slice().sort((a,b)=>qRank(a)-qRank(b));
-    for(const k of allKeys){
-      const on=te[k]!==false;
-      rows+=rowOf(k, on, 'cfg', '');
-    }
+    rows+=groupedRows(allKeys, k=>rowOf(k, te[k]!==false, 'cfg', ''));
   }
   $('#taskList').innerHTML=rows||'';
+  setupTaskDrag();
   // 「未启用：xxx（不参与调度）」提示行已按需求移除
   // 截图
   const shots=d.shots||[];
