@@ -183,9 +183,11 @@ class AdventureConfig:
 class CareConfig:
     # 护理方式：ocr检测（读宠物状态，低于阈值手动喂食/洗澡）/ 一键护理（直接点主页面的一键护理按钮）
     method: str = "一键护理"
-    # 体力阈值：低于则喂食到达标
+    # 体力阈值：低于则喂食到达标。
+    # 官方默认同值：判定式 `100 - 体力 >= hungerDiff`，默认 hungerDiff=40 → 阈值 60
+    # （证据：qqpet_assets/kuikly_analysis/FIELDS_CARE.md，反编译 t6/a.java:951-952）
     energy_threshold: int = 60
-    # 清洁阈值：低于则洗澡到达标
+    # 清洁阈值：低于则洗澡到达标。官方默认 `100 - 清洁 >= cleanDiff(40)` → 60（同上）
     clean_threshold: int = 60
     # 护理间隔（秒）：距上次护理检查至少间隔这么久才再次检查
     interval_seconds: int = 60
