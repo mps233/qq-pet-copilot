@@ -1587,6 +1587,9 @@ class TaskQueueRunner(Runner):
         # 优先按 pending 的**描述**认键：启动实测是"借道 school 场景"做的检测
         # （检测逻辑都在基类，`_startup_activity_probe` 里 `scen = self.school`），
         # 但它登记的是"正在打工"这类活动 —— 只看场景归属会把键写成 school（实测踩到）。
+        # `pend` 必须先取到：这里原来直接引用了未定义的 `pend`，而任何一次重启都会走
+        # 启动实测 → _write_queue_status → 本函数，必崩 NameError（2026-09-28 实发）。
+        pend = self._main_pending_scen()
         desc = (pend.pending or {}).get('desc', '') if pend is not None else ''
         by_desc = {'上课': 'school', '打工': 'work',
                    '雇佣打工': 'hire_friend', '冒险': 'adventure'}

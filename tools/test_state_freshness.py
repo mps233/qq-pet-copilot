@@ -423,6 +423,35 @@ def test_gui_queue_card() -> None:
             qs.QUEUE_STATUS_FILE = orig_file
 
 
+def test_main_pending_key() -> None:
+    """E. `_main_pending_key()`：延时收尾写队列状态时的任务键。
+
+    回归用例（2026-09-28 实发）：这个方法里 `desc = (pend.pending …)` 引用了**未定义的 `pend`**，
+    而上面 D 段把 `_write_queue_status` 用 lambda 桩掉了，所以测试一路绿灯；真实场景里任何一次
+    重启都会走「启动实测 → _write_queue_status → 本函数」，直接 NameError 把调度器崩掉。
+    这里**直接调本函数**（不经桩），把这个坑焊死。
+    """
+    print('E. _main_pending_key()（队列状态的任务键）')
+    r = _probe_runner(None)
+    for name in ('adventure', 'school', 'hire_friend', 'work'):
+        setattr(r, name, StubSchool(None, None))
+    check('四个场景都没 pending → 空键', r._main_pending_key() == '', f'{r._main_pending_key()!r}')
+
+    # 描述优先：启动实测借道 school 场景做检测，但登记的是"打工"这类活动
+    r.school.pending = {'desc': '打工', 'until': datetime.now()}
+    check('按描述认键：借道 school 登记的「打工」→ work',
+          r._main_pending_key() == 'work', f'{r._main_pending_key()!r}')
+
+    # 描述认不出 → 回落到场景归属
+    r.school.pending = {'desc': '某个新活动', 'until': datetime.now()}
+    check('描述认不出 → 按场景归属兜底（school）',
+          r._main_pending_key() == 'school', f'{r._main_pending_key()!r}')
+
+    # pending 没有 desc 键也不能炸（启动实测登记的 dict 结构可能不同）
+    r.school.pending = {'until': datetime.now()}
+    check('pending 里没有 desc → 不抛异常', r._main_pending_key() == 'school')
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description='状态新鲜度离线测试（不连设备）')
     ap.add_argument('--no-gui', action='store_true', help='跳过 GUI 任务队列卡测试')
@@ -442,6 +471,7 @@ def main() -> int:
     test_wait_busy_end_unchanged()
     test_classify_precedence()
     test_startup_probe()
+    test_main_pending_key()
     if not args.no_gui:
         test_gui_queue_card()
 
