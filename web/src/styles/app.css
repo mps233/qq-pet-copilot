@@ -1382,12 +1382,16 @@ html[data-scene="store"]{--qp-room:var(--qp-room-store);--qp-statusbar:var(--qp-
    （真机 PWA 全屏实测：通知页顶部一条暖黄）。内页统一白底与顶栏衔接。 */
 html[data-page]:not([data-page="main"]){background-image:none;background-color:#fff}
 
-/* React 版的挂载点。旧版没有这一层（`.app` 直接挂在 `body` 下），加了 #root 之后
-   高度链会在这里断掉：body 是 height:100% + overflow-y:auto 的滚动容器，而 #root 默认
-   高度为 auto（由内容撑开）—— 于是 iOS 独立 Web App 里又能把整页上下拉动回弹了
-   （旧版是靠把 html 锁成 overflow:hidden 来消灭这个的，前提是高度链完整）。
-   这一条是迁移时新增的，不改任何既有规则。 */
-#root{height:100%}
+/* React 版的挂载点。旧版没有这一层（`.app` 直接挂在 `body` 下）。
+   注意两种改法的区别：
+   - `height:100%` 只修高度链（实测 html/body/#root/.app 都是 813、body 不可滚，
+     说明高度本来就够）——但**多出来的这一层会改变 iOS 对"根滚动器"的判定**：
+     body 的 overflow 被提升到 viewport 后，`overscroll-behavior:none` 压不住回弹
+     （WebKit 把该属性映射到 UIScrollView 的 elasticity，**根滚动器是特例**）。
+   - `display:contents` 让这层**在布局上消失** —— `.app` 直接成为 `body` 的布局子元素，
+     与旧版的 DOM 结构完全等价，这才是根治。
+   （Safari 11.1+ / Chrome 65+ 支持 display:contents） */
+#root{display:contents}
 
 /* ---------- 设置页：照 QQ 宠物设置页（iOS 风格浅灰底 + 白卡分组） ---------- */
 section[data-page="set"]{
