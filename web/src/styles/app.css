@@ -1519,12 +1519,19 @@ section[data-page="set"] > h2{
   padding-right:calc(var(--u) * 4);
 }
 
-/* ---------- 内页统一排版（照设置页：浅灰底 + 白卡分节） ---------- */
-main > section[data-page]:not([data-page="main"]){
+/* ---------- 内页统一排版（照设置页：浅灰底 + 白卡分节） ----------
+   注意选择器**不能用 `main section[data-page]`（直系子）**：加了 .page-slot
+   那层转场容器之后 section 不再是 main 的直系子，直系选择器会整条失效 ——
+   内页会退回 .card 的米色卡片样式（用户实报「除了设置页，其它页面背景都变成
+   淡黄色了」；设置页之所以正常，是因为它另有一条不带 `main >` 的
+   `section[data-page="set"]`）。这里一律用后代选择器。 */
+main section[data-page]:not([data-page="main"]){
   background:#F2F2F7;
-  /* 同 section[data-page="set"]：减掉顶部安全区，避免比可视区高出一截 */
-  min-height:calc(100vh - env(safe-area-inset-top, 0px));
-  min-height:calc(100dvh - env(safe-area-inset-top, 0px));
+  /* 高度用 100% 而不是 calc(100dvh - env(safe-area-inset-top))：body 已经有
+     padding-top: safe-area-inset-top 了，再减一次会让内页比可用区矮、底部露出背景
+     （.home 上踩过同样的坑）。父级 .page-slot 是 absolute + inset:0，高度确定，
+     所以 100% 有意义。 */
+  min-height:100%;
   margin:0;padding:0 0 calc(var(--u) * 24);
   border:0;border-radius:0;box-shadow:none;
 }
@@ -1548,15 +1555,15 @@ main > section[data-page]:not([data-page="main"]){
 .pgsec-c .advcap:first-child{margin-top:0}
 .pgsec-t + .pgsec-c > .advcap:first-child{margin-top:0}
 /* 内页里原橙色竖条小节标题 -> 灰色小字 */
-main > section[data-page]:not([data-page="main"]) .subh{
+main section[data-page]:not([data-page="main"]) .subh{
   font-size:calc(var(--u) * 11.5);color:#8A8A8E;letter-spacing:0;
   margin:calc(var(--u) * 14) calc(var(--u) * 16) calc(var(--u) * 2);padding:0;
 }
 /* 内页按钮/提示与卡片对齐 */
-main > section[data-page]:not([data-page="main"]) > .savebtn,
-main > section[data-page]:not([data-page="main"]) > .btnrow2,
-main > section[data-page]:not([data-page="main"]) > .saveMsg,
-main > section[data-page]:not([data-page="main"]) > .plannote{
+main section[data-page]:not([data-page="main"]) > .savebtn,
+main section[data-page]:not([data-page="main"]) > .btnrow2,
+main section[data-page]:not([data-page="main"]) > .saveMsg,
+main section[data-page]:not([data-page="main"]) > .plannote{
   margin-left:calc(var(--u) * 12);margin-right:calc(var(--u) * 12);
 }
 
