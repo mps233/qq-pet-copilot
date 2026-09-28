@@ -1393,6 +1393,13 @@ html[data-page]:not([data-page="main"]){background-image:none;background-color:#
    （Safari 11.1+ / Chrome 65+ 支持 display:contents） */
 #root{display:contents}
 
+/* 总览页的滚动容器是 `section.home` 自己（它带 overflow-y:auto，页面里的浮动层都是
+   绝对定位，scrollHeight 由它们的最远边界决定），而它的 overscroll-behavior 是默认的
+   `auto` —— iOS 上滚到最顶/最底会多滑一截。内页的滚动发生在 body 上，那条已经由
+   body 的 overscroll-behavior:none 压住了，所以只有总览页有这个现象（用户实测确认：
+   「只有总览页有」「滚到顶部底部的时候多滑了一截」）。这里补上同一条。 */
+.home{overscroll-behavior:none}
+
 /* ---------- 设置页：照 QQ 宠物设置页（iOS 风格浅灰底 + 白卡分组） ---------- */
 section[data-page="set"]{
   background:#F2F2F7;
