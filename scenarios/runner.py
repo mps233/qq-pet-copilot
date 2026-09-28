@@ -66,9 +66,11 @@
       python scenarios/runner.py --test school.select_course
 """
 
+import atexit
 import os
 import sys
 import time
+import traceback
 from datetime import date, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -88,6 +90,7 @@ from src.config import (
 )
 from src.fatigue import fatigue_today
 from src.notify import notify_error, send_alert, send_career_unlock, send_event
+from src import instance
 from src import opener
 from src.opener import open_pet_page
 from src.ocr import get_engine
@@ -100,12 +103,13 @@ from src.progress import (
     WORK_PROGRESS_FILE,
     course_kind,
     course_seconds,
+    count_cross,
     exp_daily_done,
     load_durations,
     load_progress,
     log,
 )
-from src.queue_status import save_queue_status
+from src.queue_status import mark_starting, mark_stopped, save_queue_status
 from src.recover import launch_emulator_if_offline, reenter_pet
 from src.scenario import StatBlocked, TaskDeferred
 from src.status_cache import update_status
@@ -1380,6 +1384,8 @@ class TaskQueueRunner(Runner):
         self._main_order: list[str] = list(MAIN_TASK_KEYS)
         self._current_task: str | None = None  # 正在执行的任务名（队列状态展示用）
         self._sched_day: date | None = None  # 调度日期：跨天时清除任务"当天不可继续"标记
+        self._startup_probe_done = False  # 启动实测（出门确认有无进行中活动）只做一次
+        self._run_started_ts = time.time()  # 本次运行的启动时间（写进队列状态供判新鲜度）
         self._career_check_due = False  # 学习结算后待检查职业树（职业解锁哨兵）
         # 上次哨兵检查时间（从 runs/career_unlock.json 恢复：频繁重启时启动检查不重复耗时）
         self._career_last_check: datetime | None = None
@@ -1400,6 +1406,10 @@ class TaskQueueRunner(Runner):
         self._apply_tasks_config(tasks, order)
         self._sched_day = datetime.now().date()  # 调度日期：跨天时清除任务"当天不可继续"标记
         log(f'任务队列调度已启用，执行顺序: {" > ".join(TASK_NAMES[k] for k in order)}')
+        # 启动实测：重启会丢掉内存里的 pending（"正在上课"的登记），"宠物现在到底
+        # 还有没有事在做"只能出门实测一次；不实测就会把上一轮的活动当成现状
+        # （用户实报：宠物去上课→手动召回→停掉再启动调度器，显示还是"在上课"）。
+        self._startup_activity_probe(tasks, order)
         # 职业解锁哨兵：启动先查一次（防停机期间解锁漏报；10 分钟内刚查过则跳过）
         if self._career_startup_check_due():
             self._career_check(tasks, order, '启动检查')
@@ -1567,6 +1577,27 @@ class TaskQueueRunner(Runner):
                 return scen
         return None
 
+    def _main_pending_key(self) -> str:
+        """主任务组里 pending 那个活动对应的**任务键**（写进队列状态，仪表盘据此高亮对应行）。
+
+        为什么要单独给键：延时收尾期间 `current` 是空的（调度器在跑别的支线），
+        只有 `pending: '雇佣打工'` 这种中文描述 —— 仪表盘拿不到"是哪一行"，
+        于是"宠物正在被雇佣打工、列表里雇佣好友却不亮"（用户实报）。
+        """
+        # 优先按 pending 的**描述**认键：启动实测是"借道 school 场景"做的检测
+        # （检测逻辑都在基类，`_startup_activity_probe` 里 `scen = self.school`），
+        # 但它登记的是"正在打工"这类活动 —— 只看场景归属会把键写成 school（实测踩到）。
+        desc = (pend.pending or {}).get('desc', '') if pend is not None else ''
+        by_desc = {'上课': 'school', '打工': 'work',
+                   '雇佣打工': 'hire_friend', '冒险': 'adventure'}
+        if desc in by_desc:
+            return by_desc[desc]
+        for key, scen in (('adventure', self.adventure), ('school', self.school),
+                          ('hire_friend', self.hire_friend), ('work', self.work)):
+            if scen.pending is not None:
+                return key
+        return ''
+
     def _school_due(self, tasks: dict, ctx: dict) -> bool:
         """学习是否可执行（主任务组内）：学习工作时长未达上限，且金币 >= 阈值
         （金币识别失败/不足时本来该打工；打工当天不可继续才回退学习）。
@@ -1689,6 +1720,65 @@ class TaskQueueRunner(Runner):
         return False
 
     # ---- 执行 ----
+
+    def _startup_activity_probe(self, tasks: dict, order: list) -> bool:
+        """启动实测（每次启动只做一次）：出门确认宠物现在到底有没有进行中的活动。
+
+        调度器重启会丢掉内存里的 pending（"正在上课/打工/冒险"的登记），重启后
+        "宠物还在不在上课"没有任何本地记录——不实测就只能等第一个主任务出门才
+        发现，期间界面还停在上一轮的"进行中"上（用户实报：宠物去上课 → 手动召回
+        → 停掉调度器再启动，显示还是"在上课"）。所以启动后立刻出门实测一次
+        （不阻塞、不等待收尾）：
+
+          - 活动进行中 → 登记 pending（到点照常收尾计数，并避免重复开场）；
+          - 出门即是结算页（上次活动结束没收尾）→ 点 quit 收尾并按类型计数；
+          - 被雇佣中 → 交给被雇佣检查/召回流程；
+          - 什么都没有 → 明确记一条"当前没有进行中的活动"，按最新配置继续调度。
+
+        返回 True = 这次出门命中了活动/结算/被雇佣；False = 当前确实空闲
+        （返回值主要给测试用，调度循环不依赖它——pending 由 _main_choice 兜住）。
+        """
+        if self._startup_probe_done:
+            return False
+        self._startup_probe_done = True
+        scen = self.school  # 借道 school 场景：检测逻辑都在基类，defer_wait 已开启
+        self._current_task = '启动检查'
+        self._write_queue_status(tasks, order)  # 先落状态：GUI/仪表盘立刻显示"启动检查"
+        log('启动检查: 出门实测宠物当前状态（重启会丢 pending，不能沿用上一轮）')
+        try:
+            scen.ensure_main_page()
+            hit = scen.probe_activity_state()
+        except Exception as e:  # noqa: BLE001 - 实测失败只记日志，不拦调度
+            log(f'启动检查: 实测失败（{type(e).__name__}: {e}），'
+                f'按"当前没有进行中的活动"继续调度')
+            hit = None
+        finally:
+            self._current_task = None
+        self._back_to_main('启动检查后')
+        names = {'school': '上课', 'work': '打工', 'adventure': '冒险', 'employed': '被雇佣'}
+        if hit is None:
+            log('启动检查: 当前没有进行中的活动，按最新配置继续调度')
+            self._write_queue_status(tasks, order)
+            return False
+        kind, settled = hit
+        name = names.get(kind, kind)
+        if kind == 'employed':
+            log('启动检查: 宠物被雇佣中，交给被雇佣检查/召回流程处理')
+        elif settled:
+            # 结算页（上次活动已结束未收尾）：按"出门时等完了活动"的口径计数
+            # （与 wait_busy_end → 场景 run() 的计数路径一致）
+            count_cross(kind)
+            if kind == 'school':
+                self._career_check_due = True  # 一节课结算完，职业哨兵检查
+            log(f'启动检查: 出门遇到{name}结算页，已收尾并计数')
+        elif scen.pending is not None:
+            log(f'启动检查: 检测到正在{name}，已登记延时收尾'
+                f'（{scen.pending["until"]:%H:%M:%S} 收尾），先调度其他任务')
+        else:
+            log(f'启动检查: 检测到正在{name}（未识别到剩余时间，没登记收尾），'
+                f'先按队列调度（下一个主任务出门时会重新检测）')
+        self._write_queue_status(tasks, order)
+        return True
 
     def _pending_finish_first(self) -> str | None:
         """主任务 pending 收尾优先：已到点立即收尾返回 'finish'；
@@ -2107,16 +2197,19 @@ class TaskQueueRunner(Runner):
                 next_at, next_name = cand, task.name
         pend = self._main_pending_scen()
         pending_desc = ''
+        pending_key = ''
         if pend is not None:
             # pending 在等收尾时间，也算待执行
             ready += 1
             pending_desc = pend.pending['desc']
+            pending_key = self._main_pending_key()
             until = pend.pending['until']
             if next_at is None or until < next_at:
                 next_at, next_name = until, f'{pending_desc}收尾'
         save_queue_status({
             'current': self._current_task or '',
             'pending': pending_desc,
+            'pending_key': pending_key,
             'next': next_name,
             'next_at': next_at.strftime('%H:%M:%S') if next_at else '',
             # 时间戳：GUI 每 5 秒刷新时算"剩余xx秒"倒计时用
@@ -2124,6 +2217,11 @@ class TaskQueueRunner(Runner):
             'ready': ready,
             'waiting': waiting,
             'tasks': task_states,
+            # pid + 运行启动时间：消费端（GUI/仪表盘）据此判断"这份状态是不是
+            # 当前这个调度器写的"——否则重启后会继续显示上一轮的"上课（进行中）"
+            # （重启后新进程跑完第一个任务前不写新状态，用户实报的 bug）
+            'pid': os.getpid(),
+            'started': self._run_started_ts,
             'updated': now.strftime('%H:%M:%S'),
         })
 
@@ -2174,6 +2272,8 @@ class TaskQueueRunner(Runner):
         两处间隔不一致时（如 friend_care 队列 success_interval 已过、场景间隔 600s 未到），
         队列状态会把它们误标成"现在就能跑"，GUI 显示"可执行"却一直不动。
         """
+        now = datetime.now()
+        rng = None                      # 场景自己的时间段（见下）
         if key == 'care':
             last = getattr(self.care, 'last_care_at', None)
             iv = max(1, int(getattr(self.care.cfg.care, 'interval_seconds', 60) or 60))
@@ -2183,17 +2283,40 @@ class TaskQueueRunner(Runner):
                 return None
             last = getattr(self.friend_care, 'last_care_at', None)
             iv = max(0, int(getattr(fc, 'interval_seconds', 1800) or 0))
+            rng = getattr(fc, 'time_range', '') or ''
         elif key == 'gift_bag':
             gb = self.gift_bag.cfg.gift_bag
             if not gb.enabled:
                 return None
             last = getattr(self.gift_bag, 'last_sweep_at', None)
             iv = max(0, int(getattr(gb, 'interval_seconds', 1800) or 0))
+            rng = getattr(gb, 'time_range', '') or ''
+        elif key == 'hire_friend':
+            hf = self.hire_friend.cfg.hire_friend
+            rng = getattr(hf, 'time_range', '') or ''
+            last = iv = None
         else:
             return None
-        if last is None:
-            return None
-        return last + timedelta(seconds=iv)
+        due = None
+        if last is not None and iv is not None:
+            due = last + timedelta(seconds=iv)
+        # **场景自己的时间段也要算进来**：队列级 _eligible 只看 tasks.*.enabled_time_range
+        #（默认空 = 不限），场景的 time_range 它不看 —— 于是"现在在窗口外"的任务被标成
+        # 可执行、界面上什么状态都没有（实测：凌晨 3 点福袋显示可执行，而它的窗口是
+        # 08:00-23:59，用户问"福袋为什么什么状态都没有"）。窗口外 → 下一个开始时间。
+        if rng:
+            try:
+                start, end = parse_time_range(rng)
+            except ValueError:
+                start = end = None
+            if start is not None and not in_time_range(now.time(), start, end):
+                nxt_open = now.replace(hour=start.hour, minute=start.minute,
+                                       second=0, microsecond=0)
+                if nxt_open <= now:
+                    nxt_open += timedelta(days=1)
+                if due is None or nxt_open > due:
+                    due = nxt_open
+        return due
 
     def _sleep_until_next(self, tasks: dict, order: list) -> bool:
         """没有任务可执行时的等待：睡到最近的等待点（退避/每日窗口/pending 收尾时间），
@@ -2295,15 +2418,36 @@ def run_test(name: str) -> None:
     log(f'{name} 返回: {result}')
 
 
+#: 单实例登记文件（调度器自己写；仪表盘/GUI 靠它判"是否已在运行"，见 src/instance.py）
+RUNNER_PID_FILE = PROJECT_ROOT / 'runs' / 'runner.pid'
+
+
+def _acquire_single_instance() -> dict | None:
+    """抢占调度器单实例位；已被别的活进程占着就返回它的信息（调用方报错退出）。"""
+    return instance.acquire(RUNNER_PID_FILE, argv=sys.argv)
+
+
 def run_scheduler(use_opener: bool, opener_serial: str | None = None,
                   skip_opener: bool = False) -> None:
     """按 config.yaml 的 runner.engine 选择调度引擎运行（控制台与 GUI 打包后的
     --runner 子进程共用，保证两边引擎一致）。"""
+    # 单实例守卫放最前面：多开调度器会同时操作同一部手机（三个进程抢一部手机 → 页面/进度
+    # 全乱），详见 src/instance.py 的说明（原仪表盘的判活方式依赖 ps，受限环境里会失效）。
+    # --test 单测不走这里（run_test 分支），不会被守卫挡住。
+    other = _acquire_single_instance()
+    if other:
+        log(f'已有调度器在运行（PID {other["pid"]}），本次启动直接退出 —— 防止多实例同时操作手机')
+        raise SystemExit(2)
+    atexit.register(instance.clear_pidfile, RUNNER_PID_FILE, os.getpid())
     engine = str(getattr(load_config().runner, 'engine', 'task_queue')).strip()
     if engine not in ('task_queue', 'legacy'):
         log(f'runner.engine 配置无效: {engine!r}，使用默认 task_queue')
         engine = 'task_queue'
     log(f'调度引擎: {engine}')
+    if engine == 'task_queue':
+        # 立刻把队列状态重置为"启动检查中"（带本次 PID）：否则重启后 GUI/仪表盘
+        # 会继续读上一轮写的"上课（进行中）"，直到新进程跑完第一个任务才被覆盖
+        mark_starting(os.getpid())
     # 模拟器模式标记：visit 等场景据此走 am start 好友入口分支（src/opener.py）
     opener.EMULATOR_MODE = use_opener
     runner_cls = TaskQueueRunner if engine == 'task_queue' else Runner
@@ -2342,3 +2486,21 @@ if __name__ == '__main__':
             run_scheduler(use_opener, args.emulator_device, skip_opener=args.skip_opener)
         except KeyboardInterrupt:
             log('手动停止')
+            mark_stopped()  # 手动 Ctrl-C 停止：队列状态标"已停止"，别留"进行中"
+        except SystemExit:
+            # 调度器自身的退出语义（如主任务失败告警退出）：把队列状态标成"已停止"，
+            # 否则 GUI/仪表盘还留着上一轮的"进行中"
+            mark_stopped()
+            raise
+        except BaseException as e:  # noqa: BLE001 - 启动/运行期崩溃都要在日志里留痕
+            # 顶层崩溃原先只把 traceback 写进 stderr（runs/runner_console.log），而仪表盘
+            # "实时日志"读的是 runs/logs/<date>.log —— 手机上看不到任何崩溃原因，只能人肉
+            # 翻文件（实测 09-23 00:14 启动失败排查踩过）。逐行 log 让每行都带时间戳。
+            log(f'调度器异常退出: {type(e).__name__}: {e}')
+            for tb_line in traceback.format_exc().rstrip().splitlines():
+                log(f'  {tb_line}')
+            mark_stopped()
+            raise
+        else:
+            # 正常跑完退出（如任务全部结束）：同样别留"进行中"给界面
+            mark_stopped()

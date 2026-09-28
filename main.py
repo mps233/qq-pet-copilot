@@ -101,7 +101,8 @@ from src.progress import (
 from src.stats_chart import StatsPanel
 from src.status_cache import FIELDS as STATUS_FIELDS
 from src.status_cache import load_accounts
-from src.queue_status import load_queue_status
+from src.queue_status import (load_queue_status, mark_stopped,
+                              startup_placeholder_active, status_is_current)
 from src.version import APP_GITHUB_REPO, APP_RELEASES_URL, APP_VERSION
 
 # 仅类型检查用：U2Device 在方法内懒加载导入，注解里引用它需要类型检查器能解析
@@ -1086,11 +1087,27 @@ class MainWindow(MSFluentWindow):
         调度器运行时读 runs/queue_status.json 的精确状态（每秒读一次）；
         未运行时按配置推算（与调度页"下次执行"列共用 _predict_next），
         不开调度器也能看到队列里接下来要跑什么。
+
+        **状态新鲜度**：调度器重启后，状态文件里还留着上一轮写的
+        `pending: 上课`（新进程跑完第一个任务之前不写新的），直接展示会让人以为
+        "宠物还在上课"（用户实报）。所以只有 pid 属于当前调度器进程、且不是
+        starting/stopped 占位状态时才用它的内容；占位状态在启动宽限期内显示
+        "启动检查中" + 按最新配置推算的队列（调度器起来后会先出门实测一次当前
+        状态），宽限期过了说明这个引擎不写队列状态（legacy），显示"无"+推算。
         """
         running = self._runner_proc is not None and self._runner_proc.poll() is None
         if running:
             st = load_queue_status()
-            if st:
+            proc_pid = self._runner_proc.pid if self._runner_proc else None
+            age = None
+            if self._runner_started_at is not None:
+                age = time.monotonic() - self._runner_started_at
+            if not status_is_current(st, proc_pid):
+                # 上一轮留下的状态（或刚起来的占位状态）：别把旧活动当现状
+                current = ('启动检查中…'
+                           if startup_placeholder_active(st, proc_pid, age) else '无')
+                nxt, ready, waiting = self._predict_queue_summary()
+            else:
                 current = st.get('current') or (
                     f"{st['pending']}（进行中）" if st.get('pending') else '无')
                 nxt = st.get('next') or '无'
@@ -1106,9 +1123,6 @@ class MainWindow(MSFluentWindow):
                         else:
                             nxt += f'（{_format_remaining(-delta)}前）'
                 ready, waiting = str(st.get('ready', 0)), str(st.get('waiting', 0))
-            else:
-                current, nxt = '无', '暂无（等待调度器写入）'
-                ready = waiting = '-'
         else:
             current = '无'
             nxt, ready, waiting = self._predict_queue_summary()
@@ -2333,6 +2347,9 @@ class MainWindow(MSFluentWindow):
             log('结束调度器进程')
             self._runner_proc.terminate()
         self._runner_started_at = None
+        # 状态文件标"已停止"：调度器被 SIGTERM 打死时不会走自己的退出处理，
+        # 不标的话界面/仪表盘还留着上一轮的"上课（进行中）"
+        mark_stopped()
 
     def _read_runner_logs(self, proc: subprocess.Popen) -> None:
         """把调度器子进程的输出逐行送入日志队列。"""
@@ -2373,6 +2390,7 @@ class MainWindow(MSFluentWindow):
     def closeEvent(self, event) -> None:
         if self._runner_proc and self._runner_proc.poll() is None:
             self._runner_proc.terminate()
+            mark_stopped()   # 退出时把队列状态标"已停止"，别留"进行中"给仪表盘
         # 只结束由本程序拉起的 scrcpy
         if self._scrcpy_proc and self._scrcpy_proc.poll() is None:
             log('关闭 scrcpy')

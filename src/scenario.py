@@ -1007,6 +1007,88 @@ class DeviceScenario:
                 break
         return True
 
+    def _classify_busy_screen(self, screen) -> tuple[str, bool] | None:
+        """判定"出门后这一屏"的状态（只识别、不点击、不等待）。
+
+        返回 (kind, settled)：
+          kind ∈ {'school', 'work', 'adventure', 'employed'}；
+          settled=True = 命中的是**结算页**（上次活动已结束未收尾，如调度器重启
+          丢了 pending 后点出门直接出现结算页），调用方需点 quit 并计数；
+          settled=False = 活动还在进行中；
+        四种状态都没有返回 None。
+
+        结算页优先：它和进行中页不会同屏，但结算页的 `xxx_end`（分享）也可能
+        被 `xxx_in` 的正则误伤，先判结算页口径与 wait_busy_end 原有顺序一致。
+        """
+        # xpath 定位（分享按钮）source 传 None 按需 dump（结算页是低频路径）
+        settle = self._detect_settlement(screen, None)
+        if settle:
+            return settle, True
+        if self.see('school_in', screen):
+            return 'school', False
+        if self.see('work_in', screen):
+            return 'work', False
+        if self.see('adventure_in', screen):
+            return 'adventure', False
+        if self.see('employed_in', screen):
+            return 'employed', False
+        return None
+
+    def probe_activity_state(self, attempts: int = BUSY_GATE_ATTEMPTS
+                             ) -> tuple[str, bool] | None:
+        """启动实测：出门看一次"现在到底有没有进行中的活动"（不阻塞、不等待收尾）。
+
+        调度器重启会丢掉内存里的 pending（"正在上课/打工"的登记），重启后宠物
+        到底还在不在上课只能**实测**——不实测就只能等第一个主任务出门才发现，
+        期间界面还停在上一轮的"进行中"上（用户实报："宠物去上课了，我手动召回，
+        停掉调度器再启动，显示还是在上课"）。检测口径与 wait_busy_end 完全一致
+        （同一套 `_classify_busy_screen`：职业弹窗、结算页、出门加载延迟都处理），
+        区别只有：不阻塞等结束、被雇佣也不等到分成比例。
+
+        返回 (kind, settled) 或 None（当前确实没有进行中的活动）：
+          - settled=True：结算页，已点 quit 收尾 → 调用方按 kind 计数；
+          - settled=False：活动进行中 → defer_wait 下 `_defer_busy` 已登记 pending
+            （到点由 finish_pending 收尾计数），否则调用方按需要处理（本方法不等待）；
+          - kind='employed'：被雇佣中，交调用方的召回策略处理（不在此阻塞）。
+
+        调用前需在主页面（内部先 leave_home()）；返回时停在出门页/进行中页，
+        由调用方 ensure_main_page() 收尾。
+        """
+        self.leave_home()
+        time.sleep(0.5)  # 出门后活动面板有几秒加载延迟
+        for attempt in range(1, attempts + 1):
+            screen = self.screen()
+            # 职业升级 / 获得新职业弹窗会挡住状态检测：处理完回主页面重新出门
+            if self.dismiss_career_popup(screen):
+                self.ensure_main_page()
+                self.leave_home()
+                continue
+            hit = self._classify_busy_screen(screen)
+            if hit is None:
+                if attempt < attempts:
+                    time.sleep(0.5)
+                continue
+            kind, settled = hit
+            if settled:
+                settle_names = {'school': '学习', 'work': '打工', 'adventure': '冒险'}
+                log(f'启动实测: 检测到{settle_names.get(kind, kind)}结算页，点 quit 收尾')
+                if kind in ('school', 'work'):
+                    # 结算页实测没有鼓励按钮（快速 3 轮不中即放弃），仅作兜底
+                    self._encourage_burst()
+                quit_hit = self.see('quit', screen)
+                if quit_hit:
+                    self.click(quit_hit[0], quit_hit[1])
+                    time.sleep(CLICK_INTERVAL)
+                else:
+                    log('启动实测: 结算页未找到 quit 按钮，直接返回')
+                return kind, True
+            if kind == 'employed':
+                return kind, False
+            if self.defer_wait and self._defer_busy(kind, screen):
+                return kind, False
+            return kind, False
+        return None
+
     def wait_busy_end(self, check_interval: float | None = None,
                       attempts: int = BUSY_GATE_ATTEMPTS) -> str | None:
         """出门后检测是否正在上课/工作/冒险/被雇佣中，是则等待结束并退出；
@@ -1032,14 +1114,19 @@ class DeviceScenario:
                 self.ensure_main_page()
                 self.leave_home()
                 continue
+            hit = self._classify_busy_screen(screen)
+            if hit is None:
+                if attempt < attempts:
+                    time.sleep(0.5)  # 两轮检测间的等待（原 CLICK_INTERVAL=1s，缩短省时）
+                continue
+            kind, settled = hit
             # 结算页（上次活动已结束未收尾）：点 quit 收尾并返回对应类型（计数同
             # 等完活动的语义；"打工总结"含雇佣好友名称时 _detect_settlement 已计雇佣）。
             # xpath 定位（分享/quit）source 传 None 按需 dump（结算页是低频路径）
-            settle = self._detect_settlement(screen, None)
-            if settle:
+            if settled:
                 settle_names = {'school': '学习', 'work': '打工', 'adventure': '冒险'}
-                log(f'出门后检测到{settle_names[settle]}结算页，点 quit 收尾')
-                if settle in ('school', 'work'):
+                log(f'出门后检测到{settle_names[kind]}结算页，点 quit 收尾')
+                if kind in ('school', 'work'):
                     # 结算页实测没有鼓励按钮（快速 3 轮不中即放弃），仅作兜底
                     self._encourage_burst()
                 quit_hit = self.see('quit', screen)
@@ -1048,31 +1135,29 @@ class DeviceScenario:
                     time.sleep(CLICK_INTERVAL)
                 else:
                     log('结算页未找到 quit 按钮，直接返回')
-                return settle
-            if self.see('school_in', screen):
+                return kind
+            if kind == 'school':
                 if self.defer_wait and self._defer_busy('school', screen):
                     return 'school'
                 log('检测到正在上课，等待这节课结束...')
                 self.wait_end('school_in', 'school_end', check_interval, encourage=True)
                 return 'school'
-            if self.see('work_in', screen):
+            if kind == 'work':
                 if self.defer_wait and self._defer_busy('work', screen):
                     return 'work'
                 log('检测到正在打工，等待这次工作结束...')
                 self.wait_end('work_in', 'work_end', check_interval, encourage=True)
                 return 'work'
-            if self.see('adventure_in', screen):
+            if kind == 'adventure':
                 if self.defer_wait and self._defer_busy('adventure', screen):
                     return 'adventure'
                 log('检测到正在冒险，等待这次冒险结束...')
                 self.wait_end('adventure_in', 'adventure_end', check_interval)
                 return 'adventure'
-            if self.see('employed_in', screen):
-                log('检测到被雇佣中，等待召回...')
-                self.wait_employed_back()
-                return 'employed'
-            if attempt < attempts:
-                time.sleep(0.5)  # 两轮检测间的等待（原 CLICK_INTERVAL=1s，缩短省时）
+            # kind == 'employed'：被雇佣中，等到召回条件满足（或让利模式延后重试）
+            log('检测到被雇佣中，等待召回...')
+            self.wait_employed_back()
+            return 'employed'
         return None
 
     def _recheck_busy_after_nav(self, stage: str) -> str | None:
