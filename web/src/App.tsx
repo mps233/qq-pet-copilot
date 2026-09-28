@@ -4,6 +4,7 @@ import { Overview, type PageKey } from './components/Overview'
 import { LogPage } from './components/LogPage'
 import { NavHead } from './components/NavHead'
 import { NotifyPage } from './components/NotifyPage'
+import { SettingsPage } from './components/SettingsPage'
 import { useData } from './lib/useData'
 import { useScene } from './lib/useScene'
 
@@ -127,6 +128,14 @@ export default function App() {
           <section className="card" data-page="notify">
             <NavHead title="通知" onBack={() => setPage('main')} />
             <NotifyPage editable={data.editable ?? {}} onSave={saveOne} />
+          </section>
+        ) : page === 'set' ? (
+          <section className="card" data-page="set">
+            <SettingsPage
+              editable={data.editable ?? {}}
+              onSave={saveOne}
+              onExit={() => setPage('main')}
+            />
           </section>
         ) : (
           // 其余页面还没搬完：先给占位 + 回总览入口（旧界面 / 上功能是全的）
