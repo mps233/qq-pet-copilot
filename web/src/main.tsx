@@ -12,13 +12,3 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <App />
   </React.StrictMode>,
 )
-
-setTimeout(function () {
-  var btn = document.getElementById('btnScene')
-  if (btn) {
-    var mk = function (t) { return new PointerEvent(t, { bubbles: true, cancelable: true, pointerId: 1, pointerType: 'touch', isPrimary: true }) }
-    btn.dispatchEvent(mk('pointerdown'))
-    btn.dispatchEvent(mk('pointerup'))
-    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-  }
-}, 2600)

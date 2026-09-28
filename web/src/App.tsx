@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { TASK_GROUP, TASK_NAME, isLoopTask, runnerStart, runnerStop, saveSettings } from './api'
 import { Overview, type PageKey } from './components/Overview'
 import { AdvPage } from './components/AdvPage'
@@ -18,6 +18,19 @@ export default function App() {
   const [busy, setBusy] = useState('')
   const [page, setPage] = useState<PageKey>('main')
   const [orderMsg, setOrderMsg] = useState('')
+  /** 切页滑入动画：只记"方向"这个 class，播完清掉（清掉才能在下一次切页重播）。
+   *  首次加载不播 —— 用 ref 记上一页、为 null 就跳过（不能用 state 判断，第一次
+   *  数据到达时的重渲染会把它冲掉；也不能给 main 加 key，那会重建整个页面子树）。 */
+  const prevPage = useRef<PageKey | null>(null)
+  const [anim, setAnim] = useState('')
+  useEffect(() => {
+    const prev = prevPage.current
+    prevPage.current = page
+    if (prev === null || prev === page) return // 首次渲染 / 同页 → 不播
+    setAnim(page === 'main' ? 'page-back' : 'page-fwd')
+    const t = window.setTimeout(() => setAnim(''), 300)
+    return () => window.clearTimeout(t)
+  }, [page])
 
   // 自动换背景要跟着「当前任务 + 进行中的活动」走
   const curKey = data?.queue.pending ? data.queue.pending_key || '' : data?.queue.current || ''
@@ -135,7 +148,9 @@ export default function App() {
 
   return (
     <div className="app">
-      <main>
+      {/* className 带的方向 class 变化即触发滑入动画（不需要给 main 加 key，
+          key 会重建整棵子树、把内页状态和滚动位置一起清掉）。 */}
+      <main className={anim}>
         {page === 'main' ? (
           <Overview
             data={data}
