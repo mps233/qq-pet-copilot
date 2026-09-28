@@ -4,6 +4,7 @@ import { Overview, type PageKey } from './components/Overview'
 import { LogPage } from './components/LogPage'
 import { NavHead } from './components/NavHead'
 import { NotifyPage } from './components/NotifyPage'
+import { PlanPage } from './components/PlanPage'
 import { SettingsPage } from './components/SettingsPage'
 import { useData } from './lib/useData'
 import { useScene } from './lib/useScene'
@@ -123,6 +124,11 @@ export default function App() {
           <section className="card" data-page="log">
             <NavHead title="日志" onBack={() => setPage('main')} />
             <LogPage shots={data.shots ?? []} />
+          </section>
+        ) : page === 'plan' ? (
+          <section className="card" data-page="plan">
+            <NavHead title="职业解锁计划" onBack={() => setPage('main')} />
+            <PlanPage />
           </section>
         ) : page === 'notify' ? (
           <section className="card" data-page="notify">

@@ -230,3 +230,63 @@ export async function testNotify(): Promise<{ ok: boolean; msg?: string }> {
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
   return (await r.json()) as { ok: boolean; msg?: string }
 }
+
+/** 职业解锁哨兵的状态与历史事件 */
+export interface WatchInfo {
+  enabled: boolean
+  stop_study: boolean
+  interval: number
+  last_check: string
+  alive: boolean
+  events: { career: string; name: string; ts: string; stopped: boolean }[]
+}
+
+export interface PlanLine {
+  name: string
+  jr: boolean
+  ch: boolean
+}
+
+/** 阶梯路线一行：[编号, 描述, 是否完成, 进度说明] */
+export type PlanStep = [string, string, boolean, string]
+
+export interface PlanData {
+  ok: boolean
+  /** 当前属性值（键是单字：力/智/魅/工分/金币 + 初级毕业/中级毕业） */
+  values: Record<string, number | boolean>
+  total: number
+  total_target: number
+  /** 8 条线里已解锁的数量 */
+  jr_n: number
+  ch_n: number
+  lines: PlanLine[]
+  steps: PlanStep[]
+  lines_meta: string
+  gates: Record<string, boolean>
+  updated: string
+  watch: WatchInfo
+}
+
+export const fetchPlan = (): Promise<PlanData> => getJSON<PlanData>('/api/plan')
+
+/** 保存手工录入的进度 */
+export async function savePlan(updates: Record<string, unknown>): Promise<{ ok: boolean; msg?: string }> {
+  const r = await fetch('/api/plan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ updates }),
+  })
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  return (await r.json()) as { ok: boolean; msg?: string }
+}
+
+/** 出门→职业小镇 OCR 自动识别（子进程隔离，防并发锁） */
+export async function syncPlan(): Promise<{ ok: boolean; msg?: string }> {
+  const r = await fetch('/api/plan/sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  })
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  return (await r.json()) as { ok: boolean; msg?: string }
+}
