@@ -706,7 +706,12 @@ body{
 .funcbar{
   position:absolute;
   left:calc(var(--u) * 294);
-  top:calc(var(--u) * 190);
+  /* top = 右列第三颗圆钮的底 + **两倍圆钮间距**（用户要求，不再与任务列表底端对齐）。
+     算一下：第三钮 top 154.3u + 高 42u = 196.3u；圆钮之间的空隙
+     16u（第 1→2）/ 18u（第 2→3），取 17u → 两倍 34u → 196.3 + 34 ≈ 230.3u。
+     原来这里是 190u（legacy CSS 里的默认值，运行时由 place() 覆盖），
+     而 190 < 196.3，所以会压住第三颗圆钮。 */
+  top:calc(var(--u) * 230.3);
   width:calc(var(--u) * 50);
   z-index:5;
   display:flex;flex-direction:column;
