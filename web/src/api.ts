@@ -290,3 +290,42 @@ export async function syncPlan(): Promise<{ ok: boolean; msg?: string }> {
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
   return (await r.json()) as { ok: boolean; msg?: string }
 }
+
+/** 冒险记录（统一数据源 runs/adventure_live.jsonl） */
+export interface AdvData {
+  ok: boolean
+  /** 统计范围内的总把数 / 净收益 / 平均每把 */
+  n: number
+  net: number
+  avg: number
+  /** 收益档分布：{"20": 69, "0": 180, ...} */
+  dist: Record<string, number>
+  win: number
+  zero: number
+  loss: number
+  /** 状态增益汇总：[属性名, 次数, 总量] */
+  gains: [string, number, number][]
+  /** 累计收益曲线 [索引, 值] */
+  cum: [number, number][]
+  /** 单次收益散点 [索引, 值] */
+  pts: [number, number][]
+  /** 状态轨迹 [索引, 体力, 清洁, 心情, 是否护理后] */
+  stats: [number, number | null, number | null, number | null, number][]
+  /** 逐次明细 [索引, 时间, 本趟收益, 增益文字, 扣费] */
+  recent: [number, string, number | null, string, number][]
+  today_n: number
+  today_net: number
+  date: string
+  dates: string[]
+  date_n: Record<string, number>
+  today: string
+  yesterday: string
+  all_n: number
+  updated: string
+  /** 护理阈值（画那条红虚线用；两个值可能不同） */
+  care_energy: number | null
+  care_clean: number | null
+}
+
+export const fetchAdventure = (date?: string): Promise<AdvData> =>
+  getJSON<AdvData>(`/api/adventure${date ? `?date=${encodeURIComponent(date)}` : ''}`)
