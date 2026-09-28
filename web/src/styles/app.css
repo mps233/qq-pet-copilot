@@ -344,6 +344,10 @@ body{
 #bgSheet .bggrid{
   display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
   gap:calc(var(--u) * 8);overflow-y:auto;overscroll-behavior:none;
+  /* 选中态是给缩略图**向外**画一圈 box-shadow（见下面的 .bgtile.on），左右各扩 2u。
+     容器不给内边距的话，最左列的框会被左边裁掉、最右列的被右边裁掉 ——
+     用户实报「左边选中以后左边框没了，右边也是」。留 3u 内边距把这点空间让出来。 */
+  padding:calc(var(--u) * 3);
 }
 #bgSheet .bgtile{
   border:0;background:none;padding:0;font:inherit;
