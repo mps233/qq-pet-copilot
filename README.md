@@ -47,8 +47,12 @@
 - **打工场景**：出门 → 小镇 → OCR 识别打工地点进入（设置页下拉可选 8 个地点）→
   按 `work.duration` 选时长（10分钟/45分钟/2小时）→ 顺带雇佣好友 → 开工。
   每次按所选时长累计打工时长。
-- **学习工作时长上限**：学习/打工时长按学园与所选时长结算累计，
-  累计 >= `schedule.daily_hour_limit`（小时，0=不限）后**今天不再学习只打工**；
+- **学习工作时长上限（合计停止点）**：学习/打工时长按学园与所选时长结算累计，
+  累计 >= `schedule.daily_hour_limit`（小时，0=不限）后**今天不再学习只打工**、
+  >= `schedule.work_stop_hours` 后**今天不再打工**、>= `schedule.efficiency_tier2_hours`
+  后两项全停（转冒险）——三者都按"学习+打工合计"计。仪表盘设置页把这三处合成**一个**
+  「合计满则停止」（不区分学习/打工，保存时三键写同一个值，如合计满 12h 全停）；
+  想"学满 8h 后继续打工到 12h"这类分开停的玩法仍可手改 config.yaml。
   首次运行新版本时，老进度只有次数会按旧版点数系数自动换算成时长（只迁移一次）。
 - **冒险场景**：每天到达配置时间后优先冒险，连跑 `adventure.batch` 次；
   可开启"天色不对"自动召回（点完"确认召回"会验证生效，召回后直接回出门页连跑）。
@@ -170,7 +174,9 @@ adb devices
 | `work.duration` | 打工时长：10分钟 / 45分钟 / 2小时 |
 | `work.times_per_day` | 每天打工次数上限，0 不限 |
 | `schedule.coin_threshold` | 金币阈值：>= 优先学习，< 先打工 |
-| `schedule.daily_hour_limit` | 学习工作时长上限（小时，0=不限）：累计学习+打工时长 >= 上限后只打工 |
+| `schedule.daily_hour_limit` / `work_stop_hours` / `efficiency_tier2_hours` | 合计停止点的三处判定（小时，0=不限）：停学习 / 停打工 / 两项全停，都按"学习+打工合计"计。仪表盘设置页只暴露一个「合计满则停止」，保存时三键写同一个值 |
+| `schedule.efficiency_tier1_hours` / `efficiency_tier2_hours` | 收益档门槛（小时，游戏机制）：合计达到后界面/日志的效率显示降 25% / 10%。**不是设置项**（仪表盘只在卡片里作说明文字展示），只提示、不拦任务 |
+| `schedule.study_quota_hours` / `work_quota_hours` | 学习/打工各自配额（小时，0=今天不做该项，24≈不限）：决定当天先学还是先打工 |
 | `schedule.check_interval` | 上课/打工/冒险/被雇佣进行中状态的统一检查间隔（秒） |
 | `schedule.back_method` | 返回方式：`系统返回`（Android 返回键，默认）/ `返回图标`（定位 back 按钮点击） |
 | `adventure.times_per_day` / `start_time` / `batch` | 每天冒险次数 / 调度时间（HH:MM）/ 单轮连跑次数 |
