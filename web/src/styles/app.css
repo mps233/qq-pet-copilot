@@ -899,6 +899,14 @@ body{
 /* 曾经给 .tasklist 加过 `overflow-y:auto` + `min-height:0`（想让它内部滚、不撑高
    .scene），同样是多余的锁 —— 实测 360 宽下任务列表根本不超出，而真正把 .home
    顶出底边的是 .drawer（见那条的注释）。别再靠锁容器来"修"滚动。 */
+/* 可拖拽的行必须**静态**声明 touch-action:none。
+   浏览器是在触摸**开始那一刻**读这个值的，而原来的
+   `#taskList.dragging-list{touch-action:none}` 要等 dnd-kit 在 onDragStart 加上 class
+   才生效 —— 那时已经晚了：`.home` / `.page-slot` 都是滚动容器，iOS 会先接管触摸、
+   发 pointercancel，dnd-kit 就收不到后续事件了（用户实报「任务顺序那里不能拖动了」）。
+   只给可拖的行加，不是整个 .tasklist —— 这样在普通行/空白处上下滑仍能滚页面。
+   （同类坑：背景面板点不开也是 pointer 被滚动判定吃掉，那次是在 JS 侧改的 onClick。） */
+.tasklist .mrow.sortable{touch-action:none}
 .tasklist .mrow{
   display:flex;gap:calc(var(--u) * 6);
   padding:calc(var(--u) * 7.5) calc(var(--u) * 8);   /* 左右 8u：与标题行同一左缘（标题那侧也跟着调） */

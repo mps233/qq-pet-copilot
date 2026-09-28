@@ -85,7 +85,9 @@ function SortableRow(props: {
   return (
     <div
       ref={setNodeRef}
-      className={rowClass(props.k, props.t, props.pendingKey) + (isDragging ? ' dragging' : '')}
+      // 'sortable' 这个 class 是给 CSS 用的（.mrow.sortable{touch-action:none}）——
+      // touch-action 必须在触摸开始前就声明好，不能等 onDragStart 再加。
+      className={rowClass(props.k, props.t, props.pendingKey) + ' sortable' + (isDragging ? ' dragging' : '')}
       data-k={props.k}
       style={{
         transform: transform ? `translate3d(0, ${Math.round(transform.y)}px, 0)` : undefined,
