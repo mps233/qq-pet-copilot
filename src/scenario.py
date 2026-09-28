@@ -516,11 +516,19 @@ class DeviceScenario:
             misses = 0
             if back_count >= SCHEME_FALLBACK_BACKS and scheme_tries < 2:
                 # 连按返回仍没回来：改用官方 scheme 重开宠物页（打开成功会
-                # 等主页渲染并返回 True），最多兜底 2 次避免超时循环
-                scheme_tries += 1
-                if self.reopen_pet_by_scheme():
-                    back_count = 0
-                    continue
+                # 等主页渲染并返回 True），最多兜底 2 次避免超时循环。
+                # ⚠️ **结算页上不发 scheme**：scheme 会把当前页整个替换掉，而结算页
+                # 上挂着收益记录与计数（调用方靠 finish_pending/_detect_settlement 收尾），
+                # 一跳这次结算就丢了。是结算页就继续走 back 逻辑，由调用方去收尾。
+                # （2026-09-28 实测：scheme 到主页在真机 5 种起始状态 5/5 成立，
+                #   但结算页这个例外必须挡住。）
+                if self._is_settlement_screen(screen, source):
+                    log('当前是结算页，跳过 scheme 兜底（避免把这次结算跳过去）')
+                else:
+                    scheme_tries += 1
+                    if self.reopen_pet_by_scheme():
+                        back_count = 0
+                        continue
             if self.go_back(screen, source):
                 back_count += 1
                 log('未识别到主页面'
@@ -532,6 +540,27 @@ class DeviceScenario:
                 log(f'未识别到主页面也找不到 back，等待重试 ({attempt}/{max_attempts})')
             time.sleep(CLICK_INTERVAL)
         raise RuntimeError('无法回到主页面')
+
+    def _is_settlement_screen(self, screen, source) -> bool:
+        """只判定"当前是不是结算页"，**不做任何收尾动作**（纯查询，无副作用）。
+
+        与 `_detect_settlement()` 的区别：后者会顺手记收益、计雇佣好友次数（有副作用），
+        这里只回答"是/不是"——给 `ensure_main_page` 的 scheme 兜底当刹车用：
+        结算页上一发 scheme，这次结算（收益记录 + 计数）就整个丢了。
+
+        判据取结算页自带的文案与按钮（三个页面共用）：
+        学习「教师评语」、打工「打工总结」、三类页面都有「分享」按钮（adventure_end）。
+        """
+        try:
+            texts = [t for t, *_ in ocr_screen(screen)]
+        except Exception:  # noqa: BLE001 —— 判不出来就当不是，不影响原流程
+            return False
+        if any('教师评语' in t for t in texts) or any('打工总结' in t for t in texts):
+            return True
+        try:
+            return bool(self.see('adventure_end', screen, source))
+        except Exception:  # noqa: BLE001
+            return False
 
     def reopen_pet_by_scheme(self) -> bool:
         """官方 scheme 重新打开宠物主页并等渲染（“回主页面”的最可靠兜底）。
