@@ -174,11 +174,23 @@ body{
 .app,
 .app > main{height:100%}
 
-/* 页面切换**没有**转场动画 —— 与旧版保持一致（legacy 的 showTab 只是切 display）。
-   曾经在这里加过一套单页滑入（.page-fwd / .page-back + 两个 keyframes），
-   用户明确表示要的是 iOS 那种"前页左移 + 新页推入、两层同时动"的原生转场，
-   而那种需要同时挂载前后两页；最后决定不做，于是这套动画已移除。
-   留这条注释是为了避免以后又"顺手加个淡入"。 */
+/* 页面切换的滑入动画（用户要求加的；旧版没有 —— showTab 只切 display）。
+   方向规则：
+     - 进内页（总览 → 任意内页）以及内页之间互切 → 从**右**滑入
+     - 回总览（任意内页 → 总览）           → 从**左**滑入
+   由 App.tsx 按"目标页是不是 main"选 class（main 上的 key={page} 保证切页时重新挂载、
+   动画能重播）。
+   注意：动画期间 main 上有 transform，会让内部的 position:fixed 子孙暂时相对它定位
+   （而不是视口）。因为动画只在切页那 240ms 内存在、期间不会去开面板，所以没有影响；
+   但**别把这套动画挂到常驻容器上**，那会永久改掉 fixed 的参照系（#bgSheet / #liveToast
+   都是 fixed）。 */
+@keyframes qp-slide-in-right{from{transform:translateX(100%);opacity:.55}to{transform:translateX(0);opacity:1}}
+@keyframes qp-slide-in-left{from{transform:translateX(-100%);opacity:.55}to{transform:translateX(0);opacity:1}}
+.app > main.page-fwd{animation:qp-slide-in-right 240ms cubic-bezier(.22,.61,.36,1)}
+.app > main.page-back{animation:qp-slide-in-left 240ms cubic-bezier(.22,.61,.36,1)}
+@media (prefers-reduced-motion: reduce){
+  .app > main.page-fwd,.app > main.page-back{animation:none}
+}
 
 .home{
   /* 单位基准：1dp = 可用宽度 / 360。
