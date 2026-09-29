@@ -1470,6 +1470,14 @@ pre#logbox{
   .tasklist .mrow{padding:calc(var(--u) * 3.5) calc(var(--u) * 8)}
   /* .scene 的高度上限与 .tasklist 的内部滚已在基础规则里（含 16u 缝），这里不再重复 */
 }
+/* 极短屏：功能栏的「画面」按钮会压住底栏 —— 直接隐藏它（用户要求）。
+   实测「功能栏底 − 底栏顶」：600px 时 **+4px**（已压住）、620px 时 −16px（正常）
+   → 阈值约 604px。隐藏后功能栏只剩「启动/停止」一组，高度少 90u、底部上移到约 399u，
+   534px 以上的屏都放得下。
+   画面功能本身不受影响：右列第一个圆钮（指南针旁边那个）就是进画面的入口。 */
+@media (max-height:620px){
+  .funcbar .fb-group:nth-child(2){display:none}
+}
 @media(min-width:640px){
   .grid{grid-template-columns:repeat(6,minmax(0,1fr))}
   .thumbs{grid-template-columns:repeat(4,minmax(0,1fr))}
