@@ -1,19 +1,27 @@
 import type { Data } from '../api'
 import { hms, pad2 } from '../lib/format'
 
-/** 状态图标 + 文案：跟着"正在做的事"换图标（图标取自官方素材）。
- *  legacy 的 setRunIcon 是按状态 key 映射图标文件，这里保持同一套文件名。 */
+/** 状态图标：跟着"正在做的事"换图标。
+ *  **文件名必须与 legacy 的 RUNICON 表逐字一致** —— 这些是官方素材、按名字放在
+ *  `/qp-icons/official/` 下，名字写错就是 404、界面上显示成破图/问号
+ *  （踩过：我编了 book_pencil.png / earth.png，实际叫 study_book.png / globe.png）。
+ *  改这张表前先逐个验：`curl -o /dev/null -w "%{http_code}" http://127.0.0.1:8787/qp-icons/official/<name>.png` */
 const ICON: Record<string, string> = {
-  上课: '/qp-icons/official/book_pencil.png',
-  学习: '/qp-icons/official/book_pencil.png',
-  打工: '/qp-icons/official/cap_coin.png',
+  上课: '/qp-icons/official/study_book.png',
+  学习: '/qp-icons/official/study_book.png',
+  打工: '/qp-icons/official/work_coin.png',
+  雇佣打工: '/qp-icons/official/work_coin.png',
+  雇佣好友: '/qp-icons/official/work_coin.png',
+  被雇佣检查: '/qp-icons/official/work_coin.png',
   冒险: '/qp-icons/official/cap_compass.png',
   护理: '/qp-icons/official/soap.png',
+  好友护理: '/qp-icons/official/soap.png',
   踩踩: '/qp-icons/official/cap_paw.png',
   PK: '/qp-icons/official/pk_words.png',
-  等待: '/qp-icons/official/earth.png',
+  福袋: '/qp-icons/official/cap_coin.png',
 }
-const ICON_IDLE = '/qp-icons/official/earth.png'
+/** 等待中/已停止：地球（legacy 的 RUNICON_DEFAULT —— 文件名是 globe 不是 earth） */
+const ICON_IDLE = '/qp-icons/official/globe.png'
 
 /** 底部抽屉（官方 x=215 y=728）：当前在做什么 + 倒计时 + 今日统计 */
 export function Deck({ data }: { data: Data }) {
@@ -40,7 +48,14 @@ export function Deck({ data }: { data: Data }) {
   return (
     <div className="flt deck">
       <div className="flt drawer" id="runnerCard">
-        <img className="dico" id="runnerIcon" src={icon} alt="" />
+        <img
+          className="dico"
+          id="runnerIcon"
+          src={icon}
+          alt=""
+          /* 已停止时灰度压暗，避免"没在跑却亮着"的误读（同 legacy 的 setRunIcon） */
+          style={running ? undefined : { filter: 'grayscale(1) opacity(.55)' }}
+        />
         <div className="dcol">
           <div className="dtitle">
             <span className={'dot' + (running ? ' on' : ' off')} id="runnerDot" />
