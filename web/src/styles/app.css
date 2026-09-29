@@ -682,14 +682,18 @@ body{
      撑到页面底部，任务少时下方留大片空白（截图反馈）。
      顶 = --top-scene（= 胶囊区底 + --gap-top），与上面两处间距一致。
 
-     高度就该按内容自适应 —— **不要**再给它加 max-height 去"锁"。
-     曾经加过 `max-height: calc(100% - top-scene - 135u)`，想让任务多时不压出底栏；
-     但那是朝错误的方向修：真正压出底边的是 .drawer（已修，见它的注释），
-     而这条 maxHeight 实测**根本没触发**（360 宽下 .scene 高 403、上限却是 509），
-     属于"加了没用、还容易被当成结论"的锁。 */
+     高度按内容自适应，外加一条**上限**：到「底栏上方留 16u 缝」为止。
+     ⚠️ 别只减到"刚好不重叠" —— **差 0 就是贴死**，看着仍然像重合。
+     用户两次截图指出任务列表压在底栏的弧形面板上，像素扫描也确认两者之间
+     只有约 4 逻辑 px 的过渡带、中间没露出任何背景。所以这里多减 16u。
+     （更早删过一次 max-height：那次它写成 `-135u`（= 底栏顶），而且内容根本没超出
+     所以没触发 —— 那条属于"加了没用"；但"留缝"这条是必须的。）
+     放在基础规则而不是媒体查询里：max-height 只在内容真的超出时才生效，
+     所以高屏不触发、行为不变；一旦触发就保证有缝。 */
   left:calc(var(--u) * 74);
   width:calc(var(--u) * 207);
   top:calc(var(--u) * var(--top-scene));
+  max-height:calc(100% - calc(var(--u) * var(--top-scene)) - calc(var(--u) * 135) - calc(var(--u) * 16));
   display:flex;flex-direction:column;
   overflow:hidden;
 }
@@ -907,6 +911,11 @@ body{
    只给可拖的行加，不是整个 .tasklist —— 这样在普通行/空白处上下滑仍能滚页面。
    （同类坑：背景面板点不开也是 pointer 被滚动判定吃掉，那次是在 JS 侧改的 onClick。） */
 .tasklist .mrow.sortable{touch-action:none}
+/* 配合 .scene 的高度上限：真的超出时由列表内部滚。
+   ⚠️ `overflow-y:auto` **必须与高度上限同时存在**才有意义 ——
+   列表由内容撑开、没有上限就没有可滚的余地（实测：只写 overflow 时 560px 屏仍重合；
+   只写 max-height 不留余量时列表又贴死在底栏上）。 */
+.tasklist{overflow-y:auto;overscroll-behavior:none;min-height:0}
 .tasklist .mrow{
   display:flex;gap:calc(var(--u) * 6);
   padding:calc(var(--u) * 7.5) calc(var(--u) * 8);   /* 左右 8u：与标题行同一左缘（标题那侧也跟着调） */
@@ -1443,8 +1452,7 @@ pre#logbox{
 @media (max-height:620px){
   :root{--gap-top:6}
   .tasklist .mrow{padding:calc(var(--u) * 3.5) calc(var(--u) * 8)}
-  .scene{max-height:calc(100% - calc(var(--u) * var(--top-scene)) - calc(var(--u) * 135))}
-  .tasklist{overflow-y:auto;overscroll-behavior:none;min-height:0}
+  /* .scene 的高度上限与 .tasklist 的内部滚已在基础规则里（含 16u 缝），这里不再重复 */
 }
 @media(min-width:640px){
   .grid{grid-template-columns:repeat(6,minmax(0,1fr))}
