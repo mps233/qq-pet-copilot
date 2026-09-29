@@ -25,7 +25,10 @@ export const SCENE_INFO: Record<string, SceneInfo> = {
   feed: { name: '喂食区', file: 'room-feed', dark: 'room-feed-dark', sb: '#CA9F5B', sbDark: '#C39145' },
   shower: { name: '浴室', file: 'room-shower', dark: 'room-shower-dark', sb: '#E7BC6C', sbDark: '#A3651D' },
   record: { name: '教室 / 打工', file: 'room-record', dark: 'room-record-dark', sb: '#CAA05C', sbDark: '#C18C3A' },
-  store: { name: '商店', file: 'room-store', dark: 'room-store-dark', sb: '#BAD2FE', sbDark: '#2A2E38' },
+  // 官方那套房间场景里还有个「商店」（room-store）—— 用户要求去掉，已移除。
+  // 移除是安全的：SCENE_OF 里没有任何任务映射到 store，computeScene 也不会返回它；
+  // readManualScene 会校验值是否还在 SCENE_INFO 里，所以旧 localStorage 里留下的
+  // 'store' 会自动回落到「自动」，不会白屏。图片文件仍在磁盘上，随时可加回来。
   // 官方「装扮 → 背景」15 款（顺序照官方页面从上到下、左到右）
   'home-yueer': { name: '月儿圆圆', file: 'home-yueer', dark: 'home-yueer-dark', sb: '#E0BA96', sbDark: '#252C46' },
   'home-sunset': { name: '朝朝落霞', file: 'home-sunset', dark: 'home-sunset-dark', sb: '#E9EEFD', sbDark: '#B7ADB8' },
