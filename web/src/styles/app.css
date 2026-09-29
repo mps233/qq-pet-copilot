@@ -1421,6 +1421,31 @@ pre#logbox{
   .form input[type=text]{width:126px}
 }
 /* 平板/中窗（≥640px）：多列 */
+/* ---------- 短屏适配：任务列表与底栏重合（用户实报，建议用媒体查询）----------
+   实测：任务列表底端**固定在 559px**（内容高度；--u 按屏宽算，所以不随屏高变），
+   底栏顶 = 屏高 − 135（.deck 高 135u）→ **屏高低于约 694px 就开始重合**：
+       680px → 列表底比底栏顶低 14px（已重叠）
+       720px → 高出 26px（正常）
+   这里按建议**收紧纵向间距**，让内容真的变矮 —— 不是锁高度、也不是一上来就把列表
+   改成可滚（那只是把放不下的事实藏起来）。收紧量合计约 80u ≈ 80px，
+   临界点从 ~694 降到 ~614。 */
+@media (max-height:700px){
+  :root{--gap-top:8}   /* 顶部三处间隙一起收（这个变量一改，资料卡→胶囊→面板同步） */
+  .qpanel{padding:calc(var(--u) * 10) calc(var(--u) * 16) calc(var(--u) * 8)}
+  .tasklist .mrow{padding:calc(var(--u) * 4.5) calc(var(--u) * 8)}
+  .tghd{padding:calc(var(--u) * 6) calc(var(--u) * 2) calc(var(--u) * 2)}
+}
+/* 更极端（如 560px 的横屏小窗）：再收一档，并让任务列表内部可滚。
+   注意**必须同时给 .scene 一个高度上限** —— 只写 `overflow-y:auto` 没用：
+   列表由内容撑开、没有上限就没有可滚的余地（实测补上限前 560px 仍重合 37px）。
+   上限用 `100%`：.scene 的父级 .home 有确定高度，百分比才解析得了（这条之前踩过坑）。
+   只在 620px 以下才这么做 —— 正常屏（700+）不需要滚，因为收紧后内容真的放得下。 */
+@media (max-height:620px){
+  :root{--gap-top:6}
+  .tasklist .mrow{padding:calc(var(--u) * 3.5) calc(var(--u) * 8)}
+  .scene{max-height:calc(100% - calc(var(--u) * var(--top-scene)) - calc(var(--u) * 135))}
+  .tasklist{overflow-y:auto;overscroll-behavior:none;min-height:0}
+}
 @media(min-width:640px){
   .grid{grid-template-columns:repeat(6,minmax(0,1fr))}
   .thumbs{grid-template-columns:repeat(4,minmax(0,1fr))}
