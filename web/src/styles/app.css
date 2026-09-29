@@ -914,8 +914,24 @@ body{
 /* 配合 .scene 的高度上限：真的超出时由列表内部滚。
    ⚠️ `overflow-y:auto` **必须与高度上限同时存在**才有意义 ——
    列表由内容撑开、没有上限就没有可滚的余地（实测：只写 overflow 时 560px 屏仍重合；
-   只写 max-height 不留余量时列表又贴死在底栏上）。 */
-.tasklist{overflow-y:auto;overscroll-behavior:none;min-height:0}
+   只写 max-height 不留余量时列表又贴死在底栏上）。
+
+   滚动条要**贴着卡片右边框**（用户要求"别离边框那么远"）：它原本画在 .tasklist 的
+   右边缘，而 .tasklist 处在 .qpanel 的 16u 右内边距里 → 看着离边框有 16u 远。
+   用负 margin 把列表盒子向右边扩 16u 抵消掉，再用同量 padding 把内容推回原位 ——
+   滚动条贴到边框上，而文字位置一点没变。 */
+.tasklist{
+  overflow-y:auto;overscroll-behavior:none;min-height:0;
+  margin-right:calc(var(--u) * -16);
+  padding-right:calc(var(--u) * 16);
+  scrollbar-width:thin;
+  scrollbar-color:rgba(150,110,60,.3) transparent;
+}
+/* 细滚动条：全局那份是 7px 的 #cfd3db，配这个暖色玻璃面板太重太显眼 */
+.tasklist::-webkit-scrollbar{width:3px}
+.tasklist::-webkit-scrollbar-track{background:transparent}
+.tasklist::-webkit-scrollbar-thumb{background:rgba(150,110,60,.26);border-radius:999px}
+.tasklist::-webkit-scrollbar-thumb:hover{background:rgba(150,110,60,.42)}
 .tasklist .mrow{
   display:flex;gap:calc(var(--u) * 6);
   padding:calc(var(--u) * 7.5) calc(var(--u) * 8);   /* 左右 8u：与标题行同一左缘（标题那侧也跟着调） */
